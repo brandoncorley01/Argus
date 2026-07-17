@@ -11,13 +11,17 @@ dependencies = [
     "sqlalchemy>=2.0.36",
     "psycopg[binary]>=2.9.10",
     "redis>=5.2.0",
+    "alembic>=1.14.0",
 ]
 
 [dependency-groups]
 dev = [
     "httpx>=0.28.0",
+    "mypy>=2.3.0",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
+    "ruff>=0.15.22",
+    "types-redis>=4.6.0.20241004",
 ]
 
 [build-system]
@@ -31,3 +35,20 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]  # FastAPI Depends()/Query() defaults are idiomatic
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = "."
+packages = ["app"]
+exclude = ["alembic/versions/"]

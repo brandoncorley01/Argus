@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import redis
 
 from app.core.settings import Settings, get_settings
@@ -8,7 +10,7 @@ from app.core.settings import Settings, get_settings
 def check_redis(settings: Settings | None = None) -> dict[str, str]:
     """Return redis probe result without raising on connection failure."""
     cfg = settings or get_settings()
-    client: redis.Redis | None = None
+    client: redis.Redis[Any] | None = None
     try:
         client = redis.Redis.from_url(cfg.redis_url, socket_connect_timeout=2)
         pong = client.ping()

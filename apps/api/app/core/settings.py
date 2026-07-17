@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, cast
 
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,9 +43,12 @@ class SettingsError(RuntimeError):
 @lru_cache
 def get_settings() -> Settings:
     try:
-        if _ENV_FILE.exists():
-            return Settings(_env_file=_ENV_FILE)
-        return Settings(_env_file=None)
+        # pydantic-settings accepts runtime `_env_file`; typed constructors omit it.
+        settings_cls: Any = Settings
+        return cast(
+            Settings,
+            settings_cls(_env_file=_ENV_FILE if _ENV_FILE.exists() else None),
+        )
     except ValidationError as exc:
         raise SettingsError(
             "Argus API settings failed closed: required configuration is missing or invalid. "

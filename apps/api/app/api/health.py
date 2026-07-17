@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Response, status
 
 from app.core.redis_check import check_redis
@@ -9,7 +11,7 @@ from app.db.session import check_postgres
 router = APIRouter(tags=["health"])
 
 
-def _probe_dependencies() -> dict:
+def _probe_dependencies() -> dict[str, Any]:
     settings = get_settings()
     postgres = check_postgres(settings)
     redis_result = check_redis(settings)
@@ -29,13 +31,13 @@ def _probe_dependencies() -> dict:
 
 
 @router.get("/health")
-def health() -> dict:
+def health() -> dict[str, Any]:
     """Liveness-oriented summary; always returns HTTP 200 if the process is up."""
     return _probe_dependencies()
 
 
 @router.get("/ready")
-def ready(response: Response) -> dict:
+def ready(response: Response) -> dict[str, Any]:
     """Readiness: fail closed with 503 when Postgres or Redis is unavailable."""
     payload = _probe_dependencies()
     if payload["status"] != "ok":

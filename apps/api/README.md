@@ -37,9 +37,21 @@ python -m uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | --- | --- |
 | `GET /health` | Liveness + dependency probe summary |
 | `GET /ready` | Readiness (503 if Postgres or Redis unhealthy) |
+| `GET /api/v1/audit/events` | List audit events (auth deferred to Phase 5) |
+| `GET /api/v1/audit/events/{id}` | Fetch one audit event |
+
+## Migrations
+
+```powershell
+python -m uv run alembic upgrade head
+python -m uv run alembic downgrade base
+python -m uv run alembic current
+```
 
 ## Tests
 
 ```powershell
 python -m uv run pytest
+python -m uv run ruff check app tests
+python -m uv run mypy app
 ```
