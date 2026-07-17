@@ -32,7 +32,7 @@ Runtime persistence of the registry is deferred to a later application phase. Th
 | `feat.auth.sessions` | Server-side sessions | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi`, `feat.audit.fail_closed` | `2026-07-16` |
 | `feat.audit.fail_closed` | Fail-closed audit | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi` | `2026-07-16` |
 | `feat.config.policy_versioning` | Config & policy versioning engine | `implemented` | 1 | `0.1.0` | `active` | — | `feat.audit.fail_closed`, `feat.auth.sessions` | `2026-07-16` |
-| `feat.mode.state_machine` | Operating mode state machine | `planned` | 1 | `0.1.0` | `locked` | Mode service not started | `feat.audit.fail_closed`, `feat.config.policy_versioning` | `2026-07-15` |
+| `feat.mode.state_machine` | Operating mode state machine | `implemented` | 1 | `0.1.0` | `active` | — | `feat.audit.fail_closed`, `feat.config.policy_versioning` | `2026-07-17` |
 | `feat.mode.micro_live` | MICRO_LIVE mode | `planned` | 4 | `0.1.0` | `locked` | Permanently locked in v0.1 | `feat.mode.state_machine` | `2026-07-15` |
 | `feat.mode.normal_live` | NORMAL_LIVE mode | `planned` | 5 | `0.1.0` | `locked` | Permanently locked in v0.1 | `feat.mode.state_machine` | `2026-07-15` |
 | `feat.trading.live` | Live trading execution | `planned` | 4 | `0.0.0` | `locked` | Forbidden in v0.1 | — | `2026-07-15` |

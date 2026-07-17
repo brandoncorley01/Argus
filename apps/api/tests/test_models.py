@@ -188,7 +188,13 @@ def test_system_state_singleton_and_mode_history(db_session: Session) -> None:
     state = SystemState(singleton_key="current", current_mode=OperatingMode.OFF, reason="bootstrap")
     db_session.add(state)
     db_session.add(
-        OperatingModeHistory(from_mode=None, to_mode=OperatingMode.OFF, reason="initial")
+        OperatingModeHistory(
+            from_mode=None,
+            to_mode=OperatingMode.OFF,
+            previous_state_version=0,
+            new_state_version=1,
+            reason="initial",
+        )
     )
     db_session.add(
         ServiceHealthEvent(

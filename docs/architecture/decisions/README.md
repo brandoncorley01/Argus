@@ -20,6 +20,11 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-012](ADR-012-secret-detection-version-payloads.md) | Secret detection for versioned payloads | Accepted |
 | [ADR-013](ADR-013-database-immutability-triggers.md) | Database-enforced version immutability triggers | Accepted |
 | [ADR-014](ADR-014-institutional-identity-projection-and-retirement.md) | Institutional Identity projection and retirement | Accepted |
+| [ADR-015](ADR-015-authoritative-operating-state-singleton.md) | Authoritative operating-state singleton | Accepted |
+| [ADR-016](ADR-016-transition-locking-and-state-versioning.md) | Transition locking and state versioning | Accepted |
+| [ADR-017](ADR-017-durable-operating-mode-idempotency.md) | Durable operating-mode idempotency | Accepted |
+| [ADR-018](ADR-018-emergency-stop-audit-doctrine.md) | Emergency-stop audit fail-closed doctrine | Accepted |
+| [ADR-019](ADR-019-mode-availability-and-prerequisites.md) | Mode availability and prerequisite honesty | Accepted |
 
 ## ADR template
 

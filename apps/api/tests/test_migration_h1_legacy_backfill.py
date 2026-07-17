@@ -28,6 +28,7 @@ from app.services.governance_service import GovernanceError, GovernanceService
 API_ROOT = Path(__file__).resolve().parents[1]
 PHASE5_REVISION = "5bb9b33b045b"
 PHASE6_REVISION = "c6a1f0e9d2b8"
+PHASE7_REVISION = "a7b8c9d0e1f2"
 
 
 def _alembic_config() -> Config:
@@ -143,7 +144,7 @@ def test_legacy_inactive_versions_migrate_to_superseded_not_draft() -> None:
 
     with engine.connect() as conn:
         head = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert head == PHASE6_REVISION
+        assert head == PHASE7_REVISION
 
         cfg_rows = {
             row.version_label: row
