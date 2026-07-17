@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import PolicyKind, VersionLifecycleStatus
+from app.models import DraftAuthority, PolicyKind, VersionLifecycleStatus
 
 
 class ConfigurationDocumentCreate(BaseModel):
@@ -14,6 +14,7 @@ class ConfigurationDocumentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=256)
     description: str | None = None
     schema_identifier: str = Field(default="config.generic.v1", min_length=1, max_length=128)
+    draft_authority: DraftAuthority = DraftAuthority.FOUNDER_ONLY
 
 
 class ConfigurationDocumentResponse(BaseModel):
@@ -25,6 +26,7 @@ class ConfigurationDocumentResponse(BaseModel):
     description: str | None
     schema_identifier: str
     is_retired: bool
+    draft_authority: DraftAuthority
     created_at: datetime
 
 
@@ -70,6 +72,7 @@ class PolicyDocumentCreate(BaseModel):
     policy_kind: PolicyKind
     description: str | None = None
     schema_identifier: str = Field(default="policy.generic.v1", min_length=1, max_length=128)
+    draft_authority: DraftAuthority = DraftAuthority.FOUNDER_ONLY
 
 
 class PolicyDocumentResponse(BaseModel):
@@ -82,6 +85,7 @@ class PolicyDocumentResponse(BaseModel):
     description: str | None
     schema_identifier: str
     is_retired: bool
+    draft_authority: DraftAuthority
     created_at: datetime
 
 

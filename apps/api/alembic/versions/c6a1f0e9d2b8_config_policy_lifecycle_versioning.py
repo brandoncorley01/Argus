@@ -29,6 +29,24 @@ _NEW_POLICY_KINDS = (
     "feature_governance",
 )
 
+_MAPPED_POLICY_KINDS = (
+    "constitution",
+    "operating",
+    "governance",
+    "treasury",
+    "research",
+)
+
+_IDENTITY_STRING_COLUMNS = (
+    "active_constitution_version",
+    "active_operating_policy_version",
+    "active_governance_version",
+    "active_treasury_policy_version",
+    "active_research_framework_version",
+)
+
+_IMMUTABILITY_FUNCTION = "enforce_version_immutability"
+
 
 def upgrade() -> None:
     # Extend policy_kind enum with governance-critical kinds.
@@ -47,6 +65,14 @@ def upgrade() -> None:
         create_type=False,
     )
     version_lifecycle_status.create(op.get_bind(), checkfirst=True)
+
+    draft_authority = postgresql.ENUM(
+        "FOUNDER_ONLY",
+        "FOUNDER_OR_OPERATOR",
+        name="draft_authority",
+        create_type=False,
+    )
+    draft_authority.create(op.get_bind(), checkfirst=True)
 
     # --- configuration_documents ---
     op.add_column(
@@ -68,6 +94,15 @@ def upgrade() -> None:
             "is_retired",
             sa.Boolean(),
             server_default=sa.text("false"),
+            nullable=False,
+        ),
+    )
+    op.add_column(
+        "configuration_documents",
+        sa.Column(
+            "draft_authority",
+            draft_authority,
+            server_default=sa.text("'FOUNDER_ONLY'"),
             nullable=False,
         ),
     )
@@ -103,6 +138,15 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
+    op.add_column(
+        "policy_documents",
+        sa.Column(
+            "draft_authority",
+            draft_authority,
+            server_default=sa.text("'FOUNDER_ONLY'"),
+            nullable=False,
+        ),
+    )
     op.create_foreign_key(
         "fk_policy_documents_created_by_user_id",
         "policy_documents",
@@ -114,6 +158,91 @@ def upgrade() -> None:
 
     _upgrade_versions_table("configuration_versions", version_lifecycle_status)
     _upgrade_versions_table("policy_versions", version_lifecycle_status)
+
+    # Institutional identity pointers use `{document_key}@{version_number}` (see
+    # ADR-014), which can exceed the original 128-character budget once long
+    # document keys are combined with the separator and version number.
+    for column in _IDENTITY_STRING_COLUMNS:
+        op.alter_column(
+            "institutional_identities",
+            column,
+            type_=sa.String(length=256),
+            existing_type=sa.String(length=128),
+            existing_nullable=False,
+        )
+
+    # At most one non-retired PolicyDocument per governance-mapped kind, since
+    # each mapped kind projects to exactly one Institutional Identity pointer
+    # field (see ADR-014). Documents outside the mapped-kind set are unrestricted.
+    mapped_kinds_sql = ", ".join(f"'{kind}'" for kind in _MAPPED_POLICY_KINDS)
+    op.create_index(
+        "uq_policy_documents_one_per_mapped_kind",
+        "policy_documents",
+        ["policy_kind"],
+        unique=True,
+        postgresql_where=sa.text(f"is_retired = false AND policy_kind IN ({mapped_kinds_sql})"),
+    )
+
+    _create_immutability_triggers()
+
+
+def _create_immutability_triggers() -> None:
+    """Database-enforced immutability (see ADR-013).
+
+    Once a version's status has left DRAFT, its content and identifying
+    attribution columns can no longer change via any code path -- including
+    bugs, ad-hoc SQL, or future application code -- other than the lifecycle
+    status/attribution columns that the governance service itself manages
+    (status, submitted/approved/activated/superseded/rejected/retired
+    timestamps and actor ids, and rejection_reason).
+    """
+    op.execute(
+        sa.text(
+            f"""
+            CREATE OR REPLACE FUNCTION {_IMMUTABILITY_FUNCTION}() RETURNS trigger AS $$
+            BEGIN
+                IF OLD.status <> 'DRAFT' THEN
+                    IF NEW.content IS DISTINCT FROM OLD.content
+                       OR NEW.payload_hash IS DISTINCT FROM OLD.payload_hash
+                       OR NEW.document_id IS DISTINCT FROM OLD.document_id
+                       OR NEW.version_number IS DISTINCT FROM OLD.version_number
+                       OR NEW.previous_version_id IS DISTINCT FROM OLD.previous_version_id
+                       OR NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id
+                       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+                       OR NEW.version_label IS DISTINCT FROM OLD.version_label
+                       OR NEW.change_summary IS DISTINCT FROM OLD.change_summary
+                    THEN
+                        RAISE EXCEPTION
+                            'immutable version field cannot change once status has left DRAFT (table=%, id=%)',
+                            TG_TABLE_NAME, OLD.id
+                            USING ERRCODE = '23514';
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """
+        )
+    )
+    for table in ("configuration_versions", "policy_versions"):
+        op.execute(
+            sa.text(f"DROP TRIGGER IF EXISTS trg_{table}_immutability ON {table}")
+        )
+        op.execute(
+            sa.text(
+                f"""
+                CREATE TRIGGER trg_{table}_immutability
+                BEFORE UPDATE ON {table}
+                FOR EACH ROW EXECUTE FUNCTION {_IMMUTABILITY_FUNCTION}()
+                """
+            )
+        )
+
+
+def _drop_immutability_triggers() -> None:
+    for table in ("configuration_versions", "policy_versions"):
+        op.execute(sa.text(f"DROP TRIGGER IF EXISTS trg_{table}_immutability ON {table}"))
+    op.execute(sa.text(f"DROP FUNCTION IF EXISTS {_IMMUTABILITY_FUNCTION}()"))
 
 
 def _upgrade_versions_table(table: str, status_enum: postgresql.ENUM) -> None:
@@ -185,14 +314,18 @@ def _upgrade_versions_table(table: str, status_enum: postgresql.ENUM) -> None:
             {"digest": digest, "id": row["id"]},
         )
 
-    # Map legacy is_active into lifecycle status.
+    # Map legacy is_active into lifecycle status. Legacy rows were finalized
+    # historical records (the pre-Phase-6 schema only ever tracked a single
+    # boolean and never supported a true in-progress DRAFT concept), so
+    # is_active=false legacy versions become SUPERSEDED -- never DRAFT -- to
+    # avoid implying they are still editable. See ADR-009 addendum.
     op.execute(
         sa.text(
             f"""
             UPDATE {table}
             SET status = CASE
                 WHEN is_active = true THEN 'ACTIVE'::version_lifecycle_status
-                ELSE 'DRAFT'::version_lifecycle_status
+                ELSE 'SUPERSEDED'::version_lifecycle_status
             END
             """
         )
@@ -203,6 +336,15 @@ def _upgrade_versions_table(table: str, status_enum: postgresql.ENUM) -> None:
             UPDATE {table}
             SET activated_at = created_at
             WHERE is_active = true AND activated_at IS NULL
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            f"""
+            UPDATE {table}
+            SET superseded_at = created_at
+            WHERE is_active = false AND superseded_at IS NULL
             """
         )
     )
@@ -253,12 +395,44 @@ def _upgrade_versions_table(table: str, status_enum: postgresql.ENUM) -> None:
 
 
 def downgrade() -> None:
+    _drop_immutability_triggers()
+
+    # Idempotent: a database may still be stamped at c6a1f0e9d2b8 from the
+    # pre-remediation form of this revision (before the mapped-kind index and
+    # draft_authority column existed). Downgrade must still reach Phase 5.
+    op.execute(sa.text("DROP INDEX IF EXISTS uq_policy_documents_one_per_mapped_kind"))
+
+    # NOTE: narrowing institutional_identities active_* columns is only needed
+    # when the widened (256) form was applied. Skip when still at 128.
+    conn = op.get_bind()
+    for column in _IDENTITY_STRING_COLUMNS:
+        length = conn.execute(
+            sa.text(
+                """
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_name = 'institutional_identities'
+                  AND column_name = :column
+                """
+            ),
+            {"column": column},
+        ).scalar()
+        if length is not None and int(length) > 128:
+            op.alter_column(
+                "institutional_identities",
+                column,
+                type_=sa.String(length=128),
+                existing_type=sa.String(length=256),
+                existing_nullable=False,
+            )
+
     _downgrade_versions_table("policy_versions")
     _downgrade_versions_table("configuration_versions")
 
     op.drop_constraint(
         "fk_policy_documents_created_by_user_id", "policy_documents", type_="foreignkey"
     )
+    op.execute(sa.text("ALTER TABLE policy_documents DROP COLUMN IF EXISTS draft_authority"))
     op.drop_column("policy_documents", "is_retired")
     op.drop_column("policy_documents", "created_by_user_id")
     op.drop_column("policy_documents", "schema_identifier")
@@ -268,10 +442,14 @@ def downgrade() -> None:
         "configuration_documents",
         type_="foreignkey",
     )
+    op.execute(sa.text("ALTER TABLE configuration_documents DROP COLUMN IF EXISTS draft_authority"))
     op.drop_column("configuration_documents", "is_retired")
     op.drop_column("configuration_documents", "created_by_user_id")
     op.drop_column("configuration_documents", "schema_identifier")
 
+    # draft_authority is introduced entirely within this migration, so (unlike
+    # policy_kind below) it can be dropped cleanly once no column references it.
+    op.execute(sa.text("DROP TYPE IF EXISTS draft_authority"))
     op.execute(sa.text("DROP TYPE IF EXISTS version_lifecycle_status"))
     # PostgreSQL cannot easily remove enum values; leave extended policy_kind values in place.
 

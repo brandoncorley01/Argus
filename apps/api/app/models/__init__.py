@@ -81,6 +81,19 @@ class VersionLifecycleStatus(enum.StrEnum):
     RETIRED = "RETIRED"
 
 
+class DraftAuthority(enum.StrEnum):
+    """Who may create/edit DRAFT versions for a configuration/policy document.
+
+    FOUNDER may always draft, regardless of this setting. OPERATOR may draft
+    only when the document is explicitly set to FOUNDER_OR_OPERATOR. This is
+    independent of governance-critical policy kinds, which always require
+    FOUNDER regardless of draft_authority (see GovernanceService).
+    """
+
+    FOUNDER_ONLY = "FOUNDER_ONLY"
+    FOUNDER_OR_OPERATOR = "FOUNDER_OR_OPERATOR"
+
+
 class HealthStatus(enum.StrEnum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
@@ -141,6 +154,12 @@ version_lifecycle_status_enum = Enum(
     values_callable=_enum_values,
     native_enum=True,
 )
+draft_authority_enum = Enum(
+    DraftAuthority,
+    name="draft_authority",
+    values_callable=_enum_values,
+    native_enum=True,
+)
 health_status_enum = Enum(
     HealthStatus,
     name="health_status",
@@ -172,11 +191,13 @@ class InstitutionalIdentity(Base):
     institution_id: Mapped[str] = mapped_column(String(64), nullable=False)
     product_version: Mapped[str] = mapped_column(String(64), nullable=False)
     founding_date: Mapped[date] = mapped_column(Date, nullable=False)
-    active_constitution_version: Mapped[str] = mapped_column(String(128), nullable=False)
-    active_operating_policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
-    active_governance_version: Mapped[str] = mapped_column(String(128), nullable=False)
-    active_treasury_policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
-    active_research_framework_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Widened to 256 to hold the `{document_key}@{version_number}` identity
+    # pointer format (ADR-014), which can exceed the original 128-char budget.
+    active_constitution_version: Mapped[str] = mapped_column(String(256), nullable=False)
+    active_operating_policy_version: Mapped[str] = mapped_column(String(256), nullable=False)
+    active_governance_version: Mapped[str] = mapped_column(String(256), nullable=False)
+    active_treasury_policy_version: Mapped[str] = mapped_column(String(256), nullable=False)
+    active_research_framework_version: Mapped[str] = mapped_column(String(256), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -295,6 +316,9 @@ class ConfigurationDocument(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     is_retired: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    draft_authority: Mapped[DraftAuthority] = mapped_column(
+        draft_authority_enum, nullable=False, server_default=text("'FOUNDER_ONLY'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -378,9 +402,25 @@ class ConfigurationVersion(Base):
     document: Mapped[ConfigurationDocument] = relationship(back_populates="versions")
 
 
+_MAPPED_POLICY_KINDS_SQL = (
+    "policy_kind IN ('constitution', 'operating', 'governance', 'treasury', 'research')"
+)
+
+
 class PolicyDocument(Base):
     __tablename__ = "policy_documents"
-    __table_args__ = (UniqueConstraint("document_key", name="uq_policy_documents_document_key"),)
+    __table_args__ = (
+        UniqueConstraint("document_key", name="uq_policy_documents_document_key"),
+        # At most one non-retired document per governance-mapped policy kind,
+        # since each mapped kind projects to exactly one Institutional
+        # Identity pointer field (see ADR-014).
+        Index(
+            "uq_policy_documents_one_per_mapped_kind",
+            "policy_kind",
+            unique=True,
+            postgresql_where=text(f"is_retired = false AND {_MAPPED_POLICY_KINDS_SQL}"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_key: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -394,6 +434,9 @@ class PolicyDocument(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     is_retired: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    draft_authority: Mapped[DraftAuthority] = mapped_column(
+        draft_authority_enum, nullable=False, server_default=text("'FOUNDER_ONLY'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -685,6 +728,7 @@ __all__ = [
     "FeatureActivationState",
     "PolicyKind",
     "VersionLifecycleStatus",
+    "DraftAuthority",
     "HealthStatus",
     "IncidentSeverity",
     "IncidentStatus",

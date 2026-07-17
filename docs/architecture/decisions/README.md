@@ -18,6 +18,8 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-010](ADR-010-canonical-payload-hashing.md) | Canonical JSON payload hashing | Accepted |
 | [ADR-011](ADR-011-atomic-version-activation.md) | Atomic configuration and policy activation | Accepted |
 | [ADR-012](ADR-012-secret-detection-version-payloads.md) | Secret detection for versioned payloads | Accepted |
+| [ADR-013](ADR-013-database-immutability-triggers.md) | Database-enforced version immutability triggers | Accepted |
+| [ADR-014](ADR-014-institutional-identity-projection-and-retirement.md) | Institutional Identity projection and retirement | Accepted |
 
 ## ADR template
 

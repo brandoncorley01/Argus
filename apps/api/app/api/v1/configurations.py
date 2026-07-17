@@ -65,6 +65,7 @@ def create_document(
             name=body.name,
             description=body.description,
             schema_identifier=body.schema_identifier,
+            draft_authority=body.draft_authority,
             request_id=request_id,
         )
     except (AuthError, GovernanceError) as exc:

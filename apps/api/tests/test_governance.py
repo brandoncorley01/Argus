@@ -16,12 +16,13 @@ from app.models import (
     AuditEvent,
     InstitutionalIdentity,
     InstitutionalRole,
+    PolicyDocument,
     PolicyKind,
     User,
     VersionLifecycleStatus,
 )
 from app.services.auth_service import AuthenticatedPrincipal, AuthService
-from app.services.governance_service import GovernanceError, GovernanceService
+from app.services.governance_service import GovernanceError, GovernanceService, identity_pointer
 from app.services.payload_integrity import (
     PayloadValidationError,
     assert_no_secrets,
@@ -392,18 +393,30 @@ def test_policy_activation_updates_institutional_identity(
     )
 
     gov = GovernanceService(db_session)
-    doc = gov.create_policy_document(
-        actor=principal,
-        document_key=_unique("pol.operating"),
-        name="Operating Policy",
-        policy_kind=PolicyKind.OPERATING,
-        description=None,
-        schema_identifier="policy.operating.v1",
-    )
+    existing = db_session.scalars(
+        select(PolicyDocument).where(
+            PolicyDocument.policy_kind == PolicyKind.OPERATING,
+            PolicyDocument.is_retired.is_(False),
+        )
+    ).first()
+    if existing is None:
+        doc = gov.create_policy_document(
+            actor=principal,
+            document_key=_unique("pol.operating"),
+            name="Operating Policy",
+            policy_kind=PolicyKind.OPERATING,
+            description=None,
+            schema_identifier="policy.operating.v1",
+        )
+        doc_id = doc.id
+        document_key = doc.document_key
+    else:
+        doc_id = existing.id
+        document_key = existing.document_key
     version = gov.create_policy_version(
         actor=principal,
-        document_id=doc.id,
-        payload={"summary": "operating baseline"},
+        document_id=doc_id,
+        payload={"summary": "operating baseline", "n": _unique("n")},
     )
     gov.transition_policy_version(
         actor=principal,
@@ -417,7 +430,9 @@ def test_policy_activation_updates_institutional_identity(
     )
     activated = gov.activate_policy_version(actor=principal, version_id=version.id)
     db_session.refresh(identity)
-    assert identity.active_operating_policy_version == activated.version_label
+    assert identity.active_operating_policy_version == identity_pointer(
+        document_key, activated.version_number
+    )
 
 
 def test_draft_only_mutation(db_session: Session) -> None:

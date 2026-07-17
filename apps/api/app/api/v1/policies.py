@@ -66,6 +66,7 @@ def create_document(
             policy_kind=body.policy_kind,
             description=body.description,
             schema_identifier=body.schema_identifier,
+            draft_authority=body.draft_authority,
             request_id=request_id,
         )
     except (AuthError, GovernanceError) as exc:

@@ -10,18 +10,20 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     ConfigurationDocument,
     ConfigurationVersion,
+    DraftAuthority,
     InstitutionalIdentity,
+    InstitutionalRole,
     PolicyDocument,
     PolicyKind,
     PolicyVersion,
     VersionLifecycleStatus,
 )
 from app.services.audit_service import AuditError, AuditService
-from app.services.auth_service import AuthenticatedPrincipal, AuthError, InstitutionalRole
+from app.services.auth_service import AuthenticatedPrincipal, AuthError
 from app.services.payload_integrity import (
     PayloadValidationError,
     hash_payload,
-    validate_payload_for_schema,
+    validate_version_payload,
     verify_payload_hash,
 )
 from app.services.version_lifecycle import assert_transition
@@ -48,6 +50,12 @@ IDENTITY_FIELD_BY_KIND: dict[PolicyKind, str] = {
     PolicyKind.RESEARCH: "active_research_framework_version",
 }
 
+# Policy kinds that project onto an Institutional Identity pointer field.
+# Retiring an ACTIVE version of one of these kinds is prohibited: a
+# replacement must be activated (which supersedes it) instead, so the
+# Institutional Identity pointer is never left dangling on a RETIRED version.
+MAPPED_IDENTITY_POLICY_KINDS = frozenset(IDENTITY_FIELD_BY_KIND.keys())
+
 
 class GovernanceError(RuntimeError):
     """Domain error for configuration/policy governance operations."""
@@ -55,6 +63,17 @@ class GovernanceError(RuntimeError):
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def identity_pointer(document_key: str, version_number: int) -> str:
+    """Stable Institutional Identity pointer format (see ADR-014).
+
+    Using `{document_key}@{version_number}` instead of the free-text
+    `version_label` gives a pointer that is: (1) collision-free per document,
+    since `(document_id, version_number)` is uniquely constrained; and (2)
+    stable even if `version_label` is ever changed to a non-monotonic scheme.
+    """
+    return f"{document_key}@{version_number}"
 
 
 class GovernanceService:
@@ -83,16 +102,50 @@ class GovernanceService:
                 self._db.rollback()
             raise AuthError("Forbidden")
 
+    def _require_draft_authority(
+        self,
+        actor: AuthenticatedPrincipal,
+        *,
+        draft_authority: DraftAuthority,
+        governance_critical: bool,
+        action: str,
+        request_id: str | None,
+    ) -> None:
+        """RBAC for creating/editing DRAFT versions.
+
+        Founder may always draft. Operator may draft only when the document's
+        draft_authority is FOUNDER_OR_OPERATOR *and* the document is not a
+        governance-critical policy kind (those always require Founder,
+        regardless of draft_authority).
+        """
+        if governance_critical or draft_authority == DraftAuthority.FOUNDER_ONLY:
+            self._require(actor, InstitutionalRole.FOUNDER, action=action, request_id=request_id)
+        else:
+            self._require(
+                actor,
+                InstitutionalRole.FOUNDER,
+                InstitutionalRole.OPERATOR,
+                action=action,
+                request_id=request_id,
+            )
+
     def _lock_document_row(self, table: str, document_id: uuid.UUID) -> None:
         self._db.execute(
             text(f"SELECT id FROM {table} WHERE id = :id FOR UPDATE"),
             {"id": str(document_id)},
         )
 
-    def _get_institutional_identity(self) -> InstitutionalIdentity | None:
-        return self._db.scalars(
-            select(InstitutionalIdentity).order_by(InstitutionalIdentity.created_at.asc()).limit(1)
-        ).first()
+    def _get_institutional_identity(
+        self, *, for_update: bool = False
+    ) -> InstitutionalIdentity | None:
+        stmt = (
+            select(InstitutionalIdentity)
+            .order_by(InstitutionalIdentity.created_at.asc())
+            .limit(1)
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        return self._db.scalars(stmt).first()
 
     def _next_version_number(self, model: type[Any], document_id: uuid.UUID) -> int:
         current = self._db.scalar(
@@ -126,6 +179,7 @@ class GovernanceService:
         name: str,
         description: str | None,
         schema_identifier: str,
+        draft_authority: DraftAuthority = DraftAuthority.FOUNDER_ONLY,
         request_id: str | None = None,
     ) -> ConfigurationDocument:
         self._require(
@@ -139,6 +193,7 @@ class GovernanceService:
             name=name.strip(),
             description=description,
             schema_identifier=schema_identifier.strip(),
+            draft_authority=draft_authority,
             created_by_user_id=actor.user.id,
         )
         self._db.add(doc)
@@ -151,7 +206,10 @@ class GovernanceService:
                     "resource_id": str(doc.id),
                     "actor_user_id": actor.user.id,
                     "request_id": request_id,
-                    "payload": {"document_key": doc.document_key},
+                    "payload": {
+                        "document_key": doc.document_key,
+                        "draft_authority": draft_authority.value,
+                    },
                 }
             ]
         )
@@ -166,18 +224,19 @@ class GovernanceService:
         change_summary: str | None = None,
         request_id: str | None = None,
     ) -> ConfigurationVersion:
-        self._require(
-            actor,
-            InstitutionalRole.FOUNDER,
-            InstitutionalRole.OPERATOR,
-            action="configuration_version.create",
-            request_id=request_id,
-        )
+        self._lock_document_row("configuration_documents", document_id)
         doc = self._db.get(ConfigurationDocument, document_id)
         if doc is None or doc.is_retired:
             raise GovernanceError("Configuration document not found")
+        self._require_draft_authority(
+            actor,
+            draft_authority=doc.draft_authority,
+            governance_critical=False,
+            action="configuration_version.create",
+            request_id=request_id,
+        )
         try:
-            validate_payload_for_schema(doc.schema_identifier, payload)
+            validate_version_payload(doc.schema_identifier, payload)
         except PayloadValidationError as exc:
             raise GovernanceError(str(exc)) from exc
 
@@ -233,24 +292,25 @@ class GovernanceService:
         change_summary: str | None = None,
         request_id: str | None = None,
     ) -> ConfigurationVersion:
-        self._require(
-            actor,
-            InstitutionalRole.FOUNDER,
-            InstitutionalRole.OPERATOR,
-            action="configuration_version.update_draft",
-            request_id=request_id,
-        )
         row = self._db.scalars(
             select(ConfigurationVersion)
             .options(selectinload(ConfigurationVersion.document))
             .where(ConfigurationVersion.id == version_id)
+            .with_for_update()
         ).first()
         if row is None:
             raise GovernanceError("Configuration version not found")
+        self._require_draft_authority(
+            actor,
+            draft_authority=row.document.draft_authority,
+            governance_critical=False,
+            action="configuration_version.update_draft",
+            request_id=request_id,
+        )
         if row.status != VersionLifecycleStatus.DRAFT:
             raise GovernanceError("Only DRAFT versions may be edited")
         try:
-            validate_payload_for_schema(row.document.schema_identifier, payload)
+            validate_version_payload(row.document.schema_identifier, payload)
         except PayloadValidationError as exc:
             raise GovernanceError(str(exc)) from exc
         row.content = payload
@@ -261,7 +321,7 @@ class GovernanceService:
         self._commit_with_audits(
             [
                 {
-                    "action": "configuration_version.created",
+                    "action": "configuration_version.draft_updated",
                     "resource_type": "configuration_version",
                     "resource_id": str(row.id),
                     "actor_user_id": actor.user.id,
@@ -271,7 +331,6 @@ class GovernanceService:
                         "version_number": row.version_number,
                         "payload_hash": row.payload_hash,
                         "status": row.status.value,
-                        "draft_updated": True,
                     },
                 }
             ]
@@ -287,17 +346,22 @@ class GovernanceService:
         rejection_reason: str | None = None,
         request_id: str | None = None,
     ) -> ConfigurationVersion:
+        if new_status == VersionLifecycleStatus.ACTIVE:
+            return self.activate_configuration_version(
+                actor=actor, version_id=version_id, request_id=request_id
+            )
+
         row = self._db.scalars(
             select(ConfigurationVersion)
             .options(selectinload(ConfigurationVersion.document))
             .where(ConfigurationVersion.id == version_id)
+            .with_for_update()
         ).first()
         if row is None:
             raise GovernanceError("Configuration version not found")
 
         if new_status in {
             VersionLifecycleStatus.APPROVED,
-            VersionLifecycleStatus.ACTIVE,
             VersionLifecycleStatus.RETIRED,
         }:
             self._require(
@@ -320,11 +384,6 @@ class GovernanceService:
                 InstitutionalRole.OPERATOR,
                 action=f"configuration_version.{new_status.value.lower()}",
                 request_id=request_id,
-            )
-
-        if new_status == VersionLifecycleStatus.ACTIVE:
-            return self.activate_configuration_version(
-                actor=actor, version_id=version_id, request_id=request_id
             )
 
         try:
@@ -355,7 +414,7 @@ class GovernanceService:
             row.retired_by_user_id = actor.user.id
             action = "configuration_version.retired"
         elif new_status == VersionLifecycleStatus.DRAFT:
-            action = "configuration_version.created"
+            action = "configuration_version.returned_to_draft"
         else:
             action = "configuration_version.submitted"
 
@@ -393,19 +452,35 @@ class GovernanceService:
             action="configuration_version.activate",
             request_id=request_id,
         )
+        document_id = self._db.scalar(
+            select(ConfigurationVersion.document_id).where(ConfigurationVersion.id == version_id)
+        )
+        if document_id is None:
+            raise GovernanceError("Configuration version not found")
+
+        # Lock the parent document first so concurrent activate/create calls
+        # against the same document serialize on this row lock.
+        self._lock_document_row("configuration_documents", document_id)
+
+        # Load the candidate only after the document lock, with FOR UPDATE and
+        # populate_existing, so we never trust a pre-lock identity-map snapshot.
         row = self._db.scalars(
             select(ConfigurationVersion)
             .options(selectinload(ConfigurationVersion.document))
             .where(ConfigurationVersion.id == version_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).first()
         if row is None:
             raise GovernanceError("Configuration version not found")
 
-        self._lock_document_row("configuration_documents", row.document_id)
-
         if row.status != VersionLifecycleStatus.APPROVED:
             raise GovernanceError("Only APPROVED versions may be activated")
         if not verify_payload_hash(row.content, row.payload_hash):
+            # Do not mutate status. Attempt to record the integrity failure;
+            # if that audit write itself fails, _commit_with_audits rolls
+            # back and raises GovernanceError -- either way, activation is
+            # blocked and the prior ACTIVE version (if any) is untouched.
             self._commit_with_audits(
                 [
                     {
@@ -427,10 +502,12 @@ class GovernanceService:
 
         now = _utcnow()
         current_active = self._db.scalars(
-            select(ConfigurationVersion).where(
+            select(ConfigurationVersion)
+            .where(
                 ConfigurationVersion.document_id == row.document_id,
                 ConfigurationVersion.status == VersionLifecycleStatus.ACTIVE,
             )
+            .with_for_update()
         ).first()
 
         events: list[dict[str, Any]] = []
@@ -525,6 +602,7 @@ class GovernanceService:
         policy_kind: PolicyKind,
         description: str | None,
         schema_identifier: str,
+        draft_authority: DraftAuthority = DraftAuthority.FOUNDER_ONLY,
         request_id: str | None = None,
     ) -> PolicyDocument:
         self._require(
@@ -539,6 +617,7 @@ class GovernanceService:
             policy_kind=policy_kind,
             description=description,
             schema_identifier=schema_identifier.strip(),
+            draft_authority=draft_authority,
             created_by_user_id=actor.user.id,
         )
         self._db.add(doc)
@@ -554,6 +633,7 @@ class GovernanceService:
                     "payload": {
                         "document_key": doc.document_key,
                         "policy_kind": policy_kind.value,
+                        "draft_authority": draft_authority.value,
                     },
                 }
             ]
@@ -569,26 +649,19 @@ class GovernanceService:
         change_summary: str | None = None,
         request_id: str | None = None,
     ) -> PolicyVersion:
+        self._lock_document_row("policy_documents", document_id)
         doc = self._db.get(PolicyDocument, document_id)
         if doc is None or doc.is_retired:
             raise GovernanceError("Policy document not found")
-        if doc.policy_kind in GOVERNANCE_CRITICAL_KINDS:
-            self._require(
-                actor,
-                InstitutionalRole.FOUNDER,
-                action="policy_version.create",
-                request_id=request_id,
-            )
-        else:
-            self._require(
-                actor,
-                InstitutionalRole.FOUNDER,
-                InstitutionalRole.OPERATOR,
-                action="policy_version.create",
-                request_id=request_id,
-            )
+        self._require_draft_authority(
+            actor,
+            draft_authority=doc.draft_authority,
+            governance_critical=doc.policy_kind in GOVERNANCE_CRITICAL_KINDS,
+            action="policy_version.create",
+            request_id=request_id,
+        )
         try:
-            validate_payload_for_schema(doc.schema_identifier, payload)
+            validate_version_payload(doc.schema_identifier, payload)
         except PayloadValidationError as exc:
             raise GovernanceError(str(exc)) from exc
         payload_hash = hash_payload(payload)
@@ -646,28 +719,21 @@ class GovernanceService:
             select(PolicyVersion)
             .options(selectinload(PolicyVersion.document))
             .where(PolicyVersion.id == version_id)
+            .with_for_update()
         ).first()
         if row is None:
             raise GovernanceError("Policy version not found")
-        if row.document.policy_kind in GOVERNANCE_CRITICAL_KINDS:
-            self._require(
-                actor,
-                InstitutionalRole.FOUNDER,
-                action="policy_version.update_draft",
-                request_id=request_id,
-            )
-        else:
-            self._require(
-                actor,
-                InstitutionalRole.FOUNDER,
-                InstitutionalRole.OPERATOR,
-                action="policy_version.update_draft",
-                request_id=request_id,
-            )
+        self._require_draft_authority(
+            actor,
+            draft_authority=row.document.draft_authority,
+            governance_critical=row.document.policy_kind in GOVERNANCE_CRITICAL_KINDS,
+            action="policy_version.update_draft",
+            request_id=request_id,
+        )
         if row.status != VersionLifecycleStatus.DRAFT:
             raise GovernanceError("Only DRAFT versions may be edited")
         try:
-            validate_payload_for_schema(row.document.schema_identifier, payload)
+            validate_version_payload(row.document.schema_identifier, payload)
         except PayloadValidationError as exc:
             raise GovernanceError(str(exc)) from exc
         row.content = payload
@@ -678,7 +744,7 @@ class GovernanceService:
         self._commit_with_audits(
             [
                 {
-                    "action": "policy_version.created",
+                    "action": "policy_version.draft_updated",
                     "resource_type": "policy_version",
                     "resource_id": str(row.id),
                     "actor_user_id": actor.user.id,
@@ -688,7 +754,6 @@ class GovernanceService:
                         "version_number": row.version_number,
                         "payload_hash": row.payload_hash,
                         "status": row.status.value,
-                        "draft_updated": True,
                     },
                 }
             ]
@@ -704,17 +769,28 @@ class GovernanceService:
         rejection_reason: str | None = None,
         request_id: str | None = None,
     ) -> PolicyVersion:
+        if new_status == VersionLifecycleStatus.ACTIVE:
+            return self.activate_policy_version(
+                actor=actor, version_id=version_id, request_id=request_id
+            )
+
         row = self._db.scalars(
             select(PolicyVersion)
             .options(selectinload(PolicyVersion.document))
             .where(PolicyVersion.id == version_id)
+            .with_for_update()
         ).first()
         if row is None:
             raise GovernanceError("Policy version not found")
 
-        if new_status == VersionLifecycleStatus.ACTIVE:
-            return self.activate_policy_version(
-                actor=actor, version_id=version_id, request_id=request_id
+        if (
+            new_status == VersionLifecycleStatus.RETIRED
+            and row.status == VersionLifecycleStatus.ACTIVE
+            and row.document.policy_kind in MAPPED_IDENTITY_POLICY_KINDS
+        ):
+            raise GovernanceError(
+                "Cannot retire an ACTIVE mapped policy version; activate a "
+                "replacement version to supersede it first"
             )
 
         if (
@@ -768,6 +844,8 @@ class GovernanceService:
             row.retired_at = now
             row.retired_by_user_id = actor.user.id
             action = "policy_version.retired"
+        elif new_status == VersionLifecycleStatus.DRAFT:
+            action = "policy_version.returned_to_draft"
         else:
             action = "policy_version.submitted"
 
@@ -805,14 +883,24 @@ class GovernanceService:
             action="policy_version.activate",
             request_id=request_id,
         )
+        document_id = self._db.scalar(
+            select(PolicyVersion.document_id).where(PolicyVersion.id == version_id)
+        )
+        if document_id is None:
+            raise GovernanceError("Policy version not found")
+
+        self._lock_document_row("policy_documents", document_id)
+
         row = self._db.scalars(
             select(PolicyVersion)
             .options(selectinload(PolicyVersion.document))
             .where(PolicyVersion.id == version_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).first()
         if row is None:
             raise GovernanceError("Policy version not found")
-        self._lock_document_row("policy_documents", row.document_id)
+
         if row.status != VersionLifecycleStatus.APPROVED:
             raise GovernanceError("Only APPROVED versions may be activated")
         if not verify_payload_hash(row.content, row.payload_hash):
@@ -830,12 +918,48 @@ class GovernanceService:
             )
             raise GovernanceError("Payload hash mismatch; activation blocked")
 
+        try:
+            assert_transition(row.status, VersionLifecycleStatus.ACTIVE)
+        except ValueError as exc:
+            raise GovernanceError(str(exc)) from exc
+
+        # Fail closed on mapped policy kinds with no Institutional Identity
+        # record: check and abort *before* mutating anything (no supersede,
+        # no status change), so a missing identity never leaves a half-applied
+        # activation. See ADR-014.
+        identity_field = IDENTITY_FIELD_BY_KIND.get(row.document.policy_kind)
+        identity: InstitutionalIdentity | None = None
+        if identity_field is not None:
+            identity = self._get_institutional_identity(for_update=True)
+            if identity is None:
+                self._commit_with_audits(
+                    [
+                        {
+                            "action": "policy_activation.identity_missing",
+                            "resource_type": "policy_version",
+                            "resource_id": str(row.id),
+                            "actor_user_id": actor.user.id,
+                            "request_id": request_id,
+                            "payload": {
+                                "document_key": row.document.document_key,
+                                "policy_kind": row.document.policy_kind.value,
+                            },
+                        }
+                    ]
+                )
+                raise GovernanceError(
+                    "Institutional identity record missing; activation blocked "
+                    "for mapped policy kind (fail-closed)"
+                )
+
         now = _utcnow()
         current_active = self._db.scalars(
-            select(PolicyVersion).where(
+            select(PolicyVersion)
+            .where(
                 PolicyVersion.document_id == row.document_id,
                 PolicyVersion.status == VersionLifecycleStatus.ACTIVE,
             )
+            .with_for_update()
         ).first()
         events: list[dict[str, Any]] = []
         if current_active is not None:
@@ -866,13 +990,11 @@ class GovernanceService:
         row.activated_by_user_id = actor.user.id
         self._db.add(row)
 
-        # Institutional Identity: version_label is authoritative display pointer.
-        field = IDENTITY_FIELD_BY_KIND.get(row.document.policy_kind)
-        if field is not None:
-            identity = self._get_institutional_identity()
-            if identity is not None:
-                setattr(identity, field, row.version_label)
-                self._db.add(identity)
+        pointer_value: str | None = None
+        if identity_field is not None and identity is not None:
+            pointer_value = identity_pointer(row.document.document_key, row.version_number)
+            setattr(identity, identity_field, pointer_value)
+            self._db.add(identity)
 
         events.append(
             {
@@ -888,7 +1010,8 @@ class GovernanceService:
                     "payload_hash": row.payload_hash,
                     "previous_status": VersionLifecycleStatus.APPROVED.value,
                     "new_status": VersionLifecycleStatus.ACTIVE.value,
-                    "identity_field_updated": field,
+                    "identity_field_updated": identity_field,
+                    "identity_pointer": pointer_value,
                 },
             }
         )
