@@ -14,6 +14,10 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-006](ADR-006-fail-closed-audit-policy.md) | Fail-closed audit policy | Accepted |
 | [ADR-007](ADR-007-foundational-institutional-database-modeling.md) | Foundational institutional database modeling | Accepted |
 | [ADR-008](ADR-008-postgresql-server-side-sessions.md) | PostgreSQL-backed server-side sessions | Accepted |
+| [ADR-009](ADR-009-config-policy-version-lifecycle.md) | Configuration and policy version lifecycle | Accepted |
+| [ADR-010](ADR-010-canonical-payload-hashing.md) | Canonical JSON payload hashing | Accepted |
+| [ADR-011](ADR-011-atomic-version-activation.md) | Atomic configuration and policy activation | Accepted |
+| [ADR-012](ADR-012-secret-detection-version-payloads.md) | Secret detection for versioned payloads | Accepted |
 
 ## ADR template
 

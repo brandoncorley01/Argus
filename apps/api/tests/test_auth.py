@@ -64,9 +64,7 @@ def _bootstrap_founder(db_session: Session, username: str, password: str) -> Use
     )
 
 
-def _login(
-    client: TestClient, identifier: str, password: str
-) -> tuple[dict[str, str], str]:
+def _login(client: TestClient, identifier: str, password: str) -> tuple[dict[str, str], str]:
     response = client.post(
         "/api/v1/auth/login",
         json={"identifier": identifier, "password": password},
@@ -226,9 +224,7 @@ def test_operator_governance_denial(client: TestClient, db_session: Session) -> 
     )
     assert denied.status_code == 403
 
-    events = db_session.scalars(
-        select(AuditEvent).where(AuditEvent.action == "authz.denied")
-    ).all()
+    events = db_session.scalars(select(AuditEvent).where(AuditEvent.action == "authz.denied")).all()
     assert len(events) >= 1
 
 
@@ -267,9 +263,7 @@ def test_audit_login_and_redaction(db_session: Session) -> None:
     user = auth.bootstrap_founder(username=username, password=password)
     auth.login(identifier=username, password=password, ip_address="127.0.0.1")
 
-    events = db_session.scalars(
-        select(AuditEvent).where(AuditEvent.actor_user_id == user.id)
-    ).all()
+    events = db_session.scalars(select(AuditEvent).where(AuditEvent.actor_user_id == user.id)).all()
     assert any(event.action == "auth.login.success" for event in events)
     for event in events:
         if event.payload:

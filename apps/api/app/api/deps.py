@@ -114,9 +114,7 @@ class RoleChecker:
     ) -> AuthenticatedPrincipal:
         # GET routes should use require_roles_read instead; mutating defaults to CSRF.
         try:
-            auth.require_roles(
-                principal, *self._roles, action=self._action, request_id=request_id
-            )
+            auth.require_roles(principal, *self._roles, action=self._action, request_id=request_id)
         except AuthError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         return principal
@@ -136,9 +134,7 @@ class RoleCheckerRead:
         request_id: str | None = Header(default=None, alias="X-Request-ID"),
     ) -> AuthenticatedPrincipal:
         try:
-            auth.require_roles(
-                principal, *self._roles, action=self._action, request_id=request_id
-            )
+            auth.require_roles(principal, *self._roles, action=self._action, request_id=request_id)
         except AuthError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         return principal

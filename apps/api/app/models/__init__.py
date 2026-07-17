@@ -64,7 +64,21 @@ class PolicyKind(enum.StrEnum):
     GOVERNANCE = "governance"
     TREASURY = "treasury"
     RESEARCH = "research"
+    SECURITY = "security"
+    AUDIT = "audit"
+    AUTHENTICATION = "authentication"
+    FEATURE_GOVERNANCE = "feature_governance"
     OTHER = "other"
+
+
+class VersionLifecycleStatus(enum.StrEnum):
+    DRAFT = "DRAFT"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    APPROVED = "APPROVED"
+    ACTIVE = "ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    REJECTED = "REJECTED"
+    RETIRED = "RETIRED"
 
 
 class HealthStatus(enum.StrEnum):
@@ -118,6 +132,12 @@ feature_activation_state_enum = Enum(
 policy_kind_enum = Enum(
     PolicyKind,
     name="policy_kind",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+version_lifecycle_status_enum = Enum(
+    VersionLifecycleStatus,
+    name="version_lifecycle_status",
     values_callable=_enum_values,
     native_enum=True,
 )
@@ -268,6 +288,13 @@ class ConfigurationDocument(Base):
     document_key: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    schema_identifier: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=text("'config.generic.v1'")
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    is_retired: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -284,14 +311,15 @@ class ConfigurationVersion(Base):
     __tablename__ = "configuration_versions"
     __table_args__ = (
         UniqueConstraint(
-            "document_id", "version_label", name="uq_configuration_versions_document_version"
+            "document_id", "version_number", name="uq_configuration_versions_document_number"
         ),
         Index(
             "uq_configuration_versions_one_active_per_document",
             "document_id",
             unique=True,
-            postgresql_where=text("is_active = true"),
+            postgresql_where=text("status = 'ACTIVE'"),
         ),
+        Index("ix_configuration_versions_status", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -300,10 +328,47 @@ class ConfigurationVersion(Base):
         ForeignKey("configuration_documents.id", ondelete="CASCADE"),
         nullable=False,
     )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     version_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[VersionLifecycleStatus] = mapped_column(
+        version_lifecycle_status_enum,
+        nullable=False,
+        server_default=text("'DRAFT'"),
+    )
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -315,15 +380,20 @@ class ConfigurationVersion(Base):
 
 class PolicyDocument(Base):
     __tablename__ = "policy_documents"
-    __table_args__ = (
-        UniqueConstraint("document_key", name="uq_policy_documents_document_key"),
-    )
+    __table_args__ = (UniqueConstraint("document_key", name="uq_policy_documents_document_key"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_key: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     policy_kind: Mapped[PolicyKind] = mapped_column(policy_kind_enum, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    schema_identifier: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=text("'policy.generic.v1'")
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    is_retired: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -340,24 +410,62 @@ class PolicyVersion(Base):
     __tablename__ = "policy_versions"
     __table_args__ = (
         UniqueConstraint(
-            "document_id", "version_label", name="uq_policy_versions_document_version"
+            "document_id", "version_number", name="uq_policy_versions_document_number"
         ),
         Index(
             "uq_policy_versions_one_active_per_document",
             "document_id",
             unique=True,
-            postgresql_where=text("is_active = true"),
+            postgresql_where=text("status = 'ACTIVE'"),
         ),
+        Index("ix_policy_versions_status", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("policy_documents.id", ondelete="CASCADE"), nullable=False
     )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     version_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[VersionLifecycleStatus] = mapped_column(
+        version_lifecycle_status_enum,
+        nullable=False,
+        server_default=text("'DRAFT'"),
+    )
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("policy_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -576,6 +684,7 @@ __all__ = [
     "FeatureStatus",
     "FeatureActivationState",
     "PolicyKind",
+    "VersionLifecycleStatus",
     "HealthStatus",
     "IncidentSeverity",
     "IncidentStatus",

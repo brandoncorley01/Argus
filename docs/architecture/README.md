@@ -8,6 +8,7 @@ This directory holds Argus system design notes and Architecture Decision Records
 | --- | --- |
 | [`decisions/`](decisions/) | Normative ADRs for major technical decisions |
 | [`AUTHENTICATION.md`](AUTHENTICATION.md) | Phase 5 authentication, sessions, RBAC, bootstrap |
+| [`CONFIG_POLICY_VERSIONING.md`](CONFIG_POLICY_VERSIONING.md) | Phase 6 configuration and policy versioning |
 
 ## Conventions
 

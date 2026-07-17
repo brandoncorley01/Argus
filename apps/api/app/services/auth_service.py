@@ -67,17 +67,19 @@ class AuthService:
 
     def _count_recent_failures(self, identifier: str, ip_address: str) -> int:
         window_start = _utcnow() - timedelta(minutes=self._settings.login_failure_window_minutes)
-        stmt = select(func.count()).select_from(LoginAttempt).where(
-            LoginAttempt.identifier == self._normalize_identifier(identifier),
-            LoginAttempt.ip_address == ip_address,
-            LoginAttempt.successful.is_(False),
-            LoginAttempt.attempted_at >= window_start,
+        stmt = (
+            select(func.count())
+            .select_from(LoginAttempt)
+            .where(
+                LoginAttempt.identifier == self._normalize_identifier(identifier),
+                LoginAttempt.ip_address == ip_address,
+                LoginAttempt.successful.is_(False),
+                LoginAttempt.attempted_at >= window_start,
+            )
         )
         return int(self._db.scalar(stmt) or 0)
 
-    def _record_attempt(
-        self, *, identifier: str, ip_address: str, successful: bool
-    ) -> None:
+    def _record_attempt(self, *, identifier: str, ip_address: str, successful: bool) -> None:
         self._db.add(
             LoginAttempt(
                 identifier=self._normalize_identifier(identifier),
@@ -135,9 +137,7 @@ class AuthService:
                 self._db.rollback()
             raise AuthError("Invalid credentials")
 
-        tokens = self._create_session(
-            user=user, ip_address=ip_address, user_agent=user_agent
-        )
+        tokens = self._create_session(user=user, ip_address=ip_address, user_agent=user_agent)
         self._record_attempt(identifier=identifier, ip_address=ip_address, successful=True)
         try:
             self._audit.append(
@@ -398,9 +398,7 @@ class AuthService:
         stmt = select(UserRole.id).where(UserRole.role == InstitutionalRole.FOUNDER).limit(1)
         return self._db.scalars(stmt).first() is not None
 
-    def _deny(
-        self, actor: AuthenticatedPrincipal, *, action: str, request_id: str | None
-    ) -> None:
+    def _deny(self, actor: AuthenticatedPrincipal, *, action: str, request_id: str | None) -> None:
         try:
             self._audit.append(
                 action="authz.denied",

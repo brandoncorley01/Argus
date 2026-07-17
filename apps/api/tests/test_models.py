@@ -33,7 +33,9 @@ from app.models import (
     SystemState,
     User,
     UserRole,
+    VersionLifecycleStatus,
 )
+from app.services.payload_integrity import hash_payload
 
 
 @pytest.fixture
@@ -141,15 +143,27 @@ def test_one_active_configuration_version_per_document(db_session: Session) -> N
     doc = ConfigurationDocument(document_key="cfg.test", name="Test Config")
     db_session.add(doc)
     db_session.flush()
+    payload_v1 = {"a": 1}
     db_session.add(
         ConfigurationVersion(
-            document_id=doc.id, version_label="v1", content={"a": 1}, is_active=True
+            document_id=doc.id,
+            version_number=1,
+            version_label="v1",
+            content=payload_v1,
+            payload_hash=hash_payload(payload_v1),
+            status=VersionLifecycleStatus.ACTIVE,
         )
     )
     db_session.commit()
+    payload_v2 = {"a": 2}
     db_session.add(
         ConfigurationVersion(
-            document_id=doc.id, version_label="v2", content={"a": 2}, is_active=True
+            document_id=doc.id,
+            version_number=2,
+            version_label="v2",
+            content=payload_v2,
+            payload_hash=hash_payload(payload_v2),
+            status=VersionLifecycleStatus.ACTIVE,
         )
     )
     with pytest.raises(IntegrityError):
@@ -207,12 +221,15 @@ def test_system_state_singleton_and_mode_history(db_session: Session) -> None:
     )
     db_session.add(policy)
     db_session.flush()
+    policy_payload = {"summary": "baseline"}
     db_session.add(
         PolicyVersion(
             document_id=policy.id,
+            version_number=1,
             version_label="operating-policy-v0.1",
-            content={"summary": "baseline"},
-            is_active=True,
+            content=policy_payload,
+            payload_hash=hash_payload(policy_payload),
+            status=VersionLifecycleStatus.ACTIVE,
         )
     )
     db_session.commit()

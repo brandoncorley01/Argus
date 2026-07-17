@@ -120,9 +120,7 @@ class AuditService:
     ) -> list[AuditEvent]:
         safe_limit = min(max(limit, 1), 200)
         safe_offset = max(offset, 0)
-        stmt: Select[tuple[AuditEvent]] = select(AuditEvent).order_by(
-            AuditEvent.occurred_at.desc()
-        )
+        stmt: Select[tuple[AuditEvent]] = select(AuditEvent).order_by(AuditEvent.occurred_at.desc())
         if action:
             stmt = stmt.where(AuditEvent.action == action)
         if resource_type:

@@ -9,10 +9,10 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 - Phase 5 authentication: Argon2id passwords, PostgreSQL server-side sessions, CSRF, login lockout, Founder bootstrap CLI
 - RBAC enforcement for Founder-only user/role management; audit reads require authentication
+- Phase 6 configuration/policy versioning: lifecycle statuses, canonical payload hashing, secret detection, atomic activation with Institutional Identity updates, HTTP APIs under `/api/v1/configurations` and `/api/v1/policies`
 
 ### Planned
 
-- Phase 6: configuration and policy activation APIs
 - Operating-mode state machine services
 - Health supervisor worker (ARQ)
 - Executive Operations Center (Next.js)
