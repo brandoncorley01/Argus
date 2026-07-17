@@ -29,7 +29,7 @@ Runtime persistence of the registry is deferred to a later application phase. Th
 | `feat.worker.arq` | ARQ background worker | `planned` | 1 | `0.1.0` | `locked` | Not implemented before Phase 2+ | `feat.infra.redis` | `2026-07-15` |
 | `feat.api.fastapi` | FastAPI control plane | `scaffolded` | 1 | `0.1.0` | `active` (health/ready only) | — | `feat.infra.postgres`, `feat.infra.redis` | `2026-07-16` |
 | `feat.ui.eoc` | Executive Operations Center | `planned` | 1 | `0.1.0` | `locked` | Frontend phase not started | `feat.api.fastapi` | `2026-07-15` |
-| `feat.auth.sessions` | Server-side sessions | `planned` | 1 | `0.1.0` | `locked` | Auth phase not started | `feat.api.fastapi` | `2026-07-15` |
+| `feat.auth.sessions` | Server-side sessions | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi`, `feat.audit.fail_closed` | `2026-07-16` |
 | `feat.audit.fail_closed` | Fail-closed audit | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi` | `2026-07-16` |
 | `feat.mode.state_machine` | Operating mode state machine | `planned` | 1 | `0.1.0` | `locked` | Mode service not started | `feat.audit.fail_closed` | `2026-07-15` |
 | `feat.mode.micro_live` | MICRO_LIVE mode | `planned` | 4 | `0.1.0` | `locked` | Permanently locked in v0.1 | `feat.mode.state_machine` | `2026-07-15` |

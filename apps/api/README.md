@@ -37,8 +37,17 @@ python -m uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | --- | --- |
 | `GET /health` | Liveness + dependency probe summary |
 | `GET /ready` | Readiness (503 if Postgres or Redis unhealthy) |
-| `GET /api/v1/audit/events` | List audit events (auth deferred to Phase 5) |
-| `GET /api/v1/audit/events/{id}` | Fetch one audit event |
+| `POST /api/v1/auth/login` | Local login (sets HTTP-only session cookie; returns CSRF token) |
+| `POST /api/v1/auth/logout` | Logout + revoke session (CSRF required) |
+| `GET /api/v1/auth/me` | Current authenticated principal |
+| `POST /api/v1/auth/users` | Founder-only user creation (CSRF required) |
+| `POST /api/v1/auth/users/{id}/roles` | Founder-only role assignment (CSRF required) |
+| `GET /api/v1/audit/events` | List audit events (authenticated) |
+| `GET /api/v1/audit/events/{id}` | Fetch one audit event (authenticated) |
+
+## Founder bootstrap
+
+See [`docs/architecture/AUTHENTICATION.md`](../../docs/architecture/AUTHENTICATION.md).
 
 ## Migrations
 

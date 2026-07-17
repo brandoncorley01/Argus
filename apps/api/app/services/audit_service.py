@@ -26,6 +26,10 @@ _REDACT_KEYS = frozenset(
         "access_key",
         "credential",
         "credentials",
+        "session_token",
+        "csrf_token",
+        "cookie",
+        "cookies",
     }
 )
 

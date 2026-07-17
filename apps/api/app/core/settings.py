@@ -28,12 +28,33 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
 
+    session_cookie_name: str = Field(default="argus_session")
+    csrf_header_name: str = Field(default="X-CSRF-Token")
+    session_ttl_hours: int = Field(default=8, ge=1, le=168)
+    session_cookie_secure: bool = Field(default=False)
+    session_cookie_samesite: str = Field(default="lax")
+    session_cookie_path: str = Field(default="/")
+
+    login_max_failures: int = Field(default=5, ge=1, le=50)
+    login_failure_window_minutes: int = Field(default=15, ge=1, le=1440)
+    login_lockout_minutes: int = Field(default=15, ge=1, le=1440)
+
+    allow_additional_founders: bool = Field(default=False)
+
     @field_validator("database_url", "redis_url")
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("must not be blank")
         return value.strip()
+
+    @field_validator("session_cookie_samesite")
+    @classmethod
+    def samesite_must_be_valid(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"lax", "strict", "none"}:
+            raise ValueError("session_cookie_samesite must be lax, strict, or none")
+        return normalized
 
 
 class SettingsError(RuntimeError):
