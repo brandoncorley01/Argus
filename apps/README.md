@@ -1,5 +1,10 @@
 # apps/
 
-Application runtimes will live here (FastAPI control plane and Executive Operations Center).
+Application runtimes for Argus.
 
-**Phase 0/1:** Not scaffolded. See ADR-001 and ADR-004.
+| Path | Status |
+| --- | --- |
+| `api/` | Phase 2 FastAPI control-plane skeleton (health/ready only) |
+| Executive Operations Center (Next.js) | Not started |
+
+See `api/README.md` and ADR-004.

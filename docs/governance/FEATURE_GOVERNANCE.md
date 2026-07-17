@@ -24,10 +24,10 @@ Runtime persistence of the registry is deferred to a later application phase. Th
 
 | Feature ID | Name | Status | Level | Version | Activation | Lock reason | Dependencies | Last review |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `feat.infra.postgres` | PostgreSQL system of record | `scaffolded` | 1 | `0.1.0` | `inactive` until Compose verified | — | Docker Compose | `2026-07-15` |
-| `feat.infra.redis` | Redis coordination/broker | `scaffolded` | 1 | `0.1.0` | `inactive` until Compose verified | — | Docker Compose | `2026-07-15` |
+| `feat.infra.postgres` | PostgreSQL system of record | `implemented` | 1 | `0.1.0` | `active` | — | Docker Compose | `2026-07-16` |
+| `feat.infra.redis` | Redis coordination/broker | `implemented` | 1 | `0.1.0` | `active` | — | Docker Compose | `2026-07-16` |
 | `feat.worker.arq` | ARQ background worker | `planned` | 1 | `0.1.0` | `locked` | Not implemented before Phase 2+ | `feat.infra.redis` | `2026-07-15` |
-| `feat.api.fastapi` | FastAPI control plane | `planned` | 1 | `0.1.0` | `locked` | Phase 2 not started | `feat.infra.postgres` | `2026-07-15` |
+| `feat.api.fastapi` | FastAPI control plane | `scaffolded` | 1 | `0.1.0` | `active` (health/ready only) | — | `feat.infra.postgres`, `feat.infra.redis` | `2026-07-16` |
 | `feat.ui.eoc` | Executive Operations Center | `planned` | 1 | `0.1.0` | `locked` | Frontend phase not started | `feat.api.fastapi` | `2026-07-15` |
 | `feat.auth.sessions` | Server-side sessions | `planned` | 1 | `0.1.0` | `locked` | Auth phase not started | `feat.api.fastapi` | `2026-07-15` |
 | `feat.audit.fail_closed` | Fail-closed audit | `planned` | 1 | `0.1.0` | `locked` | Audit phase not started | `feat.api.fastapi` | `2026-07-15` |
