@@ -13,6 +13,7 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-005](ADR-005-server-side-session-authentication.md) | Server-side session authentication | Accepted |
 | [ADR-006](ADR-006-fail-closed-audit-policy.md) | Fail-closed audit policy | Accepted |
 | [ADR-007](ADR-007-foundational-institutional-database-modeling.md) | Foundational institutional database modeling | Accepted |
+| [ADR-008](ADR-008-postgresql-server-side-sessions.md) | PostgreSQL-backed server-side sessions | Accepted |
 
 ## ADR template
 

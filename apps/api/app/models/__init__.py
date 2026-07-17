@@ -209,6 +209,55 @@ class UserRole(Base):
     user: Mapped[User] = relationship(back_populates="roles")
 
 
+class AuthSession(Base):
+    """Server-side session. Cookie carries opaque token; only token_hash is stored."""
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_auth_sessions_token_hash"),
+        Index("ix_auth_sessions_user_id", "user_id"),
+        Index("ix_auth_sessions_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    csrf_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class LoginAttempt(Base):
+    """Failed/successful login attempts for lockout controls (no secrets stored)."""
+
+    __tablename__ = "login_attempts"
+    __table_args__ = (
+        Index("ix_login_attempts_identifier_ip_time", "identifier", "ip_address", "attempted_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    identifier: Mapped[str] = mapped_column(String(320), nullable=False)
+    ip_address: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("'unknown'")
+    )
+    successful: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ConfigurationDocument(Base):
     __tablename__ = "configuration_documents"
     __table_args__ = (
@@ -509,6 +558,8 @@ __all__ = [
     "InstitutionalIdentity",
     "User",
     "UserRole",
+    "AuthSession",
+    "LoginAttempt",
     "AuditEvent",
     "ConfigurationDocument",
     "ConfigurationVersion",

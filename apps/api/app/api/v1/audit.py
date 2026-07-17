@@ -5,9 +5,11 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import RequireAnyAuthenticatedRead
 from app.db.session import get_db
 from app.schemas.audit import AuditEventListResponse, AuditEventRead
 from app.services.audit_service import AuditService
+from app.services.auth_service import AuthenticatedPrincipal
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
@@ -22,14 +24,9 @@ def list_audit_events(
     offset: int = Query(default=0, ge=0),
     action: str | None = Query(default=None),
     resource_type: str | None = Query(default=None),
+    _principal: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     service: AuditService = Depends(get_audit_service),
 ) -> AuditEventListResponse:
-    """
-    Read audit events.
-
-    Authentication is deferred to Phase 5. Until then this endpoint is available
-    only on the local private control-plane and must not be exposed publicly.
-    """
     items = service.list_events(
         limit=limit, offset=offset, action=action, resource_type=resource_type
     )
@@ -43,6 +40,7 @@ def list_audit_events(
 @router.get("/events/{event_id}", response_model=AuditEventRead)
 def get_audit_event(
     event_id: uuid.UUID,
+    _principal: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     service: AuditService = Depends(get_audit_service),
 ) -> AuditEventRead:
     event = service.get(event_id)

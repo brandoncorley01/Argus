@@ -14,6 +14,15 @@ from app.db.session import get_session_factory, reset_engine
 from app.main import create_app
 from app.models import DepartmentCapability, OperatingMode
 from app.services.audit_service import AuditError, AuditService, redact_payload
+from app.services.auth_service import AuthService
+
+
+@pytest.fixture(autouse=True)
+def _allow_additional_founders(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("ALLOW_ADDITIONAL_FOUNDERS", "true")
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
 
 
 @pytest.fixture
@@ -69,7 +78,7 @@ def test_run_critical_commits_mutation_with_audit(db_session: Session) -> None:
 
     def mutation(session: Session) -> DepartmentCapability:
         row = DepartmentCapability(
-            department_key="audit_phase4_ok",
+            department_key=f"audit_phase4_ok_{datetime.now(UTC).timestamp()}",
             department_name="Audit Phase4",
             capability_level=1,
             last_reviewed_at=datetime.now(UTC),
@@ -90,10 +99,11 @@ def test_run_critical_commits_mutation_with_audit(db_session: Session) -> None:
 
 def test_run_critical_fail_closed_rolls_back_mutation(db_session: Session) -> None:
     service = AuditService(db_session)
+    key = f"audit_phase4_fail_{datetime.now(UTC).timestamp()}"
 
     def mutation(session: Session) -> DepartmentCapability:
         row = DepartmentCapability(
-            department_key="audit_phase4_fail",
+            department_key=key,
             department_name="Audit Phase4 Fail",
             capability_level=1,
             last_reviewed_at=datetime.now(UTC),
@@ -111,9 +121,7 @@ def test_run_critical_fail_closed_rolls_back_mutation(db_session: Session) -> No
             )
 
     remaining = db_session.scalars(
-        select(DepartmentCapability).where(
-            DepartmentCapability.department_key == "audit_phase4_fail"
-        )
+        select(DepartmentCapability).where(DepartmentCapability.department_key == key)
     ).first()
     assert remaining is None
 
@@ -124,6 +132,10 @@ def test_audit_read_api() -> None:
     get_settings()
     session = get_session_factory()()
     try:
+        auth = AuthService(session)
+        username = f"audit_reader_{datetime.now(UTC).strftime('%H%M%S%f')}"
+        password = "audit-reader-12"
+        auth.bootstrap_founder(username=username, password=password)
         service = AuditService(session)
         event = service.append(
             action="api.read_test",
@@ -137,14 +149,28 @@ def test_audit_read_api() -> None:
 
     app = create_app()
     with TestClient(app) as client:
-        listed = client.get("/api/v1/audit/events", params={"action": "api.read_test"})
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"identifier": username, "password": password},
+        )
+        assert login.status_code == 200
+        cookies = dict(login.cookies)
+
+        listed = client.get(
+            "/api/v1/audit/events",
+            params={"action": "api.read_test"},
+            cookies=cookies,
+        )
         assert listed.status_code == 200
         body = listed.json()
         assert any(item["id"] == str(event_id) for item in body["items"])
 
-        detail = client.get(f"/api/v1/audit/events/{event_id}")
+        detail = client.get(f"/api/v1/audit/events/{event_id}", cookies=cookies)
         assert detail.status_code == 200
         assert detail.json()["action"] == "api.read_test"
 
-        missing = client.get("/api/v1/audit/events/00000000-0000-0000-0000-000000000000")
+        missing = client.get(
+            "/api/v1/audit/events/00000000-0000-0000-0000-000000000000",
+            cookies=cookies,
+        )
         assert missing.status_code == 404

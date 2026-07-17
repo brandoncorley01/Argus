@@ -15,6 +15,8 @@ EXPECTED_TABLES = {
     "institutional_identities",
     "users",
     "user_roles",
+    "auth_sessions",
+    "login_attempts",
     "audit_events",
     "configuration_documents",
     "configuration_versions",
@@ -48,7 +50,7 @@ def test_migration_upgrade_downgrade_reupgrade_cycle() -> None:
 
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "f83d80fe9524"
+    assert version == "5bb9b33b045b"
 
     command.downgrade(cfg, "base")
     insp_after_down = inspect(engine)
