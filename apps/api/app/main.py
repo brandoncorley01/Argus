@@ -9,6 +9,7 @@ from app.api.health import router as health_router
 from app.api.v1.audit import router as audit_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.configurations import router as configurations_router
+from app.api.v1.operating_mode import router as operating_mode_router
 from app.api.v1.policies import router as policies_router
 from app.core.settings import SettingsError, get_settings
 from app.db.session import get_engine, reset_engine
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(audit_router)
     app.include_router(configurations_router)
     app.include_router(policies_router)
+    app.include_router(operating_mode_router)
     return app
 
 

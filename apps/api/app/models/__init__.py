@@ -627,7 +627,22 @@ class SystemState(Base):
         String(32), nullable=False, server_default=text("'current'")
     )
     current_mode: Mapped[OperatingMode] = mapped_column(operating_mode_enum, nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    emergency_stop_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    recovery_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    last_history_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("operating_mode_history.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
+    active_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_versions.id", ondelete="SET NULL"), nullable=True
+    )
     updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -637,12 +652,18 @@ class SystemState(Base):
 
 
 class OperatingModeHistory(Base):
+    """Append-only operating-mode transition evidence."""
+
     __tablename__ = "operating_mode_history"
     __table_args__ = (Index("ix_operating_mode_history_changed_at", "changed_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     from_mode: Mapped[OperatingMode | None] = mapped_column(operating_mode_enum, nullable=True)
     to_mode: Mapped[OperatingMode] = mapped_column(operating_mode_enum, nullable=False)
+    previous_state_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    new_state_version: Mapped[int] = mapped_column(Integer, nullable=False)
     changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -651,6 +672,42 @@ class OperatingModeHistory(Base):
     )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True
+    )
+    idempotency_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prerequisite_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class OperatingModeIdempotency(Base):
+    """Durable idempotency records for operating-mode mutations."""
+
+    __tablename__ = "operating_mode_idempotency"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key_hash", name="uq_operating_mode_idempotency_key"),
+        Index("ix_operating_mode_idempotency_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    history_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("operating_mode_history.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'committed'")
+    )
+    response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class ServiceHealthEvent(Base):
@@ -720,6 +777,7 @@ __all__ = [
     "DepartmentCapability",
     "SystemState",
     "OperatingModeHistory",
+    "OperatingModeIdempotency",
     "ServiceHealthEvent",
     "Incident",
     "InstitutionalRole",

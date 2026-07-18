@@ -142,6 +142,11 @@ class RoleCheckerRead:
 
 RequireFounder = RoleChecker(InstitutionalRole.FOUNDER, action="founder.only")
 RequireFounderRead = RoleCheckerRead(InstitutionalRole.FOUNDER, action="founder.only")
+RequireFounderOrOperator = RoleChecker(
+    InstitutionalRole.FOUNDER,
+    InstitutionalRole.OPERATOR,
+    action="operating_mode.mutate",
+)
 RequireOperatorRead = RoleCheckerRead(
     InstitutionalRole.FOUNDER, InstitutionalRole.OPERATOR, action="operator.read"
 )
