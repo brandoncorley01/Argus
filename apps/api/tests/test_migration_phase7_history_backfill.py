@@ -18,6 +18,7 @@ from app.db.session import reset_engine
 API_ROOT = Path(__file__).resolve().parents[1]
 PHASE6_REVISION = "c6a1f0e9d2b8"
 PHASE7_REVISION = "a7b8c9d0e1f2"
+HEAD_REVISION = "b8c0d1e2f3a4"
 
 
 def _alembic_config() -> Config:
@@ -202,7 +203,7 @@ def test_backfill_one_and_many_rows_monotonic_with_tiebreak() -> None:
     with engine.connect() as conn:
         assert (
             conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == PHASE7_REVISION
+            == HEAD_REVISION
         )
         assert (
             conn.execute(
@@ -282,7 +283,7 @@ def test_clean_database_base_to_head_includes_phase7() -> None:
     with engine.connect() as conn:
         assert (
             conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == PHASE7_REVISION
+            == HEAD_REVISION
         )
         tables = {
             row[0]
@@ -291,5 +292,7 @@ def test_clean_database_base_to_head_includes_phase7() -> None:
             )
         }
         assert "operating_mode_idempotency" in tables
+        assert "registered_services" in tables
+        assert "health_heartbeats" in tables
     reset_engine()
     clear_settings_cache()

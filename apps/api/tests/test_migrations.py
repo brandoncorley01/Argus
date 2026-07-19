@@ -29,6 +29,16 @@ EXPECTED_TABLES = {
     "operating_mode_idempotency",
     "service_health_events",
     "incidents",
+    "registered_services",
+    "worker_identities",
+    "worker_instances",
+    "health_heartbeats",
+    "health_heartbeat_idempotency",
+    "service_health_projections",
+    "institutional_health_state",
+    "health_supervisor_leases",
+    "incident_lifecycle_events",
+    "protective_action_recommendations",
 }
 
 
@@ -51,7 +61,7 @@ def test_migration_upgrade_downgrade_reupgrade_cycle() -> None:
 
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "a7b8c9d0e1f2"
+    assert version == "b8c0d1e2f3a4"
 
     command.downgrade(cfg, "base")
     insp_after_down = inspect(engine)

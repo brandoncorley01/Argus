@@ -25,6 +25,11 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-017](ADR-017-durable-operating-mode-idempotency.md) | Durable operating-mode idempotency | Accepted |
 | [ADR-018](ADR-018-emergency-stop-audit-doctrine.md) | Emergency-stop audit fail-closed doctrine | Accepted |
 | [ADR-019](ADR-019-mode-availability-and-prerequisites.md) | Mode availability and prerequisite honesty | Accepted |
+| [ADR-020](ADR-020-governed-service-registry.md) | Governed service registry for health supervision | Accepted |
+| [ADR-021](ADR-021-append-only-heartbeats.md) | Append-only heartbeats with ordering and idempotency | Accepted |
+| [ADR-022](ADR-022-durable-supervisor-lease.md) | Durable health supervisor lease in PostgreSQL | Accepted |
+| [ADR-023](ADR-023-system-actor-safe-mode.md) | SYSTEM actor auto-degrade to SAFE_MODE | Accepted |
+| [ADR-024](ADR-024-arq-health-worker-foundation.md) | ARQ worker foundation for health supervision | Accepted |
 
 ## ADR template
 

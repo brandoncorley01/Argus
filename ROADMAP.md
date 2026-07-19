@@ -17,7 +17,7 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 5 — Authentication & RBAC | Done | Server-side sessions, Argon2id, CSRF, lockout, Founder bootstrap |
 | 6 — Config & policy versioning APIs | Done | Lifecycle versions, hash integrity, atomic activate, APIs + audit |
 | 7 — Operating-mode state machine | Done | Governed modes; PAPER/MICRO_LIVE/NORMAL_LIVE unavailable; emergency fail-closed |
-| 8 — Health supervisor (ARQ) | Planned | Meaningful health events; degrade → `SAFE_MODE` |
+| 8 — Health supervisor (ARQ) | Done | Governed registry, heartbeats, supervisor lease, incidents, SYSTEM SAFE_MODE |
 | 9 — Executive Operations Center | Planned | Next.js operator UI (status, audit, mode) — no fake dashboards |
 | 10 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
 
@@ -31,9 +31,9 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Near-term sequence
 
-1. Review/commit Phase 7 on `phase-7-operating-mode-state-machine` when Founder authorizes
-2. Phase 8 health supervisor worker
-3. Executive Operations Center once control-plane APIs are trustworthy
+1. Review/merge Phase 8 on `phase-8-health-supervisor-worker-foundation` when Founder authorizes
+2. Phase 9 Executive Operations Center once control-plane APIs are trustworthy
+3. Hardening & CI
 
 ## Longer horizon (post-foundation)
 

@@ -21,8 +21,10 @@ Argus v0.1 Foundation targets **Level 1 — Foundation** for the control plane a
 | Area | Target level (v0.1) | Notes |
 | --- | --- | --- |
 | Governance / identity | 1 | Documented identity, ADRs, feature governance |
-| Infrastructure (Postgres/Redis) | 1 | Compose foundation; no application schema yet |
-| Authentication / audit | 0 → 1 (later phases) | Not implemented in Phase 0/1 |
+| Infrastructure (Postgres/Redis) | 1 | Compose foundation; optional health supervisor worker profile |
+| Authentication / audit | 1 | Sessions, RBAC, fail-closed audit |
+| Operating mode | 1 | Authoritative state machine (Phase 7) |
+| Health supervision | 1 | Registry, heartbeats, supervisor, protective SAFE_MODE (Phase 8) |
 | Observation / research runtime | 0 | No observe pipeline yet |
 | Paper execution | 0 | No trading engine |
 | Micro live / production | 0 | Modes locked; forbidden in v0.1 |

@@ -10,6 +10,7 @@ This directory holds Argus system design notes and Architecture Decision Records
 | [`AUTHENTICATION.md`](AUTHENTICATION.md) | Phase 5 authentication, sessions, RBAC, bootstrap |
 | [`CONFIG_POLICY_VERSIONING.md`](CONFIG_POLICY_VERSIONING.md) | Phase 6 configuration and policy versioning |
 | [`OPERATING_MODE_STATE_MACHINE.md`](OPERATING_MODE_STATE_MACHINE.md) | Phase 7 operating-mode state machine |
+| [`HEALTH_SUPERVISOR.md`](HEALTH_SUPERVISOR.md) | Phase 8 health supervisor and worker foundation |
 
 ## Conventions
 

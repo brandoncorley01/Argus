@@ -26,7 +26,8 @@ Runtime persistence of the registry is deferred to a later application phase. Th
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `feat.infra.postgres` | PostgreSQL system of record | `implemented` | 1 | `0.1.0` | `active` | — | Docker Compose | `2026-07-16` |
 | `feat.infra.redis` | Redis coordination/broker | `implemented` | 1 | `0.1.0` | `active` | — | Docker Compose | `2026-07-16` |
-| `feat.worker.arq` | ARQ background worker | `planned` | 1 | `0.1.0` | `locked` | Not implemented before Phase 2+ | `feat.infra.redis` | `2026-07-15` |
+| `feat.worker.arq` | ARQ background worker | `implemented` | 1 | `0.1.0` | `active` | — | `feat.infra.redis` | `2026-07-19` |
+| `feat.health.supervisor` | Institutional health supervisor | `implemented` | 1 | `0.1.0` | `active` | — | `feat.worker.arq`, `feat.mode.state_machine`, `feat.audit.fail_closed` | `2026-07-19` |
 | `feat.api.fastapi` | FastAPI control plane | `scaffolded` | 1 | `0.1.0` | `active` (health/ready only) | — | `feat.infra.postgres`, `feat.infra.redis` | `2026-07-16` |
 | `feat.ui.eoc` | Executive Operations Center | `planned` | 1 | `0.1.0` | `locked` | Frontend phase not started | `feat.api.fastapi` | `2026-07-15` |
 | `feat.auth.sessions` | Server-side sessions | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi`, `feat.audit.fail_closed` | `2026-07-16` |

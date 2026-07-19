@@ -156,6 +156,6 @@ Do **not** implement unaudited repair endpoints.
 ## Phase 7 limitations
 
 - No paper/live execution capability
-- No health-supervisor automatic degrade (Phase 8)
+- No health-supervisor automatic degrade (implemented in Phase 8; see `HEALTH_SUPERVISOR.md`)
 - No EOC UI
 - Minimal SAFE→OBSERVE recovery checks only

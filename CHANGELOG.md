@@ -11,10 +11,10 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 - RBAC enforcement for Founder-only user/role management; audit reads require authentication
 - Phase 6 configuration/policy versioning: lifecycle statuses, canonical payload hashing, secret detection, atomic activation with Institutional Identity updates, HTTP APIs under `/api/v1/configurations` and `/api/v1/policies`
 - Phase 7 operating-mode state machine: singleton authoritative state, transition matrix, durable idempotency, emergency fail-closed doctrine, APIs under `/api/v1/operating-mode`
+- Phase 8 institutional health supervisor and worker foundation: governed service registry, append-only heartbeats, projections, durable supervisor lease, incidents/lifecycle, protective actions, ARQ worker, SYSTEM `SAFE_MODE` integration
 
 ### Planned
 
-- Health supervisor worker (ARQ)
 - Executive Operations Center (Next.js)
 
 ## [0.1.0-foundation] — 2026-07-16

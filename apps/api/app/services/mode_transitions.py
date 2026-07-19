@@ -82,6 +82,19 @@ PROTECTIVE_TARGETS = frozenset(
     }
 )
 
+# Modes from which the health supervisor may protectively degrade into
+# SAFE_MODE (Phase 8). OFF/SAFE_MODE/EMERGENCY_STOP are excluded: OFF and
+# SAFE_MODE are already at-or-below the protective floor, and EMERGENCY_STOP
+# requires Founder recovery rather than an automatic system transition.
+DEGRADE_ELIGIBLE_MODES = frozenset(
+    {
+        OperatingMode.OBSERVE,
+        OperatingMode.PAPER,
+        OperatingMode.MICRO_LIVE,
+        OperatingMode.NORMAL_LIVE,
+    }
+)
+
 
 def can_transition(current: OperatingMode, target: OperatingMode) -> bool:
     if current == target:
