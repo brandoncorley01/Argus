@@ -22,7 +22,9 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 10 — Market Intelligence Platform | Done | Observation-only multi-provider intelligence (no trading/signals) |
 | 11 — Strategy Laboratory | Done | Versioned strategies, deterministic research engines, validation — no live trading |
 | 12 — Paper Trading Institution | Done | Internal paper execution provider + gateway (no brokerage account required) |
-| 13 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
+| 13 — Micro-Live Institution | Done | Deny-by-default live-execution architecture; live trading disabled; no credentials required |
+| 14 — Treasury and Executive Analytics | Planned | Not yet implemented |
+| 15 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
 
 ## Explicitly out of scope (v0.1)
 
@@ -34,11 +36,13 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Near-term sequence
 
-1. Merge Phase 8–12 when Founder authorizes (stacked branches; keep phases identifiable)
-2. Hardening & CI (Phase 13) — do not start until Founder authorizes
+1. Merge Phase 8–13 when Founder authorizes (stacked branches; keep phases identifiable)
+2. Treasury and Executive Analytics (Phase 14) — do not start until Founder authorizes
+3. Hardening & CI (Phase 15) — do not start until Founder authorizes
 
 ## Longer horizon (post-foundation)
 
 - Observation / research pipelines (maturity Level 2+)
 - Paper-trading execution under controls (Level 3)
+- Micro-live execution architecture exists (Phase 13) but remains deny-by-default; actual live activation requires a dedicated future phase, ADR, and independent review
 - Any live capability only after explicit Founder approval and unlocked feature registry entries

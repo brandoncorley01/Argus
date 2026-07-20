@@ -16,11 +16,13 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 - Phase 10 Market Intelligence Platform: multi-provider registry, historical OHLCV/news/calendar/research storage, replay-safe ingest, quality monitoring, `/api/v1/market` APIs, EOC `/market` — observation only
 - Phase 11 Strategy Laboratory: governed strategy versions, deterministic backtest/walk-forward/optimization/Monte Carlo, validation reports, `/api/v1/strategies`, EOC `/strategies` — research only
 - Phase 12 Paper Trading Institution: Execution Gateway, Internal Paper Provider (default), portfolios/orders/fills/P&L/risk/replay, `/api/v1/paper`, EOC `/paper` — no brokerage account required
+- Phase 13 Micro-Live Institution: deny-by-default live-execution architecture — `live_activation_state` machine (default `PAPER_ONLY`, no reachable path to `MICRO_LIVE_ACTIVE`), credential referencing (env var names only, never values), kill switches, versioned micro-capital policy, fixture-based reconciliation, `ExecutionGateway.assert_live_allowed`, optional disabled adapter scaffolds (Coinbase/Kraken/IBKR), `/api/v1/micro-live`, EOC `/micro-live` — live trading remains disabled; no credentials required
 - Governance frameworks: Engineering Constitution, Phase Execution, Independent Review, Release Certification
 
 ### Planned
 
-- Phase 13 Hardening & CI
+- Phase 14 Treasury and Executive Analytics
+- Phase 15 Hardening & CI
 
 ## [0.1.0-foundation] — 2026-07-16
 

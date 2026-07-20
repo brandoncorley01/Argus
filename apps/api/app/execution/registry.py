@@ -53,12 +53,21 @@ class ExecutionProviderRegistry:
 
 
 def _build_default_registry() -> ExecutionProviderRegistry:
+    from app.execution.adapters.coinbase import CoinbaseAdapter
+    from app.execution.adapters.ibkr import IbkrAdapter
+    from app.execution.adapters.kraken import KrakenAdapter
     from app.execution.providers.deterministic_test import DeterministicTestProvider
     from app.execution.providers.paper import PaperExecutionProvider
 
     registry = ExecutionProviderRegistry()
     registry.register("internal_paper", lambda db: PaperExecutionProvider(db))
     registry.register("deterministic_test", lambda _db: DeterministicTestProvider())
+    # Optional, disabled-by-default live adapter scaffolds (Phase 13). Neither
+    # registering nor constructing these ever contacts a network or requires
+    # an account; none is the default provider and none can submit an order.
+    registry.register("coinbase_adapter", lambda _db: CoinbaseAdapter())
+    registry.register("kraken_adapter", lambda _db: KrakenAdapter())
+    registry.register("ibkr_adapter", lambda _db: IbkrAdapter())
     return registry
 
 

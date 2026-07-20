@@ -54,14 +54,16 @@ TERMINAL_ORDER_STATUSES = frozenset(
 
 
 class ExecutionEnvironment(enum.StrEnum):
-    """``LIVE`` is reserved for a future, explicitly-approved phase.
-
-    No provider registered in this codebase implements ``LIVE``. The gateway
-    rejects any intent that is not paper/deterministic_test (see AGENTS.md).
+    """``LIVE``/``SANDBOX``/``TESTNET`` are reserved for the Phase 13 micro-live
+    architecture only; no provider registered in this codebase may actually
+    submit an order against any of them. The gateway rejects any intent that
+    is not paper/deterministic_test (see AGENTS.md and ADR-029).
     """
 
     PAPER = "paper"
     DETERMINISTIC_TEST = "deterministic_test"
+    SANDBOX = "sandbox"
+    TESTNET = "testnet"
     LIVE = "live"
 
 
@@ -69,6 +71,23 @@ class ProviderKind(enum.StrEnum):
     PAPER = "paper"
     DETERMINISTIC_TEST = "deterministic_test"
     TESTNET_STUB = "testnet_stub"
+    LIVE_ADAPTER = "live_adapter"
+
+
+class VerificationStatus(enum.StrEnum):
+    """Institutional maturity ladder for an execution provider adapter.
+
+    ``LIVE_CERTIFIED`` is defined for forward compatibility only. No adapter
+    in this codebase may ever be assigned ``LIVE_CERTIFIED`` — certification
+    requires an out-of-band Independent Engineering Review and Founder
+    approval that is explicitly out of scope for Phase 13 (see ADR-029).
+    """
+
+    IMPLEMENTED_UNVERIFIED = "implemented_unverified"
+    CONTRACT_TESTED = "contract_tested"
+    SANDBOX_VERIFIED = "sandbox_verified"
+    TESTNET_VERIFIED = "testnet_verified"
+    LIVE_CERTIFIED = "live_certified"
 
 
 class ExecutionProviderError(Exception):
@@ -91,6 +110,19 @@ class UnsupportedOperationError(ExecutionProviderError):
 class OrderRejectedError(ExecutionProviderError):
     def __init__(self, reason: str) -> None:
         super().__init__("order_rejected", reason)
+
+
+class LiveExecutionForbiddenError(ExecutionProviderError):
+    """Raised by any live/sandbox/testnet adapter that is asked to submit.
+
+    Phase 13 is deny-by-default: no adapter may ever place a real order.
+    """
+
+    def __init__(self, provider_key: str, reason: str = "live execution disabled") -> None:
+        super().__init__(
+            "live_execution_forbidden",
+            f"Provider '{provider_key}' cannot execute live orders: {reason}",
+        )
 
 
 @dataclass(frozen=True)

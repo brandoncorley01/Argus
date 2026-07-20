@@ -1,20 +1,29 @@
 import { apiFetch } from "@/lib/server/api";
 import type {
+  ActivationState,
+  ActivationTransition,
   AllowedTransitions,
   AuditEvent,
   AuditEventList,
   ConfigurationDocument,
   ConfigurationVersion,
+  CredentialReference,
   CurrentUser,
   Incident,
   IncidentLifecycleEvent,
   InstitutionalHealth,
+  KillSwitch,
+  MicroCapitalPolicy,
+  MicroLiveAdapter,
+  MicroLiveStatus,
   ModeAvailabilityItem,
   OperatingModeState,
   PolicyDocument,
   PolicyVersion,
   ProcessHealth,
   ProtectiveAction,
+  ReconciliationDiscrepancy,
+  ReconciliationRun,
   ServiceWithProjection,
   SupervisorLease,
   WorkerIdentity,
@@ -114,6 +123,60 @@ export async function getPolicyVersions(
   return apiFetch<PolicyVersion[]>(
     `/api/v1/policies/documents/${documentId}/versions`,
   );
+}
+
+/**
+ * Phase 13 — Micro-Live Institution reads. All read-only; no endpoint here
+ * can return a credential value or an activated live-trading state.
+ */
+export async function getMicroLiveStatus(): Promise<MicroLiveStatus> {
+  return apiFetch<MicroLiveStatus>("/api/v1/micro-live/status");
+}
+
+export async function getMicroLiveActivation(): Promise<ActivationState> {
+  return apiFetch<ActivationState>("/api/v1/micro-live/activation");
+}
+
+export async function getMicroLiveActivationTransitions(): Promise<
+  ActivationTransition[]
+> {
+  return apiFetch<ActivationTransition[]>(
+    "/api/v1/micro-live/activation/transitions",
+  );
+}
+
+export async function getMicroLiveCredentialReferences(): Promise<
+  CredentialReference[]
+> {
+  return apiFetch<CredentialReference[]>(
+    "/api/v1/micro-live/credential-references",
+  );
+}
+
+export async function getMicroLiveKillSwitches(): Promise<KillSwitch[]> {
+  return apiFetch<KillSwitch[]>("/api/v1/micro-live/kill-switches");
+}
+
+export async function getMicroLiveCapitalPolicy(): Promise<MicroCapitalPolicy> {
+  return apiFetch<MicroCapitalPolicy>("/api/v1/micro-live/capital-policy");
+}
+
+export async function getMicroLiveReconciliationRuns(): Promise<
+  ReconciliationRun[]
+> {
+  return apiFetch<ReconciliationRun[]>("/api/v1/micro-live/reconciliation/runs");
+}
+
+export async function getMicroLiveReconciliationDiscrepancies(
+  runId: string,
+): Promise<ReconciliationDiscrepancy[]> {
+  return apiFetch<ReconciliationDiscrepancy[]>(
+    `/api/v1/micro-live/reconciliation/runs/${runId}/discrepancies`,
+  );
+}
+
+export async function getMicroLiveAdapters(): Promise<MicroLiveAdapter[]> {
+  return apiFetch<MicroLiveAdapter[]>("/api/v1/micro-live/adapters");
 }
 
 export async function getProcessHealth(): Promise<ProcessHealth> {

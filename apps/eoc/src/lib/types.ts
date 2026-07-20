@@ -286,6 +286,122 @@ export interface ProcessHealth {
   [key: string]: unknown;
 }
 
+/**
+ * Phase 13 — Micro-Live Institution.
+ * Deny-by-default: live execution architecture only, no credentials
+ * required, no real orders possible. These types never carry secret
+ * values — only presence/reference metadata.
+ */
+export interface MicroLiveStatus {
+  live_capable_architecture: boolean;
+  credentials_configured: boolean;
+  live_execution_active: boolean;
+  paper_provider_default: boolean;
+  activation_state: string;
+  state_version: number;
+  global_kill_switch_active: boolean;
+  active_capital_policy_version: number | null;
+  adapter_count: number;
+  enabled_adapter_count: number;
+  disclaimer: string;
+}
+
+export interface ActivationState {
+  activation_state: string;
+  state_version: number;
+  credentials_configured: boolean;
+  live_execution_active: boolean;
+  live_capable_architecture: boolean;
+  paper_provider_default: boolean;
+  updated_at: string;
+  evidence: Record<string, unknown>;
+}
+
+export interface ActivationTransition {
+  id: string;
+  from_state: string | null;
+  to_state: string;
+  previous_state_version: number;
+  new_state_version: number;
+  reason: string | null;
+  evidence: Record<string, unknown>;
+  changed_at: string;
+}
+
+export interface CredentialReference {
+  id: string;
+  provider_key: string;
+  ref_name: string;
+  purpose: string;
+  is_present_cached: boolean;
+  last_validated_at: string | null;
+  created_at: string;
+}
+
+export interface KillSwitch {
+  id: string;
+  scope_type: string;
+  scope_id: string | null;
+  active: boolean;
+  reason: string | null;
+  activated_at: string | null;
+  cleared_at: string | null;
+  created_at: string;
+}
+
+export interface MicroCapitalPolicy {
+  id: string;
+  version: number;
+  max_deployable_capital: string;
+  max_order_notional: string;
+  max_daily_loss: string;
+  max_concurrent_exposure: string;
+  max_provider_exposure: string;
+  max_strategy_exposure: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface ReconciliationRun {
+  id: string;
+  provider_key: string;
+  status: string;
+  discrepancies: unknown[];
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface ReconciliationDiscrepancy {
+  id: string;
+  run_id: string;
+  kind: string;
+  detail: Record<string, unknown>;
+  resolved: boolean;
+  created_at: string;
+}
+
+export interface MicroLiveAdapter {
+  id: string;
+  provider_key: string;
+  display_name: string;
+  provider_kind: string;
+  environment: string;
+  is_default: boolean;
+  is_enabled: boolean;
+  verification_status: string;
+  supports_live: boolean;
+  description: string | null;
+}
+
+export interface DryRunOrderResult {
+  would_be_allowed: boolean;
+  blocking_codes: string[];
+  notional: string;
+  policy_version: number;
+  activation_state: string;
+  note: string;
+}
+
 export interface ApiErrorBody {
   detail?: string | { msg?: string; type?: string }[] | Record<string, unknown>;
 }

@@ -1243,6 +1243,26 @@ __all__ = [
     "ProtectiveActionType",
     "ProtectiveActionStatus",
     "IncidentLifecycleEventType",
+    "ExecutionProvider",
+    "ExecutionProviderHealth",
+    "ExecutionProviderKind",
+    "PaperCashLedger",
+    "PaperFill",
+    "PaperOrder",
+    "PaperOrderEvent",
+    "PaperOrderSide",
+    "PaperOrderStatus",
+    "PaperOrderType",
+    "PaperPortfolio",
+    "PaperPosition",
+    "PaperReplayCheckpoint",
+    "PaperReport",
+    "PaperRiskBreach",
+    "PaperRiskLimit",
+    "PaperSession",
+    "PortfolioStatus",
+    "ReportType",
+    "SessionStatus",
     "MarketProvider",
     "MarketProviderHealth",
     "MarketInstrument",
@@ -1331,3 +1351,31 @@ from app.models.paper_trading import (  # noqa: E402
     ReportType,
     SessionStatus,
 )
+
+# Phase 13 Micro-Live Institution models (deny-by-default; re-exported for
+# Alembic metadata)
+from app.models.micro_live import (  # noqa: E402
+    CredentialReference,
+    KillSwitch,
+    KillSwitchScope,
+    LiveActivationState,
+    LiveActivationStateRow,
+    LiveActivationTransition,
+    MicroCapitalPolicy,
+    ReconciliationDiscrepancy,
+    ReconciliationRun,
+    ReconciliationRunStatus,
+)
+
+__all__ += [
+    "CredentialReference",
+    "KillSwitch",
+    "KillSwitchScope",
+    "LiveActivationState",
+    "LiveActivationStateRow",
+    "LiveActivationTransition",
+    "MicroCapitalPolicy",
+    "ReconciliationDiscrepancy",
+    "ReconciliationRun",
+    "ReconciliationRunStatus",
+]

@@ -120,3 +120,48 @@ class ExecutionGateway:
         if not provider.readiness():
             provider.connect()
         return provider.reconcile(portfolio_id)
+
+    def assert_live_allowed(
+        self,
+        *,
+        activation_state: str,
+        credentials_present: bool,
+        global_kill_active: bool,
+        policy_allows: bool,
+        test_only_override: bool = False,
+    ) -> bool:
+        """Institutional deny-by-default gate for live execution (Phase 13).
+
+        Without ``test_only_override=True`` this ALWAYS raises
+        ``ExecutionGatewayError("live_execution_forbidden", ...)`` — there is
+        no code path in normal operation (API, services, workers) that can
+        pass this flag, so live execution can never be reached outside of a
+        deliberate, explicit test exercising the gating logic itself.
+
+        Even when ``test_only_override=True`` and every institutional gate
+        is satisfied (activation is ``MICRO_LIVE_ACTIVE``, credentials are
+        present, no global kill switch is active, and the capital policy
+        allows it), this method NEVER submits an order and never contacts a
+        real provider — it only proves the gating predicate. Real order
+        routing remains additionally blocked by ``ALLOWED_ENVIRONMENTS`` in
+        :meth:`submit`, which never includes ``live``/``sandbox``/``testnet``,
+        and by every live adapter's ``submit_order`` raising
+        ``LiveExecutionForbiddenError`` unconditionally.
+        """
+        all_gates_pass = (
+            activation_state == "MICRO_LIVE_ACTIVE"
+            and credentials_present
+            and not global_kill_active
+            and policy_allows
+        )
+        if not test_only_override:
+            raise ExecutionGatewayError(
+                "live_execution_forbidden",
+                "Live execution is disabled by deny-by-default policy (Phase 13)",
+            )
+        if not all_gates_pass:
+            raise ExecutionGatewayError(
+                "live_execution_forbidden",
+                "Live activation gates are not satisfied",
+            )
+        return True

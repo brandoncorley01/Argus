@@ -1,4 +1,21 @@
-"""Operating-mode availability and prerequisite evaluation (Phase 7)."""
+"""Operating-mode availability and prerequisite evaluation (Phase 7).
+
+Phase 13 note: Argus's global ``OperatingMode`` state machine (this module)
+and the Phase 13 ``live_activation_state`` machine
+(``app.services.live_activation_service``) are deliberately independent.
+``RISK_INCREASING_MODES`` (PAPER/MICRO_LIVE/NORMAL_LIVE) remains
+unconditionally blocked here regardless of Phase 13 activation progress —
+Phase 13 implements the micro-live *architecture* (adapters, credential
+references, kill switches, capital policy, reconciliation) without unlocking
+the global MICRO_LIVE operating mode. Entering the global ``MICRO_LIVE``
+operating mode would require BOTH an unlocked ``feat.mode.micro_live``
+registry entry AND ``live_activation_state.current_state ==
+MICRO_LIVE_ACTIVE`` — and the latter has no reachable code path in this
+phase (see ADR-029). ``feat.trading.live`` remains locked. ``NORMAL_LIVE``
+is not unlocked by anything in Phase 13. The Phase 12 paper trading HTTP API
+(``/api/v1/paper``) already operates independently of the OperatingMode
+machine via the Execution Gateway's own paper/deterministic_test allowlist.
+"""
 
 from __future__ import annotations
 
@@ -85,8 +102,16 @@ class ModePrerequisiteEvaluator:
             codes.append("mode_unavailable")
             codes.append("execution_capability_not_implemented")
             details["phase7_policy"] = (
-                "PAPER/MICRO_LIVE/NORMAL_LIVE unavailable until future phases"
+                "PAPER/MICRO_LIVE/NORMAL_LIVE unavailable at the OperatingMode layer"
             )
+            if target == OperatingMode.MICRO_LIVE:
+                details["phase13_policy"] = (
+                    "Phase 13 implements the micro-live architecture behind its own "
+                    "live_activation_state machine, but does not unlock this global "
+                    "OperatingMode. Entry would require feat.mode.micro_live unlocked "
+                    "AND live_activation_state == MICRO_LIVE_ACTIVE, and the latter has "
+                    "no reachable code path in Phase 13 (see ADR-029)."
+                )
             # Feature registry locks reinforce the unavailable posture.
             locked = self._locked_execution_features()
             if locked:

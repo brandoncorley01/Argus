@@ -100,6 +100,15 @@ class ExecutionProvider(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Phase 13 additions — institutional maturity ladder + explicit live gate.
+    # ``supports_live`` is always false for every seeded adapter until an
+    # out-of-band certification (never performed in this codebase) flips it.
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'implemented_unverified'")
+    )
+    supports_live: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
