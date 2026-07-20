@@ -29,7 +29,8 @@ Runtime persistence of the registry is deferred to a later application phase. Th
 | `feat.worker.arq` | ARQ background worker | `implemented` | 1 | `0.1.0` | `active` | — | `feat.infra.redis` | `2026-07-19` |
 | `feat.health.supervisor` | Institutional health supervisor | `implemented` | 1 | `0.1.0` | `active` | — | `feat.worker.arq`, `feat.mode.state_machine`, `feat.audit.fail_closed` | `2026-07-19` |
 | `feat.api.fastapi` | FastAPI control plane | `scaffolded` | 1 | `0.1.0` | `active` (health/ready only) | — | `feat.infra.postgres`, `feat.infra.redis` | `2026-07-16` |
-| `feat.ui.eoc` | Executive Operations Center | `planned` | 1 | `0.1.0` | `locked` | Frontend phase not started | `feat.api.fastapi` | `2026-07-15` |
+| `feat.ui.eoc` | Executive Operations Center | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi`, `feat.auth.sessions` | `2026-07-19` |
+| `feat.market.intelligence` | Market Intelligence Platform | `implemented` | 2 | `0.1.0` | `active` | Observation only — no signals/trading | `feat.api.fastapi`, `feat.audit.fail_closed` | `2026-07-19` |
 | `feat.auth.sessions` | Server-side sessions | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi`, `feat.audit.fail_closed` | `2026-07-16` |
 | `feat.audit.fail_closed` | Fail-closed audit | `implemented` | 1 | `0.1.0` | `active` | — | `feat.api.fastapi` | `2026-07-16` |
 | `feat.config.policy_versioning` | Config & policy versioning engine | `implemented` | 1 | `0.1.0` | `active` | — | `feat.audit.fail_closed`, `feat.auth.sessions` | `2026-07-16` |

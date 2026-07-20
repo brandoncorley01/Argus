@@ -18,8 +18,9 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 6 — Config & policy versioning APIs | Done | Lifecycle versions, hash integrity, atomic activate, APIs + audit |
 | 7 — Operating-mode state machine | Done | Governed modes; PAPER/MICRO_LIVE/NORMAL_LIVE unavailable; emergency fail-closed |
 | 8 — Health supervisor (ARQ) | Done | Governed registry, heartbeats, supervisor lease, incidents, SYSTEM SAFE_MODE |
-| 9 — Executive Operations Center | Planned | Next.js operator UI (status, audit, mode) — no fake dashboards |
-| 10 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
+| 9 — Executive Operations Center | Done | Next.js EOC: auth bridge, role dashboards, ops/health/incidents/audit/config/policy |
+| 10 — Market Intelligence Platform | Done | Observation-only multi-provider intelligence (no trading/signals) |
+| 11 — Hardening & CI | Planned | GitHub Actions, acceptance pack (renumbered; Founder Phase 10 = Market Intelligence) |
 
 ## Explicitly out of scope (v0.1)
 
@@ -31,9 +32,9 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Near-term sequence
 
-1. Review/merge Phase 8 on `phase-8-health-supervisor-worker-foundation` when Founder authorizes
-2. Phase 9 Executive Operations Center once control-plane APIs are trustworthy
-3. Hardening & CI
+1. Merge Phase 8 → Phase 9 → Phase 10 when Founder authorizes (Phase 9/10 developed from Phase 8 tip by Founder waiver)
+2. Hardening & CI (Phase 11)
+3. Strategy Laboratory and later phases remain locked from live trading
 
 ## Longer horizon (post-foundation)
 

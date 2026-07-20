@@ -10,7 +10,7 @@ This directory holds the durable documentation for Argus, a private institutiona
 | [`architecture/`](architecture/) | System design: module boundaries, responsibility separation, data flows, interfaces, and significant architectural decisions. |
 | [`research/`](research/) | Research methodology, market study notes, strategy hypotheses, validation criteria, and evidence standards. Do not treat unvalidated ideas as proven performance. |
 | [`risk/`](risk/) | Risk policy, limits, controls, failure modes, and audit expectations. Risk controls must never be bypassed. |
-| [`governance/`](governance/) | Decision rights, approval paths, change control, and accountability for important actions. |
+| [`governance/`](governance/) | Constitution, Phase Execution, Independent Review, and [Release Certification](governance/ARGUS_RELEASE_CERTIFICATION_FRAMEWORK.md) frameworks; decision rights and change control. |
 | [`treasury/`](treasury/) | Capital allocation, paper balances, funding posture, and treasury operating rules. No withdrawal, leverage, margin, futures, or short-selling functionality belongs here as product scope. |
 | [`releases/`](releases/) | Version history, release notes, migration notes, and rollout records for documented system changes. |
 

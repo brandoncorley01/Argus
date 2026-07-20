@@ -14,7 +14,7 @@ See [`AGENTS.md`](AGENTS.md). Capital preservation comes before profit. Do not b
 
 | Path | Purpose |
 | --- | --- |
-| `apps/` | Future application runtimes (API, Executive Operations Center). Not scaffolded in Phase 0/1. |
+| `apps/` | Application runtimes: FastAPI control plane (`apps/api`), Executive Operations Center (`apps/eoc`). |
 | `workers/` | Future ARQ workers. Not scaffolded yet. |
 | `packages/` | Future shared libraries. Not scaffolded yet. |
 | `infrastructure/` | Local infrastructure documentation and Compose-related notes. |

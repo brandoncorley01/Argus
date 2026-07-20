@@ -30,6 +30,8 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-022](ADR-022-durable-supervisor-lease.md) | Durable health supervisor lease in PostgreSQL | Accepted |
 | [ADR-023](ADR-023-system-actor-safe-mode.md) | SYSTEM actor auto-degrade to SAFE_MODE | Accepted |
 | [ADR-024](ADR-024-arq-health-worker-foundation.md) | ARQ worker foundation for health supervision | Accepted |
+| [ADR-025](ADR-025-eoc-bff-session-bridge.md) | Executive Operations Center BFF session bridge | Accepted |
+| [ADR-026](ADR-026-market-intelligence-observation-boundary.md) | Market Intelligence observation boundary | Accepted |
 
 ## ADR template
 

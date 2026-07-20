@@ -22,11 +22,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-
-class Base(DeclarativeBase):
-    """SQLAlchemy 2.x declarative base for Argus institutional models."""
+from app.models.base import Base
 
 
 class InstitutionalRole(enum.StrEnum):
@@ -1245,4 +1243,41 @@ __all__ = [
     "ProtectiveActionType",
     "ProtectiveActionStatus",
     "IncidentLifecycleEventType",
+    "MarketProvider",
+    "MarketProviderHealth",
+    "MarketInstrument",
+    "MarketOhlcvBar",
+    "MarketObservation",
+    "MarketNewsItem",
+    "MarketEconomicEvent",
+    "MarketResearchItem",
+    "MarketIngestionRun",
+    "MarketQualityFinding",
+    "MarketIngestionIdempotency",
+    "MarketProviderKind",
+    "ProviderHealthStatus",
+    "ObservationChannel",
+    "IngestionRunStatus",
+    "QualityFindingKind",
 ]
+
+
+# Phase 10 market intelligence models (re-exported for Alembic metadata)
+from app.models.market_intelligence import (  # noqa: E402
+    IngestionRunStatus,
+    MarketEconomicEvent,
+    MarketIngestionIdempotency,
+    MarketIngestionRun,
+    MarketInstrument,
+    MarketNewsItem,
+    MarketObservation,
+    MarketOhlcvBar,
+    MarketProvider,
+    MarketProviderHealth,
+    MarketProviderKind,
+    MarketQualityFinding,
+    MarketResearchItem,
+    ObservationChannel,
+    ProviderHealthStatus,
+    QualityFindingKind,
+)
