@@ -1307,3 +1307,27 @@ from app.models.strategy_laboratory import (  # noqa: E402
     StrategyVersion,
     ValidationReport,
 )
+
+# Phase 12 paper trading models
+from app.models.paper_trading import (  # noqa: E402
+    ExecutionProvider,
+    ExecutionProviderHealth,
+    ExecutionProviderKind,
+    PaperCashLedger,
+    PaperFill,
+    PaperOrder,
+    PaperOrderEvent,
+    PaperOrderSide,
+    PaperOrderStatus,
+    PaperOrderType,
+    PaperPortfolio,
+    PaperPosition,
+    PaperReplayCheckpoint,
+    PaperReport,
+    PaperRiskBreach,
+    PaperRiskLimit,
+    PaperSession,
+    PortfolioStatus,
+    ReportType,
+    SessionStatus,
+)

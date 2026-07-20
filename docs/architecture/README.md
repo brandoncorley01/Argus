@@ -11,6 +11,8 @@ This directory holds Argus system design notes and Architecture Decision Records
 | [`CONFIG_POLICY_VERSIONING.md`](CONFIG_POLICY_VERSIONING.md) | Phase 6 configuration and policy versioning |
 | [`OPERATING_MODE_STATE_MACHINE.md`](OPERATING_MODE_STATE_MACHINE.md) | Phase 7 operating-mode state machine |
 | [`HEALTH_SUPERVISOR.md`](HEALTH_SUPERVISOR.md) | Phase 8 health supervisor and worker foundation |
+| [`STRATEGY_LABORATORY.md`](STRATEGY_LABORATORY.md) | Phase 11 Strategy Laboratory (research only) |
+| [`PAPER_TRADING.md`](PAPER_TRADING.md) | Phase 12 Paper Trading Institution / Execution Gateway |
 
 ## Conventions
 

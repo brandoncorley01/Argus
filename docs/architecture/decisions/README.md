@@ -33,6 +33,7 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-025](ADR-025-eoc-bff-session-bridge.md) | Executive Operations Center BFF session bridge | Accepted |
 | [ADR-026](ADR-026-market-intelligence-observation-boundary.md) | Market Intelligence observation boundary | Accepted |
 | [ADR-027](ADR-027-strategy-laboratory-closed-registry.md) | Strategy Laboratory closed research registry | Accepted |
+| [ADR-028](ADR-028-execution-gateway-paper-provider.md) | Execution Gateway and Internal Paper Provider | Accepted |
 
 ## ADR template
 

@@ -18,6 +18,7 @@ export const config = {
     "/incidents/:path*",
     "/market/:path*",
     "/strategies/:path*",
+    "/paper/:path*",
     "/audit/:path*",
     "/configurations/:path*",
     "/policies/:path*",

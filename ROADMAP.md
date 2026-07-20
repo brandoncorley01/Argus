@@ -21,7 +21,7 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 9 — Executive Operations Center | Done | Next.js EOC: auth bridge, role dashboards, ops/health/incidents/audit/config/policy |
 | 10 — Market Intelligence Platform | Done | Observation-only multi-provider intelligence (no trading/signals) |
 | 11 — Strategy Laboratory | Done | Versioned strategies, deterministic research engines, validation — no live trading |
-| 12 — Paper Trading Institution | Planned | Internal paper execution provider + gateway (no brokerage account required) |
+| 12 — Paper Trading Institution | Done | Internal paper execution provider + gateway (no brokerage account required) |
 | 13 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
 
 ## Explicitly out of scope (v0.1)
@@ -34,9 +34,8 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Near-term sequence
 
-1. Merge Phase 8–10 when Founder authorizes
-2. Phase 11 Strategy Laboratory (this branch) then Phase 12 Paper Trading
-3. Hardening & CI (Phase 13+) — do not start until Founder authorizes
+1. Merge Phase 8–12 when Founder authorizes (stacked branches; keep phases identifiable)
+2. Hardening & CI (Phase 13) — do not start until Founder authorizes
 
 ## Longer horizon (post-foundation)
 

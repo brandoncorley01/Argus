@@ -13,6 +13,7 @@ from app.api.v1.health_supervisor import router as health_supervisor_router
 from app.api.v1.incidents import router as incidents_router
 from app.api.v1.market import router as market_router
 from app.api.v1.operating_mode import router as operating_mode_router
+from app.api.v1.paper import router as paper_router
 from app.api.v1.policies import router as policies_router
 from app.api.v1.strategies import router as strategies_router
 from app.api.v1.workers import router as workers_router
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(incidents_router)
     app.include_router(market_router)
     app.include_router(strategies_router)
+    app.include_router(paper_router)
     return app
 
 
