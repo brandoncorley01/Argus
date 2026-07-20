@@ -832,6 +832,8 @@ class StrategyLaboratoryService:
                     train_frac=float(budget.get("train_frac", 0.6)),
                     val_frac=float(budget.get("val_frac", 0.2)),
                     test_frac=float(budget.get("test_frac", 0.2)),
+                    n_windows=int(budget.get("n_windows", 1) or 1),
+                    step_frac=float(budget.get("step_frac", 0.1)),
                 )
             if kind == ResearchRunKind.OPTIMIZATION.value:
                 max_trials = budget.get("max_trials")

@@ -324,53 +324,143 @@ def run_walk_forward(
     train_frac: float = 0.6,
     val_frac: float = 0.2,
     test_frac: float = 0.2,
+    n_windows: int = 1,
+    step_frac: float = 0.1,
 ) -> dict[str, Any]:
-    """Explicit IS/OOS split. Never report in-sample metrics as out-of-sample."""
+    """Walk-forward with explicit IS/OOS separation.
+
+    ``n_windows=1``: single chronological train+val (IS) / test (OOS) split.
+    ``n_windows>1``: rolling windows; primary metrics = mean of per-window OOS
+    (never in-sample). Optional per-fold re-optimization via params keys
+    ``_optimize_grid`` and ``_optimize_budget``.
+    """
     total = train_frac + val_frac + test_frac
     if abs(total - 1.0) > 1e-9:
         raise StrategyEngineError(
             "invalid_split",
             "train_frac + val_frac + test_frac must equal 1.0",
         )
-    if any(f < 0 for f in (train_frac, val_frac, test_frac)):
+    if any(f < 0 for f in (train_frac, val_frac, test_frac, step_frac)):
         raise StrategyEngineError("invalid_split", "Fractions must be non-negative")
+    if n_windows < 1:
+        raise StrategyEngineError("invalid_split", "n_windows must be >= 1")
     n = len(bars)
     if n < 10:
-        raise StrategyEngineError("insufficient_bars", "Need at least 10 bars for walk-forward")
+        raise StrategyEngineError(
+            "insufficient_bars", "Need at least 10 bars for walk-forward"
+        )
 
-    train_end = int(n * train_frac)
-    val_end = train_end + int(n * val_frac)
-    if train_end < 2 or val_end <= train_end or val_end >= n:
-        # Ensure non-empty OOS when possible
-        train_end = max(2, int(n * 0.6))
-        val_end = max(train_end + 1, int(n * 0.8))
-        val_end = min(val_end, n - 1)
+    window_len = n if n_windows == 1 else max(10, int(n * 0.5))
+    step = n if n_windows == 1 else max(1, int(n * step_frac))
 
-    is_bars = bars[:val_end]  # train + validation = in-sample
-    oos_bars = bars[val_end:]  # held-out test = out-of-sample
+    folds: list[dict[str, Any]] = []
+    oos_metric_rows: list[dict[str, float]] = []
+    last_oos_result: BacktestResult | None = None
 
-    is_result = run_bar_backtest(is_bars, strategy_class, params, assumptions, seed)
-    oos_result = run_bar_backtest(oos_bars, strategy_class, params, assumptions, seed)
+    start = 0
+    for fold_idx in range(n_windows):
+        end = n if n_windows == 1 else start + window_len
+        if end > n:
+            break
+        slice_bars = bars if n_windows == 1 else bars[start:end]
+        m = len(slice_bars)
+        train_end = max(2, int(m * train_frac))
+        val_end = max(train_end + 1, int(m * (train_frac + val_frac)))
+        val_end = min(val_end, m - 1)
+        is_bars = slice_bars[:val_end]
+        oos_bars = slice_bars[val_end:]
+        if len(oos_bars) < 1:
+            break
 
-    return {
-        "metrics": oos_result.metrics,  # primary reported metrics are OOS
-        "equity_curve": oos_result.equity_curve,
-        "trades": oos_result.trades,
-        "diagnostics": {
-            **oos_result.diagnostics,
-            "split": {
-                "train_frac": train_frac,
-                "val_frac": val_frac,
-                "test_frac": test_frac,
+        fold_params = dict(params)
+        optimize_grid = fold_params.pop("_optimize_grid", None)
+        optimize_budget = int(fold_params.pop("_optimize_budget", 0) or 0)
+        if isinstance(optimize_grid, dict) and optimize_budget > 0:
+            train_only = is_bars[:train_end] if train_end < len(is_bars) else is_bars
+            opt = run_optimization(
+                train_only,
+                strategy_class,
+                assumptions,
+                optimize_grid,
+                max_trials=optimize_budget,
+                seed=seed + fold_idx,
+            )
+            fold_params = {**fold_params, **(opt.get("best_params") or {})}
+
+        is_result = run_bar_backtest(
+            is_bars, strategy_class, fold_params, assumptions, seed
+        )
+        oos_result = run_bar_backtest(
+            oos_bars, strategy_class, fold_params, assumptions, seed
+        )
+        last_oos_result = oos_result
+        folds.append(
+            {
+                "fold": fold_idx,
+                "start": start,
+                "end": end,
                 "train_end": train_end,
                 "val_end": val_end,
                 "is_bar_count": len(is_bars),
                 "oos_bar_count": len(oos_bars),
+                "params": fold_params,
+                "in_sample_metrics": is_result.metrics,
+                "out_of_sample_metrics": oos_result.metrics,
+            }
+        )
+        oos_metric_rows.append(oos_result.metrics)
+        if n_windows == 1:
+            break
+        start += step
+        if start + window_len > n:
+            break
+
+    if not folds or last_oos_result is None:
+        raise StrategyEngineError(
+            "insufficient_bars", "Could not form walk-forward folds"
+        )
+
+    keys = oos_metric_rows[0].keys()
+    agg = {
+        k: float(
+            sum(float(row.get(k, 0.0)) for row in oos_metric_rows) / len(oos_metric_rows)
+        )
+        for k in keys
+    }
+
+    return {
+        "metrics": agg,
+        "equity_curve": last_oos_result.equity_curve,
+        "trades": last_oos_result.trades,
+        "diagnostics": {
+            **last_oos_result.diagnostics,
+            "split": {
+                "train_frac": train_frac,
+                "val_frac": val_frac,
+                "test_frac": test_frac,
+                "n_windows": n_windows,
+                "step_frac": step_frac,
+                "folds": len(folds),
+                "is_bar_count": folds[0]["is_bar_count"],
+                "oos_bar_count": folds[0]["oos_bar_count"]
+                if n_windows == 1
+                else sum(f["oos_bar_count"] for f in folds),
+                "train_end": folds[0]["train_end"],
+                "val_end": folds[0]["val_end"],
             },
+            "folds": [
+                {
+                    "fold": f["fold"],
+                    "is_bar_count": f["is_bar_count"],
+                    "oos_bar_count": f["oos_bar_count"],
+                    "params": f["params"],
+                }
+                for f in folds
+            ],
             "in_sample_reported_as_oos": False,
         },
-        "in_sample_metrics": is_result.metrics,
-        "out_of_sample_metrics": oos_result.metrics,
+        "in_sample_metrics": folds[0]["in_sample_metrics"],
+        "out_of_sample_metrics": agg,
     }
 
 
