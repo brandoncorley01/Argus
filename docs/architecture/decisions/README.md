@@ -35,6 +35,7 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-027](ADR-027-strategy-laboratory-closed-registry.md) | Strategy Laboratory closed research registry | Accepted |
 | [ADR-028](ADR-028-execution-gateway-paper-provider.md) | Execution Gateway and Internal Paper Provider | Accepted |
 | [ADR-029](ADR-029-micro-live-deny-by-default.md) | Micro-Live Institution deny-by-default architecture | Accepted |
+| [ADR-030](ADR-030-treasury-simulated-ledger-boundary.md) | Treasury simulated-ledger boundary | Accepted |
 
 ## ADR template
 

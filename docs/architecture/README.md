@@ -14,6 +14,7 @@ This directory holds Argus system design notes and Architecture Decision Records
 | [`STRATEGY_LABORATORY.md`](STRATEGY_LABORATORY.md) | Phase 11 Strategy Laboratory (research only) |
 | [`PAPER_TRADING.md`](PAPER_TRADING.md) | Phase 12 Paper Trading Institution / Execution Gateway |
 | [`MICRO_LIVE.md`](MICRO_LIVE.md) | Phase 13 Micro-Live Institution (deny-by-default; live execution disabled) |
+| [`TREASURY.md`](TREASURY.md) | Phase 14 Treasury and Executive Analytics (simulated-ledger only; external transfer execution forbidden) |
 
 ## Conventions
 

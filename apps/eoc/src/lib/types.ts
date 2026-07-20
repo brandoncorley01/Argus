@@ -402,6 +402,161 @@ export interface DryRunOrderResult {
   note: string;
 }
 
+/**
+ * Phase 14 — Treasury and Executive Analytics.
+ * Every balance and KPI here is SIMULATED / INTERNAL PAPER capital only.
+ * There is no code path that represents a real external transfer as
+ * executed — `ExternalTransferInstruction.status` is always one of
+ * draft/proposed/cancelled.
+ */
+export interface TreasuryAccount {
+  id: string;
+  name: string;
+  currency: string;
+  classification: string;
+  balance: string;
+  is_simulated: boolean;
+  status: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CapitalPool {
+  id: string;
+  account_id: string;
+  name: string;
+  pool_type: string;
+  balance: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CapitalAllocation {
+  id: string;
+  pool_id: string;
+  target_type: string;
+  target_id: string | null;
+  amount: string;
+  max_amount: string | null;
+  status: string;
+  notes: string | null;
+  requested_at: string;
+  approved_at: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+  released_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CapitalReservation {
+  id: string;
+  allocation_id: string;
+  amount: string;
+  status: string;
+  reserved_at: string;
+  released_at: string | null;
+  created_at: string;
+}
+
+export interface TreasuryLedgerEntry {
+  id: string;
+  account_id: string;
+  pool_id: string | null;
+  allocation_id: string | null;
+  entry_type: string;
+  amount: string;
+  balance_after: string;
+  reference_type: string | null;
+  reference_id: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface ExternalTransferInstruction {
+  id: string;
+  account_id: string;
+  direction: string;
+  amount: string;
+  currency: string;
+  destination_reference: string;
+  status: string;
+  environment_label: string;
+  blocked_reason: string | null;
+  execution_attempted_at: string | null;
+  execution_attempt_count: number;
+  proposed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttributionSnapshot {
+  id: string;
+  as_of: string;
+  scope: string;
+  scope_ref: string | null;
+  environment_class: string;
+  amounts: Record<string, unknown>;
+  evidence_refs: unknown[];
+  is_available: boolean;
+  unavailable_reason: string | null;
+  created_at: string;
+}
+
+export interface ExecutiveKpiSnapshot {
+  id: string;
+  as_of: string;
+  kpi_key: string;
+  value: string | null;
+  unit: string;
+  environment_class: string;
+  evidence_refs: unknown[];
+  is_estimated: boolean;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ForecastScenario {
+  id: string;
+  name: string;
+  scenario_type: string;
+  as_of: string;
+  inputs: Record<string, unknown>;
+  outputs: Record<string, unknown>;
+  is_deterministic: boolean;
+  created_at: string;
+}
+
+export interface InstitutionalReport {
+  id: string;
+  report_type: string;
+  version: number;
+  as_of: string;
+  content: Record<string, unknown>;
+  content_hash: string;
+  provenance: Record<string, unknown>;
+  is_immutable: boolean;
+  environment_disclaimer: string;
+  created_at: string;
+}
+
+export interface TreasurySummary {
+  disclaimer: string;
+  total_simulated_balance: string;
+  account_count: number;
+  allocation_status_counts: Record<string, number>;
+  external_transfer_status_counts: Record<string, number>;
+  external_transfer_executed_count: number;
+  latest_kpis: ExecutiveKpiSnapshot[];
+  latest_paper_attribution: AttributionSnapshot[];
+  live_available: boolean;
+  live_unavailable_reason: string;
+  latest_report: InstitutionalReport | null;
+}
+
 export interface ApiErrorBody {
   detail?: string | { msg?: string; type?: string }[] | Record<string, unknown>;
 }

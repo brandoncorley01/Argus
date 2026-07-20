@@ -17,11 +17,11 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 - Phase 11 Strategy Laboratory: governed strategy versions, deterministic backtest/walk-forward/optimization/Monte Carlo, validation reports, `/api/v1/strategies`, EOC `/strategies` — research only
 - Phase 12 Paper Trading Institution: Execution Gateway, Internal Paper Provider (default), portfolios/orders/fills/P&L/risk/replay, `/api/v1/paper`, EOC `/paper` — no brokerage account required
 - Phase 13 Micro-Live Institution: deny-by-default live-execution architecture — `live_activation_state` machine (default `PAPER_ONLY`, no reachable path to `MICRO_LIVE_ACTIVE`), credential referencing (env var names only, never values), kill switches, versioned micro-capital policy, fixture-based reconciliation, `ExecutionGateway.assert_live_allowed`, optional disabled adapter scaffolds (Coinbase/Kraken/IBKR), `/api/v1/micro-live`, EOC `/micro-live` — live trading remains disabled; no credentials required
+- Phase 14 Treasury and Executive Analytics: simulated-ledger treasury accounts/pools/allocations/reservations, append-only internal ledger, external transfer *instructions* with execution structurally forbidden (`external_transfer_execution_forbidden`, no `executed` status exists), performance attribution and executive KPIs built from real paper/health/incident/strategy data (never invented), deterministic forecast scenarios, immutable content-hashed institutional reports with paper/live disclaimers, `/api/v1/treasury`, EOC `/treasury` — no real money movement possible
 - Governance frameworks: Engineering Constitution, Phase Execution, Independent Review, Release Certification
 
 ### Planned
 
-- Phase 14 Treasury and Executive Analytics
 - Phase 15 Hardening & CI
 
 ## [0.1.0-foundation] — 2026-07-16

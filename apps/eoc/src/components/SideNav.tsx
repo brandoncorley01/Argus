@@ -14,6 +14,7 @@ const NAV = [
   { href: "/strategies", label: "Strategy Laboratory" },
   { href: "/paper", label: "Paper Trading" },
   { href: "/micro-live", label: "Micro-Live Institution" },
+  { href: "/treasury", label: "Treasury & Analytics" },
   { href: "/audit", label: "Audit Explorer" },
   { href: "/configurations", label: "Configurations" },
   { href: "/policies", label: "Policies" },

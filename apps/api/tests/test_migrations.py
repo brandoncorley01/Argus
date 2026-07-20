@@ -78,6 +78,16 @@ EXPECTED_TABLES = {
     "micro_capital_policies",
     "reconciliation_runs",
     "reconciliation_discrepancies",
+    "treasury_accounts",
+    "capital_pools",
+    "capital_allocations",
+    "capital_reservations",
+    "treasury_ledger_entries",
+    "external_transfer_instructions",
+    "performance_attribution_snapshots",
+    "executive_kpi_snapshots",
+    "institutional_reports",
+    "forecast_scenarios",
 }
 
 
@@ -100,7 +110,7 @@ def test_migration_upgrade_downgrade_reupgrade_cycle() -> None:
 
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "f2a3b4c5d6e7"
+    assert version == "a3b4c5d6e7f8"
 
     command.downgrade(cfg, "base")
     insp_after_down = inspect(engine)

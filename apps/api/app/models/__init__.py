@@ -1313,19 +1313,19 @@ from app.models.market_intelligence import (  # noqa: E402
     QualityFindingKind,
 )
 
-# Phase 11 Strategy Laboratory models (re-exported for Alembic metadata)
-from app.models.strategy_laboratory import (  # noqa: E402
-    ResearchDataset,
-    ResearchRun,
-    ResearchRunKind,
-    ResearchRunResult,
-    ResearchRunStatus,
-    StrategyComparison,
-    StrategyDocument,
-    StrategyLifecycleEvent,
-    StrategyLifecycleStatus,
-    StrategyVersion,
-    ValidationReport,
+# Phase 13 Micro-Live Institution models (deny-by-default; re-exported for
+# Alembic metadata)
+from app.models.micro_live import (  # noqa: E402
+    CredentialReference,
+    KillSwitch,
+    KillSwitchScope,
+    LiveActivationState,
+    LiveActivationStateRow,
+    LiveActivationTransition,
+    MicroCapitalPolicy,
+    ReconciliationDiscrepancy,
+    ReconciliationRun,
+    ReconciliationRunStatus,
 )
 
 # Phase 12 paper trading models
@@ -1352,19 +1352,19 @@ from app.models.paper_trading import (  # noqa: E402
     SessionStatus,
 )
 
-# Phase 13 Micro-Live Institution models (deny-by-default; re-exported for
-# Alembic metadata)
-from app.models.micro_live import (  # noqa: E402
-    CredentialReference,
-    KillSwitch,
-    KillSwitchScope,
-    LiveActivationState,
-    LiveActivationStateRow,
-    LiveActivationTransition,
-    MicroCapitalPolicy,
-    ReconciliationDiscrepancy,
-    ReconciliationRun,
-    ReconciliationRunStatus,
+# Phase 11 Strategy Laboratory models (re-exported for Alembic metadata)
+from app.models.strategy_laboratory import (  # noqa: E402
+    ResearchDataset,
+    ResearchRun,
+    ResearchRunKind,
+    ResearchRunResult,
+    ResearchRunStatus,
+    StrategyComparison,
+    StrategyDocument,
+    StrategyLifecycleEvent,
+    StrategyLifecycleStatus,
+    StrategyVersion,
+    ValidationReport,
 )
 
 __all__ += [
@@ -1378,4 +1378,54 @@ __all__ += [
     "ReconciliationDiscrepancy",
     "ReconciliationRun",
     "ReconciliationRunStatus",
+]
+
+# Phase 14 Treasury and Executive Analytics models (simulated-ledger only;
+# re-exported for Alembic metadata)
+from app.models.treasury import (  # noqa: E402
+    AttributionScope,
+    CapitalAllocation,
+    CapitalAllocationStatus,
+    CapitalAllocationTargetType,
+    CapitalPool,
+    CapitalReservation,
+    CapitalReservationStatus,
+    EnvironmentClass,
+    ExecutiveKpiSnapshot,
+    ExternalTransferDirection,
+    ExternalTransferInstruction,
+    ExternalTransferStatus,
+    ForecastScenario,
+    ForecastScenarioType,
+    InstitutionalReport,
+    InstitutionalReportType,
+    PerformanceAttributionSnapshot,
+    TreasuryAccount,
+    TreasuryAccountClassification,
+    TreasuryAccountStatus,
+    TreasuryLedgerEntry,
+)
+
+__all__ += [
+    "AttributionScope",
+    "CapitalAllocation",
+    "CapitalAllocationStatus",
+    "CapitalAllocationTargetType",
+    "CapitalPool",
+    "CapitalReservation",
+    "CapitalReservationStatus",
+    "EnvironmentClass",
+    "ExecutiveKpiSnapshot",
+    "ExternalTransferDirection",
+    "ExternalTransferInstruction",
+    "ExternalTransferStatus",
+    "ForecastScenario",
+    "ForecastScenarioType",
+    "InstitutionalReport",
+    "InstitutionalReportType",
+    "PerformanceAttributionSnapshot",
+    "TreasuryAccount",
+    "TreasuryAccountClassification",
+    "TreasuryAccountStatus",
+    "TreasuryLedgerEntry",
 ]

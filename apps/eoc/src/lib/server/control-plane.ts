@@ -3,15 +3,23 @@ import type {
   ActivationState,
   ActivationTransition,
   AllowedTransitions,
+  AttributionSnapshot,
   AuditEvent,
   AuditEventList,
+  CapitalAllocation,
+  CapitalPool,
+  CapitalReservation,
   ConfigurationDocument,
   ConfigurationVersion,
   CredentialReference,
   CurrentUser,
+  ExecutiveKpiSnapshot,
+  ExternalTransferInstruction,
+  ForecastScenario,
   Incident,
   IncidentLifecycleEvent,
   InstitutionalHealth,
+  InstitutionalReport,
   KillSwitch,
   MicroCapitalPolicy,
   MicroLiveAdapter,
@@ -26,6 +34,9 @@ import type {
   ReconciliationRun,
   ServiceWithProjection,
   SupervisorLease,
+  TreasuryAccount,
+  TreasuryLedgerEntry,
+  TreasurySummary,
   WorkerIdentity,
   WorkerInstance,
 } from "@/lib/types";
@@ -177,6 +188,65 @@ export async function getMicroLiveReconciliationDiscrepancies(
 
 export async function getMicroLiveAdapters(): Promise<MicroLiveAdapter[]> {
   return apiFetch<MicroLiveAdapter[]>("/api/v1/micro-live/adapters");
+}
+
+/**
+ * Phase 14 — Treasury and Executive Analytics reads. All balances/KPIs are
+ * SIMULATED / INTERNAL PAPER capital only; external transfers here can
+ * never reach an executed state.
+ */
+export async function getTreasuryAccounts(): Promise<TreasuryAccount[]> {
+  return apiFetch<TreasuryAccount[]>("/api/v1/treasury/accounts");
+}
+
+export async function getCapitalPools(accountId?: string): Promise<CapitalPool[]> {
+  return apiFetch<CapitalPool[]>("/api/v1/treasury/pools", {
+    searchParams: { account_id: accountId },
+  });
+}
+
+export async function getCapitalAllocations(): Promise<CapitalAllocation[]> {
+  return apiFetch<CapitalAllocation[]>("/api/v1/treasury/allocations");
+}
+
+export async function getCapitalReservations(): Promise<CapitalReservation[]> {
+  return apiFetch<CapitalReservation[]>("/api/v1/treasury/reservations");
+}
+
+export async function getTreasuryLedgerEntries(): Promise<TreasuryLedgerEntry[]> {
+  return apiFetch<TreasuryLedgerEntry[]>("/api/v1/treasury/ledger");
+}
+
+export async function getExternalTransfers(): Promise<
+  ExternalTransferInstruction[]
+> {
+  return apiFetch<ExternalTransferInstruction[]>(
+    "/api/v1/treasury/external-transfers",
+  );
+}
+
+export async function getAttributionSnapshots(): Promise<
+  AttributionSnapshot[]
+> {
+  return apiFetch<AttributionSnapshot[]>("/api/v1/treasury/attribution");
+}
+
+export async function getExecutiveKpis(): Promise<ExecutiveKpiSnapshot[]> {
+  return apiFetch<ExecutiveKpiSnapshot[]>("/api/v1/treasury/kpis");
+}
+
+export async function getForecastScenarios(): Promise<ForecastScenario[]> {
+  return apiFetch<ForecastScenario[]>("/api/v1/treasury/forecasts");
+}
+
+export async function getInstitutionalReports(): Promise<
+  InstitutionalReport[]
+> {
+  return apiFetch<InstitutionalReport[]>("/api/v1/treasury/reports");
+}
+
+export async function getTreasurySummary(): Promise<TreasurySummary> {
+  return apiFetch<TreasurySummary>("/api/v1/treasury/summary");
 }
 
 export async function getProcessHealth(): Promise<ProcessHealth> {
