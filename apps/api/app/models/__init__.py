@@ -1259,6 +1259,17 @@ __all__ = [
     "ObservationChannel",
     "IngestionRunStatus",
     "QualityFindingKind",
+    "StrategyLifecycleStatus",
+    "ResearchRunKind",
+    "ResearchRunStatus",
+    "StrategyDocument",
+    "StrategyVersion",
+    "StrategyLifecycleEvent",
+    "ResearchDataset",
+    "ResearchRun",
+    "ResearchRunResult",
+    "ValidationReport",
+    "StrategyComparison",
 ]
 
 
@@ -1280,4 +1291,19 @@ from app.models.market_intelligence import (  # noqa: E402
     ObservationChannel,
     ProviderHealthStatus,
     QualityFindingKind,
+)
+
+# Phase 11 Strategy Laboratory models (re-exported for Alembic metadata)
+from app.models.strategy_laboratory import (  # noqa: E402
+    ResearchDataset,
+    ResearchRun,
+    ResearchRunKind,
+    ResearchRunResult,
+    ResearchRunStatus,
+    StrategyComparison,
+    StrategyDocument,
+    StrategyLifecycleEvent,
+    StrategyLifecycleStatus,
+    StrategyVersion,
+    ValidationReport,
 )

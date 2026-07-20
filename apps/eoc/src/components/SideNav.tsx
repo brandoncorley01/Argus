@@ -11,6 +11,7 @@ const NAV = [
   { href: "/workers", label: "Workers" },
   { href: "/incidents", label: "Incidents" },
   { href: "/market", label: "Market Intelligence" },
+  { href: "/strategies", label: "Strategy Laboratory" },
   { href: "/audit", label: "Audit Explorer" },
   { href: "/configurations", label: "Configurations" },
   { href: "/policies", label: "Policies" },

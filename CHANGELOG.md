@@ -14,11 +14,13 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 - Phase 8 institutional health supervisor and worker foundation: governed service registry, append-only heartbeats, projections, durable supervisor lease, incidents/lifecycle, protective actions, ARQ worker, SYSTEM `SAFE_MODE` integration
 - Phase 9 Executive Operations Center (`apps/eoc`): Next.js App Router BFF session bridge, role-aware dashboards, operations/services/workers/incidents/audit/configurations/policies/administration — real API state only
 - Phase 10 Market Intelligence Platform: multi-provider registry, historical OHLCV/news/calendar/research storage, replay-safe ingest, quality monitoring, `/api/v1/market` APIs, EOC `/market` — observation only
+- Phase 11 Strategy Laboratory: governed strategy versions, deterministic backtest/walk-forward/optimization/Monte Carlo, validation reports, `/api/v1/strategies`, EOC `/strategies` — research only
 - Governance frameworks: Engineering Constitution, Phase Execution, Independent Review, Release Certification
 
 ### Planned
 
-- Phase 11 Hardening & CI
+- Phase 12 Paper Trading Institution
+- Phase 13 Hardening & CI
 
 ## [0.1.0-foundation] — 2026-07-16
 

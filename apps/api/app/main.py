@@ -14,6 +14,7 @@ from app.api.v1.incidents import router as incidents_router
 from app.api.v1.market import router as market_router
 from app.api.v1.operating_mode import router as operating_mode_router
 from app.api.v1.policies import router as policies_router
+from app.api.v1.strategies import router as strategies_router
 from app.api.v1.workers import router as workers_router
 from app.core.settings import SettingsError, get_settings
 from app.db.session import get_engine, reset_engine
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(workers_router)
     app.include_router(incidents_router)
     app.include_router(market_router)
+    app.include_router(strategies_router)
     return app
 
 

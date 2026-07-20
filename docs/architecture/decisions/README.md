@@ -32,6 +32,7 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-024](ADR-024-arq-health-worker-foundation.md) | ARQ worker foundation for health supervision | Accepted |
 | [ADR-025](ADR-025-eoc-bff-session-bridge.md) | Executive Operations Center BFF session bridge | Accepted |
 | [ADR-026](ADR-026-market-intelligence-observation-boundary.md) | Market Intelligence observation boundary | Accepted |
+| [ADR-027](ADR-027-strategy-laboratory-closed-registry.md) | Strategy Laboratory closed research registry | Accepted |
 
 ## ADR template
 

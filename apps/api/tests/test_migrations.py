@@ -39,6 +39,25 @@ EXPECTED_TABLES = {
     "health_supervisor_leases",
     "incident_lifecycle_events",
     "protective_action_recommendations",
+    "market_providers",
+    "market_provider_health",
+    "market_instruments",
+    "market_ingestion_runs",
+    "market_observations",
+    "market_ohlcv_bars",
+    "market_news_items",
+    "market_economic_events",
+    "market_research_items",
+    "market_quality_findings",
+    "market_ingestion_idempotency",
+    "strategy_documents",
+    "strategy_versions",
+    "strategy_lifecycle_events",
+    "research_datasets",
+    "research_runs",
+    "research_run_results",
+    "strategy_validation_reports",
+    "strategy_comparisons",
 }
 
 
@@ -61,7 +80,7 @@ def test_migration_upgrade_downgrade_reupgrade_cycle() -> None:
 
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "c9d0e1f2a3b4"
+    assert version == "d0e1f2a3b4c5"
 
     command.downgrade(cfg, "base")
     insp_after_down = inspect(engine)
