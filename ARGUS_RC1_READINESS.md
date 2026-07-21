@@ -4,7 +4,7 @@
 | --- | --- |
 | **Sprint** | RC1 finalization — 2026-07-21 |
 | **Base verified commit** | `8d0fd715a05dead9b1e36b573630d7a285c2b384` |
-| **Finalization commit** | _(see git after commit)_ |
+| **Finalization commit** | `38476a0836c83d7d3158ac196f847983dd3c203e` (+ harness follow-up if present) |
 | **Branch** | `phase-14-treasury-executive-analytics` |
 | **Channel** | Controlled **paper** operation only |
 | **Provider** | `internal_paper` |
