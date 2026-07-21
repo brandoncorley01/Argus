@@ -1,0 +1,90 @@
+# Argus CI — controlled paper verification (no live credentials)
+name: ci
+
+on:
+  push:
+    branches: [main, "phase-*"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API tests and static analysis
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: argus
+          POSTGRES_PASSWORD: argus_ci
+          POSTGRES_DB: argus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U argus -d argus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://argus:argus_ci@127.0.0.1:5432/argus
+      REDIS_URL: redis://127.0.0.1:6379/0
+      ALLOW_ADDITIONAL_FOUNDERS: "true"
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install API dependencies
+        run: uv sync
+      - name: Migrate database
+        run: uv run alembic upgrade head
+      - name: Ruff
+        run: uv run ruff check app tests
+      - name: Mypy
+        run: uv run mypy app
+      - name: Pytest
+        run: uv run pytest -q --tb=line
+
+  eoc:
+    name: EOC typecheck and production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/eoc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies
+        working-directory: .
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Production build
+        run: pnpm build
+        env:
+          ARGUS_API_BASE_URL: http://127.0.0.1:8000

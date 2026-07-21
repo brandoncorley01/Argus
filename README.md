@@ -1,55 +1,108 @@
 # Argus
 
-Private institutional crypto research and paper-trading system.
+Private institutional crypto research and **controlled paper-trading** system.
 
-**Product version:** `0.1.0-foundation`  
-**Current scope:** Version 0.1 Foundation — control plane and governance baseline only.  
-**Live trading:** Disabled. `MICRO_LIVE` and `NORMAL_LIVE` operating modes are permanently locked in v0.1.
+**Product channel:** Controlled paper operation (RC1 evidence at commit documented in `docs/releases/ARGUS_RC1_EVIDENCE.md`)  
+**Certified execution provider (paper):** `internal_paper`  
+**Live trading:** Disabled and **not certified**. No reachable path to live execution without a future Founder-authorized phase.  
+**Real funds:** Not used and not required for paper mode.  
+**Broker / exchange accounts:** Not required for paper mode. No SSN, KYC, or paid API required for local paper operation.
 
-## Permanent engineering rules
+Capital preservation comes before profit. See [`AGENTS.md`](AGENTS.md).
 
-See [`AGENTS.md`](AGENTS.md). Capital preservation comes before profit. Do not bypass risk controls. Prefer safe failure. Never commit secrets.
+## What is verified
+
+On the Phase 14 tip with RC1 finalization evidence:
+
+- Local Postgres + Redis via Docker Compose
+- Alembic migrations to institutional schema head
+- FastAPI control plane (`/health`, `/ready`, paper/treasury/strategy/market APIs)
+- Automated API suite (pytest), ruff, mypy
+- Executive Operations Center typecheck and production build
+- Deterministic paper buy → fill → position → cash decrease
+- Risk block, kill switch, short-sale reject
+- External transfer execute forbidden; micro-live ACTIVE denied
+- Local DB backup / restore scripts with table validation
+
+## What is not certified
+
+- Live trading, live brokers, testnet funding, or real-money movement
+- Multi-replica paper provider memory consistency (single-process local paper assumed)
+- Interactive browser UI walkthrough as a formal gate (EOC builds; API E2E is the paper gate)
+- Production SaaS deployment
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `apps/` | Application runtimes: FastAPI control plane (`apps/api`), Executive Operations Center (`apps/eoc`). |
-| `workers/` | Future ARQ workers. Not scaffolded yet. |
-| `packages/` | Future shared libraries. Not scaffolded yet. |
-| `infrastructure/` | Local infrastructure documentation and Compose-related notes. |
-| `scripts/` | Operator scripts for infrastructure lifecycle. |
-| `tests/` | Future automated tests. |
-| `docs/` | Durable institutional documentation and ADRs. |
+| `apps/api` | FastAPI control plane |
+| `apps/eoc` | Executive Operations Center (Next.js) |
+| `workers/health_supervisor` | ARQ health supervisor worker |
+| `scripts/` | Infra, migrate, backup/restore |
+| `docs/` | Architecture, ADRs, operations, releases |
+| `.github/workflows/ci.yml` | Minimal CI (API + EOC) |
 
 ## Prerequisites
 
 - Git
-- Docker Engine + Docker Compose V2 (required for Phase 1 infrastructure)
-- Later phases: Python 3.12+, Node.js LTS, [uv](https://github.com/astral-sh/uv), [pnpm](https://pnpm.io/)
+- Docker Engine + Docker Compose V2
+- Python 3.12+ and [uv](https://github.com/astral-sh/uv) (API)
+- Node.js LTS and [pnpm](https://pnpm.io/) (EOC)
 
-## Local infrastructure (Phase 1)
+## Local setup (verified commands)
 
-1. Copy `.env.example` to `.env` and set a strong `POSTGRES_PASSWORD`.
-2. Start Postgres 16 and Redis 7:
+1. Copy `.env.example` to `.env` and set a strong `POSTGRES_PASSWORD` (and matching `DATABASE_URL`).
+2. Start infrastructure:
 
 ```powershell
 .\scripts\infra-up.ps1
+.\scripts\infra-status.ps1
+.\scripts\migrate-up.ps1
 ```
 
-```bash
-./scripts/infra-up.sh
+3. API (from `apps/api`):
+
+```powershell
+cd apps\api
+python -m uv sync
+python -m uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-3. Check status, logs, stop, or reset using the scripts in `scripts/` (see [`infrastructure/README.md`](infrastructure/README.md)).
+4. EOC (repo root or `apps/eoc`):
+
+```powershell
+pnpm install
+$env:ARGUS_API_BASE_URL = "http://127.0.0.1:8000"
+pnpm eoc:dev
+```
+
+## Tests (API)
+
+```powershell
+cd apps\api
+python -m uv run pytest
+python -m uv run ruff check app tests
+python -m uv run mypy app
+```
+
+## Backup / restore (local)
+
+```powershell
+.\scripts\backup-db.ps1
+.\scripts\validate-db-restore.ps1
+# Destructive restore (confirmation required unless -Force):
+.\scripts\restore-db.ps1 .\backups\argus_postgres_YYYYMMDD_HHMMSS.sql
+```
+
+Never commit `.env` or `backups/*.sql` containing operational data you consider sensitive.
 
 ## Documentation
 
 - [`docs/README.md`](docs/README.md) — documentation map
-- [`docs/foundation/INSTITUTIONAL_IDENTITY.md`](docs/foundation/INSTITUTIONAL_IDENTITY.md) — institutional identity
-- [`docs/governance/`](docs/governance/) — maturity model and feature governance
-- [`docs/architecture/decisions/`](docs/architecture/decisions/) — Architecture Decision Records
+- [`ARGUS_RC1_READINESS.md`](ARGUS_RC1_READINESS.md) — RC1 readiness verdict
+- [`docs/releases/ARGUS_RC1_EVIDENCE.md`](docs/releases/ARGUS_RC1_EVIDENCE.md) — durable RC1 evidence
+- [`docs/governance/`](docs/governance/) — constitution and certification frameworks
 
-## Out of scope (v0.1)
+## Out of scope (current channel)
 
-Exchange integrations, live trading, leverage, margin, futures, options, short selling, withdrawals, fabricated financial performance data, and decorative or misleading dashboards.
+Exchange live credentials, funded brokerage accounts, leverage, margin, futures, options, short selling, withdrawals, fabricated performance claims, and decorative metrics.

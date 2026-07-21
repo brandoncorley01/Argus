@@ -43,6 +43,13 @@ temp/
 # Docker / local overrides
 docker-compose.override.yml
 
+# Local DB dumps (never commit operational backups)
+backups/
+
+# Ephemeral RC command logs (durable summaries live under docs/releases/)
+rc1_*.txt
+rc_*.txt
+
 # Test artifacts
 .tox/
 .hypothesis/
