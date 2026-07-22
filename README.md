@@ -51,8 +51,17 @@ On the Phase 14 tip with RC1 finalization evidence:
 
 ## Local setup (verified commands)
 
-1. Copy `.env.example` to `.env` and set a strong `POSTGRES_PASSWORD` (and matching `DATABASE_URL`).
-2. Start infrastructure:
+See [`docs/ARGUS_HEADQUARTERS.md`](docs/ARGUS_HEADQUARTERS.md) for how Argus runs independently of Cursor.
+
+1. Copy `.env.example` (or `.env.paper.example` for paper-oriented local settings) to `.env` and set a strong `POSTGRES_PASSWORD`.
+2. Start paper infra:
+
+```powershell
+.\scripts\operations\start-paper.ps1
+.\scripts\operations\status-paper.ps1
+```
+
+Or the underlying scripts:
 
 ```powershell
 .\scripts\infra-up.ps1
@@ -68,7 +77,7 @@ python -m uv sync
 python -m uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-4. EOC (repo root or `apps/eoc`):
+4. EOC:
 
 ```powershell
 pnpm install
@@ -79,7 +88,12 @@ pnpm eoc:dev
 ## Tests (API)
 
 ```powershell
-cd apps\api
+.\scripts\validation\verify-argus.ps1
+```
+
+Or manually from `apps/api`:
+
+```powershell
 python -m uv run pytest
 python -m uv run ruff check app tests
 python -m uv run mypy app

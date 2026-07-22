@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+!.env.paper.example
+!.env.ci.example
+!.env.live.disabled.example
 
 # Python
 .venv/
@@ -43,12 +46,19 @@ temp/
 # Docker / local overrides
 docker-compose.override.yml
 
-# Local DB dumps (never commit operational backups)
-backups/
+# Local DB dumps (never commit SQL archives; keep README only)
+backups/**
+!backups/README.md
+
+# Local runtime notes only under runtime/; no DB files
+runtime/**
+!runtime/README.md
 
 # Ephemeral RC command logs (durable summaries live under docs/releases/)
 rc1_*.txt
 rc_*.txt
+p15_*.txt
+rc_pg_check.py
 
 # Test artifacts
 .tox/

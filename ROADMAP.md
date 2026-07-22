@@ -24,7 +24,8 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 12 — Paper Trading Institution | Done | Internal paper execution provider + gateway (no brokerage account required) |
 | 13 — Micro-Live Institution | Done | Deny-by-default live-execution architecture; live trading disabled; no credentials required |
 | 14 — Treasury and Executive Analytics | Done | Simulated-ledger treasury, capital allocations, executive KPIs/attribution/forecasts/reports; external transfer execution structurally forbidden |
-| 15 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
+| 15 — Operational Validation | In progress | System Health / daily paper reports WIP — see `docs/operations/PHASE15_HANDOFF_STATUS.md` |
+| 16 — Hardening & CI follow-ups | Planned | Remote CI observation, multi-week soak tooling as needed |
 
 ## Explicitly out of scope (v0.1)
 
@@ -36,8 +37,8 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Near-term sequence
 
-1. Merge Phase 8–14 when Founder authorizes (stacked branches; keep phases identifiable)
-2. Hardening & CI (Phase 15) — do not start until Founder authorizes
+1. Merge Phase 8–15 when Founder authorizes (stacked branches; keep phases identifiable)
+2. Observe GitHub Actions CI green on remote; optional multi-week paper soak
 
 ## Longer horizon (post-foundation)
 
