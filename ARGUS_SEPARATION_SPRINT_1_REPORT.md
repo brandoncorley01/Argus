@@ -1,40 +1,99 @@
 ﻿# Argus Separation Sprint 1 Report
 
-**Date:** 2026-07-21  
-**Starting commit:** `1314d76418a0a29f81579ccf730dd1bd829a13b9`  
-**Scope:** Organization, documentation, and thin script entry points only. No Phase 15 application code.
+| Field | Value |
+| --- | --- |
+| **Date** | 2026-07-21 |
+| **Starting branch** | `phase-15-operational-validation` |
+| **Starting commit** | `1314d76418a0a29f81579ccf730dd1bd829a13b9` |
+| **Final commit** | `c5089d550dfed04cde5219904fdd6b3bd04de2ba` |
+| **Scope** | Organization, documentation, thin script entry points — **no trading logic changes** |
 
-## What this sprint delivered
+## Repository changes
 
-- Headquarters / source-of-truth documentation (`docs/ARGUS_HEADQUARTERS.md`)
-- Development workflow, operations model, release management, security README
-- Phase 15 handoff status (docs only; implementation remains WIP/stashed)
-- Env examples: `.env.paper.example`, `.env.ci.example`, `.env.live.disabled.example`
-- Thin ops scripts under `scripts/operations/`, validation, and backup entry points
-- README / ROADMAP / `.gitignore` updates for separation honesty
+### Documentation created
 
-## Validation (RC1 baseline; Phase 15 WIP stashed)
+- `docs/ARGUS_HEADQUARTERS.md`
+- `docs/development/DEVELOPMENT_WORKFLOW.md`
+- `docs/operations/ARGUS_OPERATIONS_MODEL.md`
+- `docs/operations/PHASE15_HANDOFF_STATUS.md`
+- `docs/releases/RELEASE_MANAGEMENT.md`
+- `docs/security/README.md`
+- `runtime/README.md`
+- `backups/README.md`
+- Updated `docs/README.md`, root `README.md`, `ROADMAP.md` (Phase 15 → In progress)
+
+### Scripts created (wrappers; core scripts not moved)
+
+- `scripts/operations/start-paper.ps1`
+- `scripts/operations/stop-paper.ps1`
+- `scripts/operations/status-paper.ps1`
+- `scripts/operations/generate-daily-report.ps1`
+- `scripts/validation/verify-argus.ps1`
+- `scripts/backup/backup-paper.ps1`
+- Updated `scripts/README.md`
+
+### Configuration boundaries
+
+- `.env.example` — development (existing)
+- `.env.paper.example` — controlled paper local settings
+- `.env.ci.example` — CI variable names
+- `.env.live.disabled.example` — disabled placeholder only
+- `.gitignore` — backups/runtime exceptions; env template allowlist
+
+### Files moved
+
+**None.** Existing `scripts/infra-*.ps1` and backup implementations left in place to avoid breaking references/CI.
+
+## Configuration boundaries (enforced by policy/docs)
+
+| Env | Provider | Live | Secrets in repo |
+| --- | --- | --- | --- |
+| Development | `internal_paper` default | Disabled | No |
+| Paper | `internal_paper` only | Disabled | No |
+| CI | disposable DB | Disabled | No |
+| Live | N/A | Disabled placeholder | No |
+
+## Phase 15 handoff
+
+See `docs/operations/PHASE15_HANDOFF_STATUS.md`.
+
+Implementation remains **WIP on working tree** (restored via stash pop after this commit). Not part of Separation Sprint 1 commit. ROADMAP marked **In progress**.
+
+## Validation (RC1 baseline; Phase 15 stashed during run)
 
 | Check | Result |
-|-------|--------|
-| Infra (`scripts/infra-status.ps1`) | PASS — postgres + redis healthy |
-| Ruff (`ruff check .`) | FAIL (pre-existing) — 302 issues mostly in `alembic/versions` |
-| Ruff (`ruff check app tests`) | PASS |
-| Mypy (`mypy app`) | PASS — 89 source files |
-| Pytest (`pytest -q`) | 179 passed, 1 failed |
-| EOC typecheck | PASS |
-| EOC build | PASS |
-| Paper E2E (`scripts/rc_e2e_paper_validation.py`) | PASS — exit 0, all checks |
+| --- | --- |
+| Infra | PASS |
+| Ruff `app` `tests` | PASS |
+| Ruff full tree | Unavailable as gate (pre-existing alembic noise) |
+| Mypy | PASS |
+| Pytest | 179 passed, **1 failed** (`test_activation_updates_identity_with_stable_pointer`) |
+| EOC typecheck / build | PASS |
+| Paper E2E | **PASS** |
+| `internal_paper` default | Confirmed in E2E |
+| Live execution disabled | Confirmed in E2E |
 
 ### Pytest note
 
-- Single failure: `tests/test_governance_h4_identity.py::test_activation_updates_identity_with_stable_pointer` — expected identity pointer vs `'unset'` (appears pre-existing / environmental; unrelated to separation docs/scripts).
-- Local DB had been advanced to Phase 15 revision `b4c5d6e7f8a9` during WIP; for this validation it was restored to RC1 head `a3b4c5d6e7f8` and leftover Phase 15 tables were dropped so migration tests could run on the RC1 baseline.
+Single failure in governance H4 identity test after local DB was restamped from Phase 15 WIP head back to RC1 `a3b4c5d6e7f8`. Treat as **environmental / pre-existing risk**, not introduced by separation docs. Re-run on a clean migrate from empty volume recommended in Sprint 2.
 
-### Live trading
+## Remaining risks
 
-Live trading remains disabled. E2E confirmed `live_execution_active=False` and MICRO_LIVE_ACTIVE denied.
+1. Phase 15 uncommitted WIP can confuse operators — follow handoff doc.
+2. One pytest failure observed during baseline revalidation after DB restamp.
+3. Separation commit not yet pushed/merged to `main`.
+4. GitHub Actions green-on-remote not re-confirmed in this sprint.
 
-## Stash
+## Next recommended separation sprint (Sprint 2)
 
-Phase 15 and other non-separation dirty work stashed as `phase15-wip` before this commit; restored after commit via `git stash pop`.
+1. Push `c5089d5` (or branch containing it) and open PR for headquarters docs.
+2. Bounded **Phase 15 Verification Batch** (commit ops WIP only after green suite).
+3. Clean-volume migrate + full pytest to clear H4 identity environmental failure.
+4. Confirm CI green on GitHub for the separation PR.
+
+## Safety confirmations
+
+- No live trading enabled
+- No broker integrations added
+- No strategy behavior modified
+- `internal_paper` remains the certified paper provider
