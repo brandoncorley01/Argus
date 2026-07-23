@@ -138,9 +138,14 @@ class GovernanceService:
     def _get_institutional_identity(
         self, *, for_update: bool = False
     ) -> InstitutionalIdentity | None:
+        # Canonical selection: oldest created_at, then id ascending as a
+        # stable tie-breaker. Tests must use the same ordering.
         stmt = (
             select(InstitutionalIdentity)
-            .order_by(InstitutionalIdentity.created_at.asc())
+            .order_by(
+                InstitutionalIdentity.created_at.asc(),
+                InstitutionalIdentity.id.asc(),
+            )
             .limit(1)
         )
         if for_update:

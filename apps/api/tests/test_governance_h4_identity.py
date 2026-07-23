@@ -78,23 +78,52 @@ def _founder(session: Session) -> AuthenticatedPrincipal:
     )
 
 
-def _ensure_identity(session: Session) -> InstitutionalIdentity:
-    existing = session.scalars(select(InstitutionalIdentity).limit(1)).first()
-    if existing is not None:
-        return existing
-    row = InstitutionalIdentity(
-        institution_name="Argus",
-        institution_id=_unique("argus"),
-        product_version="0.1.0",
-        founding_date=date(2026, 7, 15),
-        active_constitution_version="unset",
-        active_operating_policy_version="unset",
-        active_governance_version="unset",
-        active_treasury_policy_version="unset",
-        active_research_framework_version="unset",
+def _identity_order():
+    """Match GovernanceService._get_institutional_identity ordering."""
+    return (
+        InstitutionalIdentity.created_at.asc(),
+        InstitutionalIdentity.id.asc(),
     )
-    session.add(row)
+
+
+def _ensure_identity(session: Session) -> InstitutionalIdentity:
+    """Return the identity row activation updates (oldest created_at, then id).
+
+    Must match ``GovernanceService._get_institutional_identity`` ordering.
+    Extra identity rows from other tests are removed so suite order cannot
+    leave the test holding a different row than activation mutates.
+    """
+    rows = list(session.scalars(select(InstitutionalIdentity).order_by(*_identity_order())))
+    if not rows:
+        row = InstitutionalIdentity(
+            institution_name="Argus",
+            institution_id=_unique("argus"),
+            product_version="0.1.0",
+            founding_date=date(2026, 7, 15),
+            active_constitution_version="unset",
+            active_operating_policy_version="unset",
+            active_governance_version="unset",
+            active_treasury_policy_version="unset",
+            active_research_framework_version="unset",
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+    keep = rows[0]
+    for extra in rows[1:]:
+        session.delete(extra)
     session.commit()
+    session.refresh(keep)
+    return keep
+
+
+def _reload_canonical_identity(session: Session) -> InstitutionalIdentity:
+    row = session.scalars(
+        select(InstitutionalIdentity).order_by(*_identity_order()).limit(1)
+    ).first()
+    assert row is not None
     session.refresh(row)
     return row
 
@@ -164,13 +193,79 @@ def test_identity_pointer_format() -> None:
     assert identity_pointer("pol.operating", 3) == "pol.operating@3"
 
 
+def test_helper_and_activation_select_same_oldest_identity(db: Session) -> None:
+    """Regression: helper and activation must target the same canonical row.
+
+    Selection contract (production + tests):
+    ``ORDER BY created_at ASC, id ASC`` — oldest first, id as tie-breaker.
+    """
+    # Clear any pre-existing identity rows from the shared DB.
+    for row in list(db.scalars(select(InstitutionalIdentity))):
+        db.delete(row)
+    db.commit()
+
+    older = InstitutionalIdentity(
+        institution_name="Argus-Older",
+        institution_id=_unique("older"),
+        product_version="0.1.0",
+        founding_date=date(2026, 7, 15),
+        active_constitution_version="unset",
+        active_operating_policy_version="unset",
+        active_governance_version="unset",
+        active_treasury_policy_version="unset",
+        active_research_framework_version="unset",
+        created_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+    )
+    newer = InstitutionalIdentity(
+        institution_name="Argus-Newer",
+        institution_id=_unique("newer"),
+        product_version="0.1.0",
+        founding_date=date(2026, 7, 15),
+        active_constitution_version="unset",
+        active_operating_policy_version="unset",
+        active_governance_version="unset",
+        active_treasury_policy_version="unset",
+        active_research_framework_version="unset",
+        created_at=datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC),
+    )
+    # Insert newer first so insertion order differs from canonical age order.
+    db.add(newer)
+    db.flush()
+    db.add(older)
+    db.commit()
+    db.refresh(older)
+    db.refresh(newer)
+
+    helper_row = db.scalars(
+        select(InstitutionalIdentity).order_by(*_identity_order()).limit(1)
+    ).one()
+    assert helper_row.id == older.id
+    assert helper_row.id != newer.id
+
+    principal = _founder(db)
+    version = _approved_operating_version(db, principal, payload={"summary": "multi-id"})
+    activated = GovernanceService(db).activate_policy_version(
+        actor=principal, version_id=version.id
+    )
+    expected = identity_pointer(activated.document.document_key, activated.version_number)
+
+    db.refresh(older)
+    db.refresh(newer)
+    assert older.active_operating_policy_version == expected
+    assert newer.active_operating_policy_version == "unset"
+
+    reloaded = _reload_canonical_identity(db)
+    assert reloaded.id == older.id
+    assert reloaded.active_operating_policy_version == expected
+
+
 def test_activation_updates_identity_with_stable_pointer(db: Session) -> None:
     principal = _founder(db)
-    identity = _ensure_identity(db)
+    _ensure_identity(db)
     version = _approved_operating_version(db, principal, payload={"summary": "ops-1"})
     gov = GovernanceService(db)
     activated = gov.activate_policy_version(actor=principal, version_id=version.id)
-    db.refresh(identity)
+    identity = _reload_canonical_identity(db)
     expected = identity_pointer(activated.document.document_key, activated.version_number)
     assert identity.active_operating_policy_version == expected
     assert activated.status == VersionLifecycleStatus.ACTIVE
@@ -235,7 +330,7 @@ def test_supersession_updates_identity_pointer(db: Session) -> None:
     )
     doc_id = v1.document_id
     gov.activate_policy_version(actor=principal, version_id=v1.id)
-    db.refresh(identity)
+    identity = _reload_canonical_identity(db)
     first_pointer = identity.active_constitution_version
 
     v2 = gov.create_policy_version(
@@ -252,7 +347,7 @@ def test_supersession_updates_identity_pointer(db: Session) -> None:
         new_status=VersionLifecycleStatus.APPROVED,
     )
     activated = gov.activate_policy_version(actor=principal, version_id=v2.id)
-    db.refresh(identity)
+    identity = _reload_canonical_identity(db)
     db.refresh(v1)
     assert v1.status == VersionLifecycleStatus.SUPERSEDED
     assert activated.status == VersionLifecycleStatus.ACTIVE
