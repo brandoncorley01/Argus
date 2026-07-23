@@ -1,0 +1,27 @@
+﻿# Sprint 2 H4 Report
+
+## Original failure trigger
+
+Contaminated / restamped shared paper database plus suite-order effects, such that the test helper inspected a different `InstitutionalIdentity` row than activation updated.
+
+## Underlying test defect
+
+`_ensure_identity` previously selected an identity with unordered `LIMIT 1`, while `GovernanceService._get_institutional_identity` selects:
+
+`ORDER BY created_at ASC, id ASC` (id added as explicit stable tie-breaker).
+
+## Production defect status
+
+**No confirmed production identity defect.** Activation behavior is consistent with the documented oldest-row selection rule. Disposable clean-database validation passed the identity regression and full suite.
+
+## Final classification
+
+**TEST INFRASTRUCTURE DEFECT** (helper ordering mismatch) — corrected.
+
+## Evidence
+
+- Disposable DB `argus_sprint2_clean`
+- Identity regression ×5: pass
+- H4 file: 7 passed
+- Full pytest ×2: 186 passed
+- See `sprint2_closeout_validate.txt`
