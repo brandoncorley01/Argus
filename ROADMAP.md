@@ -24,7 +24,7 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 12 — Paper Trading Institution | Done | Internal paper execution provider + gateway (no brokerage account required) |
 | 13 — Micro-Live Institution | Done | Deny-by-default live-execution architecture; live trading disabled; no credentials required |
 | 14 — Treasury and Executive Analytics | Done | Simulated-ledger treasury, capital allocations, executive KPIs/attribution/forecasts/reports; external transfer execution structurally forbidden |
-| 15 — Operational Validation | Complete — Pending Remote CI | System Health, ops events, host metrics, daily paper reports — verified locally Sprint 2 |
+| 15 — Operational Validation | Complete and Verified | System Health, ops events, host metrics, daily paper reports — verified locally Sprint 2 |
 | 16 — Hardening & CI follow-ups | Planned | Remote CI observation, multi-week soak tooling as needed |
 
 ## Explicitly out of scope (v0.1)

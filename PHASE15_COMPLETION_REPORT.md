@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **Starting commit (Sprint 2)** | `5ea18f9c011c09697e6f4586aa153d103011159e` |
-| **Final commit** | `f6e4a0e8f36c9c2132ec5c5aa03333389ab5487b` |
+| **Final commit** | `f88d422` (tip of `phase-15-operational-validation`; evidence stack through `f6e4a0e`) |
 | **Channel** | Controlled paper operation |
 | **Provider** | `internal_paper` |
 | **Live execution** | Disabled |
@@ -50,6 +50,6 @@
 
 ## Readiness recommendation
 
-**Complete and Verified** after push/PR green checks.
+**Complete and Verified** (remote CI green on f6e4a0e; founder merge approval required).
 
 Main `argus` paper database was not dropped during disposable-DB validation.
