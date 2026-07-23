@@ -12,35 +12,131 @@ import {
 import { requireUser } from "@/lib/actions/auth";
 import { formatTimestamp } from "@/lib/format";
 import { isFounder, isOperator, primaryRole, roleLabel } from "@/lib/rbac";
+import { apiFetch } from "@/lib/server/api";
 import {
   getIncidents,
   getInstitutionalHealth,
+  getMicroLiveStatus,
   getOperatingMode,
   getProcessReady,
   getProtectiveActions,
   getServices,
+  getWorkerInstances,
   soft,
 } from "@/lib/server/control-plane";
 
 export const metadata: Metadata = { title: "Executive Overview" };
 
+type SystemHealth = {
+  overall_status: string;
+  paper?: {
+    default_provider_key: string | null;
+    default_provider_is_internal_paper: boolean;
+    active_kill_switch_count: number;
+    last_paper_order_at: string | null;
+  };
+  worker_instances?: Array<{ instance_key: string; status: string }>;
+};
+
+type PaperProviderRow = {
+  provider: { provider_key: string; is_default: boolean; environment: string };
+};
+
+type PaperPortfolio = {
+  id: string;
+  name: string;
+  cash_balance: string;
+  status: string;
+  kill_switch_active: boolean;
+};
+
+type PaperPosition = {
+  symbol: string;
+  quantity: string;
+  unrealized_pnl?: string | null;
+  realized_pnl?: string | null;
+};
+
+type DailyReport = {
+  report_date: string;
+  content?: { daily_pnl?: string | null; trade_count?: number };
+};
+
 export default async function OverviewPage() {
   const user = await requireUser();
   const role = primaryRole(user);
 
-  const [mode, health, ready, services, incidents, protective] =
-    await Promise.all([
-      soft(getOperatingMode),
-      soft(getInstitutionalHealth),
-      soft(getProcessReady),
-      soft(getServices),
-      soft(getIncidents),
-      soft(getProtectiveActions),
-    ]);
+  const [
+    mode,
+    health,
+    ready,
+    services,
+    incidents,
+    protective,
+    workers,
+    microLive,
+    systemHealth,
+    providers,
+    portfolios,
+    dailyReports,
+  ] = await Promise.all([
+    soft(getOperatingMode),
+    soft(getInstitutionalHealth),
+    soft(getProcessReady),
+    soft(getServices),
+    soft(getIncidents),
+    soft(getProtectiveActions),
+    soft(getWorkerInstances),
+    soft(getMicroLiveStatus),
+    soft(() => apiFetch<SystemHealth>("/api/v1/operations/system-health")),
+    soft(() => apiFetch<PaperProviderRow[]>("/api/v1/paper/providers")),
+    soft(() => apiFetch<PaperPortfolio[]>("/api/v1/paper/portfolios")),
+    soft(() =>
+      apiFetch<DailyReport[]>("/api/v1/operations/daily-reports", {
+        searchParams: { limit: 1 },
+      }),
+    ),
+  ]);
 
   const openIncidents =
     incidents?.filter((i) => i.status === "open" || i.status === "investigating")
       .length ?? null;
+
+  const defaultProvider =
+    providers?.find((p) => p.provider.is_default)?.provider ?? null;
+  const providerLabel =
+    systemHealth?.paper?.default_provider_key ??
+    defaultProvider?.provider_key ??
+    "unavailable";
+  const providerIsPaper =
+    systemHealth?.paper?.default_provider_is_internal_paper ??
+    defaultProvider?.provider_key === "internal_paper";
+
+  const liveDisabled =
+    microLive?.live_execution_active === false ||
+    microLive?.activation_state === "PAPER_ONLY" ||
+    microLive == null;
+
+  const todayPnl = dailyReports?.[0]?.content?.daily_pnl ?? null;
+  const todayTrades = dailyReports?.[0]?.content?.trade_count;
+
+  let openPositions: PaperPosition[] | null = null;
+  if (portfolios && portfolios.length > 0) {
+    const first = portfolios[0];
+    openPositions = await soft(() =>
+      apiFetch<PaperPosition[]>(`/api/v1/paper/portfolios/${first.id}/positions`),
+    );
+  }
+
+  const workerCount = workers?.length ?? systemHealth?.worker_instances?.length ?? null;
+  const overallHealth =
+    systemHealth?.overall_status ?? health?.status ?? (ready ? "ready" : null);
+
+  const paperStatus = portfolios
+    ? portfolios.some((p) => p.kill_switch_active)
+      ? "kill switch active"
+      : `${portfolios.length} portfolio(s)`
+    : "unavailable";
 
   const dashboardTitle =
     role === "FOUNDER"
@@ -53,64 +149,97 @@ export default async function OverviewPage() {
     <>
       <PageHeader
         title={dashboardTitle}
-        description={`Signed in as ${user.username} (${roleLabel(role)}). All values below are live control-plane reads. Empty or unavailable means the API returned no data—not a fabricated zero.`}
+        description={`Signed in as ${user.username} (${roleLabel(role)}). Live control-plane reads only — empty means unavailable, not a fabricated zero.`}
       />
 
       <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
         <Panel className="rise-delay-1">
           <Metric
-            label="Operating mode"
-            value={mode?.current_mode ?? "Unavailable"}
-            hint={
-              mode
-                ? `v${mode.state_version} · ${formatTimestamp(mode.updated_at)}`
-                : "Control plane did not return mode state"
+            label="Overall health"
+            value={
+              overallHealth ? (
+                <StatusBadge status={overallHealth} />
+              ) : (
+                <StatusBadge status={null} label="unavailable" />
+              )
             }
+            hint="System health / institutional projection"
           />
         </Panel>
         <Panel className="rise-delay-1">
           <Metric
-            label="Institutional health"
+            label="Paper trading"
+            value={paperStatus}
+            hint={
+              systemHealth?.paper?.last_paper_order_at
+                ? `Last trade ${formatTimestamp(systemHealth.paper.last_paper_order_at)}`
+                : "Internal paper books"
+            }
+          />
+        </Panel>
+        <Panel className="rise-delay-2">
+          <Metric
+            label="Provider"
+            value={providerLabel}
+            hint={
+              providerIsPaper
+                ? "internal_paper · certified paper path"
+                : "Check default provider registry"
+            }
+          />
+        </Panel>
+        <Panel className="rise-delay-2">
+          <Metric
+            label="Live trading"
+            value={liveDisabled ? "Disabled" : "Check status"}
+            hint={
+              microLive
+                ? `activation=${microLive.activation_state}`
+                : "Not certified · deny-by-default"
+            }
+          />
+        </Panel>
+      </div>
+
+      <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
+        <Panel>
+          <Metric
+            label="Workers"
+            value={workerCount === null ? "—" : workerCount}
+            hint="Registered worker instances"
+          />
+        </Panel>
+        <Panel>
+          <Metric
+            label="Today's P&L"
+            value={todayPnl ?? "—"}
+            hint={
+              todayPnl != null
+                ? `Paper daily report${todayTrades != null ? ` · ${todayTrades} fills` : ""}`
+                : "No daily report yet (paper only when generated)"
+            }
+          />
+        </Panel>
+        <Panel>
+          <Metric
+            label="Open positions"
             value={
-              health ? (
-                <StatusBadge status={health.status} />
-              ) : (
-                <StatusBadge status={null} label="unavailable" />
-              )
+              openPositions == null
+                ? "—"
+                : openPositions.filter((p) => Number(p.quantity) !== 0).length
             }
             hint={
-              health
-                ? `eval v${health.evaluation_version}`
-                : "Health supervisor projection missing"
+              portfolios?.[0]
+                ? `From portfolio ${portfolios[0].name}`
+                : "No portfolios"
             }
           />
         </Panel>
-        <Panel className="rise-delay-2">
+        <Panel>
           <Metric
-            label="API readiness"
-            value={
-              ready ? (
-                <StatusBadge
-                  status={
-                    typeof ready.status === "string" ? ready.status : "ready"
-                  }
-                />
-              ) : (
-                <StatusBadge status={null} label="unavailable" />
-              )
-            }
-            hint="/ready probe"
-          />
-        </Panel>
-        <Panel className="rise-delay-2">
-          <Metric
-            label="Open incidents"
+            label="Alerts"
             value={openIncidents === null ? "—" : openIncidents}
-            hint={
-              openIncidents === null
-                ? "Incident API unavailable"
-                : "open + investigating"
-            }
+            hint="Open + investigating incidents"
           />
         </Panel>
       </div>
@@ -123,7 +252,8 @@ export default async function OverviewPage() {
               authority; this UI never elevates privileges.
             </li>
             <li>
-              Emergency stop:{" "}
+              Operating mode: {mode?.current_mode ?? "unavailable"} · Emergency
+              stop:{" "}
               {mode
                 ? mode.emergency_stop_active
                   ? "ACTIVE"
@@ -131,11 +261,7 @@ export default async function OverviewPage() {
                 : "unknown"}
             </li>
             <li>
-              Recovery required:{" "}
-              {mode ? (mode.recovery_required ? "yes" : "no") : "unknown"}
-            </li>
-            <li>
-              Registered services reported:{" "}
+              API readiness: {ready ? "ready" : "unavailable"} · Services:{" "}
               {services ? services.length : "unavailable"}
             </li>
             <li>
@@ -144,13 +270,19 @@ export default async function OverviewPage() {
             </li>
           </ul>
           <div className="form-actions" style={{ marginTop: "1rem" }}>
+            <Link className="btn" href="/system-health">
+              System Health
+            </Link>
+            <Link className="btn secondary" href="/paper">
+              Paper Trading
+            </Link>
             {isOperator(user) ? (
-              <Link className="btn" href="/operations">
-                Manage operating mode
+              <Link className="btn secondary" href="/operations">
+                Operating mode
               </Link>
             ) : null}
             <Link className="btn secondary" href="/incidents">
-              Review incidents
+              Incidents
             </Link>
             {isFounder(user) ? (
               <Link className="btn secondary" href="/administration">
@@ -160,28 +292,37 @@ export default async function OverviewPage() {
           </div>
         </Panel>
 
-        <Panel title="Institutional health detail">
-          {!health ? (
-            <ErrorState>
-              Institutional health could not be loaded. Confirm Phase 8 APIs and
-              authentication.
-            </ErrorState>
+        <Panel title="Open positions (sample book)">
+          {!portfolios ? (
+            <ErrorState>Paper portfolios unavailable.</ErrorState>
+          ) : !openPositions ? (
+            <EmptyState>No position data for the first portfolio.</EmptyState>
+          ) : openPositions.filter((p) => Number(p.quantity) !== 0).length === 0 ? (
+            <EmptyState>No open positions.</EmptyState>
           ) : (
-            <>
-              <p style={{ marginTop: 0 }}>
-                Evaluated {formatTimestamp(health.evaluated_at)}
-              </p>
-              <pre
-                style={{
-                  margin: 0,
-                  whiteSpace: "pre-wrap",
-                  fontSize: "0.82rem",
-                  color: "var(--ink-soft)",
-                }}
-              >
-                {JSON.stringify(health.summary, null, 2)}
-              </pre>
-            </>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Qty</th>
+                    <th>Realized</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {openPositions
+                    .filter((p) => Number(p.quantity) !== 0)
+                    .slice(0, 8)
+                    .map((p) => (
+                      <tr key={p.symbol}>
+                        <td>{p.symbol}</td>
+                        <td>{p.quantity}</td>
+                        <td>{p.realized_pnl ?? "—"}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Panel>
       </div>

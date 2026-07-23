@@ -50,7 +50,8 @@ docker-compose.override.yml
 backups/**
 !backups/README.md
 
-# Local runtime notes only under runtime/; no DB files
+# Local runtime control-center pid/logs (do not commit)
+runtime/control-center/
 runtime/**
 !runtime/README.md
 
