@@ -3,6 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **Starting commit (Sprint 2)** | `5ea18f9c011c09697e6f4586aa153d103011159e` |
+| **Final commit** | `f6e4a0e8f36c9c2132ec5c5aa03333389ab5487b` |
 | **Channel** | Controlled paper operation |
 | **Provider** | `internal_paper` |
 | **Live execution** | Disabled |
@@ -49,6 +50,6 @@
 
 ## Readiness recommendation
 
-**Complete — Pending Remote CI** after push/PR green checks.
+**Complete and Verified** after push/PR green checks.
 
 Main `argus` paper database was not dropped during disposable-DB validation.
