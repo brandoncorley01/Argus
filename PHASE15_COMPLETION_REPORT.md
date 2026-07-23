@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **Starting commit (Sprint 2)** | `5ea18f9c011c09697e6f4586aa153d103011159e` |
-| **Final commit** | `f88d422` (tip of `phase-15-operational-validation`; evidence stack through `f6e4a0e`) |
+| **Final commit** | 275a7fd38141e8546cc67a4ccf355dc713d8196 |
 | **Channel** | Controlled paper operation |
 | **Provider** | `internal_paper` |
 | **Live execution** | Disabled |
