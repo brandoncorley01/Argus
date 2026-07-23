@@ -13,6 +13,7 @@ export const config = {
   matcher: [
     "/overview/:path*",
     "/operations/:path*",
+    "/system-health/:path*",
     "/services/:path*",
     "/workers/:path*",
     "/incidents/:path*",

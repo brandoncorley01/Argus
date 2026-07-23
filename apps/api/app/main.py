@@ -14,6 +14,7 @@ from app.api.v1.incidents import router as incidents_router
 from app.api.v1.market import router as market_router
 from app.api.v1.micro_live import router as micro_live_router
 from app.api.v1.operating_mode import router as operating_mode_router
+from app.api.v1.operations import router as operations_router
 from app.api.v1.paper import router as paper_router
 from app.api.v1.policies import router as policies_router
 from app.api.v1.strategies import router as strategies_router
@@ -21,6 +22,7 @@ from app.api.v1.treasury import router as treasury_router
 from app.api.v1.workers import router as workers_router
 from app.core.settings import SettingsError, get_settings
 from app.db.session import get_engine, reset_engine
+from app.middleware.correlation import CorrelationIdMiddleware
 
 
 @asynccontextmanager
@@ -44,6 +46,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.add_middleware(CorrelationIdMiddleware)
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(audit_router)
@@ -58,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(paper_router)
     app.include_router(micro_live_router)
     app.include_router(treasury_router)
+    app.include_router(operations_router)
     return app
 
 

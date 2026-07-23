@@ -7,6 +7,7 @@ import type { CurrentUser } from "@/lib/types";
 const NAV = [
   { href: "/overview", label: "Executive Overview" },
   { href: "/operations", label: "Operations" },
+  { href: "/system-health", label: "System Health" },
   { href: "/services", label: "Services" },
   { href: "/workers", label: "Workers" },
   { href: "/incidents", label: "Incidents" },

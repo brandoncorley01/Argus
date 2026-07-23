@@ -1429,3 +1429,22 @@ __all__ += [
     "TreasuryAccountStatus",
     "TreasuryLedgerEntry",
 ]
+
+# Phase 15 Operational Validation models (re-exported for Alembic metadata).
+# Observes/reports on existing subsystems only — introduces no new external
+# services and no trading/strategy logic.
+from app.models.operations import (  # noqa: E402
+    DailyTradingReport,
+    HostResourceSnapshot,
+    OperationalComponent,
+    OperationalEvent,
+    OperationalSeverity,
+)
+
+__all__ += [
+    "DailyTradingReport",
+    "HostResourceSnapshot",
+    "OperationalComponent",
+    "OperationalEvent",
+    "OperationalSeverity",
+]
