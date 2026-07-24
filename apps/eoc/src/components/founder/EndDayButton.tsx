@@ -37,7 +37,7 @@ export function EndDayButton() {
             View reports
           </Link>
           <Link className="btn secondary" href="/today">
-            Back to Home
+            Home
           </Link>
         </div>
       </div>

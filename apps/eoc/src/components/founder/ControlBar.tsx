@@ -4,9 +4,6 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
 import {
-  backupArgusAction,
-  refreshStatusAction,
-  restartArgusAction,
   startArgusAction,
   stopArgusAction,
   type ActionResult,
@@ -17,14 +14,11 @@ function Feedback({ result }: { result: ActionResult | null }) {
   return (
     <p className={`control-feedback ${result.ok ? "ok" : "err"}`} role="status">
       {result.message}
-      {result.detail ? (
-        <span className="control-feedback-detail"> {result.detail.slice(0, 240)}</span>
-      ) : null}
     </p>
   );
 }
 
-function BigButton({
+function ControlButton({
   label,
   busyLabel,
   className,
@@ -67,8 +61,7 @@ export function ControlBar({
   status: "Running" | "Stopped" | "Attention";
 }) {
   return (
-    <section className="control-bar panel" aria-label="Argus controls">
-      <h2 className="control-bar-title">Start / Stop</h2>
+    <section className="control-bar panel home-controls" aria-label="Start and stop Argus">
       <div className="control-status-row">
         <div>
           <div className="metric-label">Status</div>
@@ -80,45 +73,20 @@ export function ControlBar({
                 : "Needs attention"}
           </div>
         </div>
-        <p className="control-hint">
-          If this page will not load, double-click <strong>Start-Argus.cmd</strong>{" "}
-          in your Argus folder.
-        </p>
       </div>
 
       <div className="control-primary">
-        <BigButton
+        <ControlButton
           label="Start Argus"
           busyLabel="Starting…"
           className="btn control-btn control-btn-start"
           run={startArgusAction}
         />
-        <BigButton
+        <ControlButton
           label="Stop Argus"
           busyLabel="Stopping…"
           className="btn control-btn control-btn-stop"
           run={stopArgusAction}
-        />
-      </div>
-
-      <div className="control-actions">
-        <BigButton
-          label="Refresh"
-          busyLabel="Refreshing…"
-          className="btn secondary control-btn"
-          run={refreshStatusAction}
-        />
-        <BigButton
-          label="Restart"
-          busyLabel="Restarting…"
-          className="btn secondary control-btn"
-          run={restartArgusAction}
-        />
-        <BigButton
-          label="Backup"
-          busyLabel="Backing up…"
-          className="btn secondary control-btn"
-          run={backupArgusAction}
         />
       </div>
     </section>

@@ -8,7 +8,7 @@ import { roleLabel } from "@/lib/rbac";
 import type { CurrentUser } from "@/lib/types";
 
 const PRIMARY = [
-  { href: "/today", label: "Today" },
+  { href: "/today", label: "Home" },
   { href: "/trading", label: "Trading" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/reports", label: "Reports" },
@@ -59,7 +59,7 @@ export function SideNav({
     <aside className="side-nav" aria-label="Primary">
       <div className="brand">
         <div className="brand-mark">Argus</div>
-        <div className="brand-sub">Founder dashboard</div>
+        <div className="brand-sub">Home</div>
       </div>
 
       <button
@@ -120,7 +120,7 @@ export function SideNav({
               className="btn secondary nav-back"
               onClick={() => setMenuOpen(false)}
             >
-              Back to Today
+              Back to Home
             </Link>
           </>
         ) : null}

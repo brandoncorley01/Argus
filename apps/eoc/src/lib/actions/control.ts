@@ -29,7 +29,7 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
     return Promise.resolve({
       ok: false,
       message: `Script missing: ${scriptLeaf}`,
-      detail: "Double-click Start-Argus.cmd in your Argus folder instead.",
+      detail: "Use Start / Stop on Home.",
     });
   }
 
@@ -43,7 +43,11 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
     const child = spawn(cmd, args, {
       cwd: repoRoot(),
       windowsHide: true,
-      env: process.env,
+      env: {
+        ...process.env,
+        // Keep the Founder dashboard alive while Start/Stop run from the browser.
+        ARGUS_KEEP_DASHBOARD: "1",
+      },
     });
     let stdout = "";
     let stderr = "";
@@ -52,7 +56,7 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
       resolve({
         ok: false,
         message: "Command timed out",
-        detail: "Double-click Start-Argus.cmd or Stop-Argus.cmd in your Argus folder.",
+        detail: "Try Start or Stop again from Home.",
       });
     }, timeoutMs);
 
@@ -67,7 +71,7 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
       resolve({
         ok: false,
         message: err.message,
-        detail: "Double-click Start-Argus.cmd in your Argus folder.",
+        detail: "Try Start or Stop again from Home.",
       });
     });
     child.on("close", (code) => {
@@ -91,7 +95,7 @@ export async function startArgusAction(): Promise<ActionResult> {
   revalidatePath("/today");
   revalidatePath("/control");
   return res.ok
-    ? { ok: true, message: "Start requested. Argus should open the dashboard when ready.", detail: res.detail }
+    ? { ok: true, message: "Argus started.", detail: res.detail }
     : res;
 }
 
@@ -100,7 +104,7 @@ export async function stopArgusAction(): Promise<ActionResult> {
   revalidatePath("/today");
   revalidatePath("/control");
   return res.ok
-    ? { ok: true, message: "Stop requested. Paper data is preserved.", detail: res.detail }
+    ? { ok: true, message: "Argus stopped. Paper data is preserved. You can Start again here.", detail: res.detail }
     : res;
 }
 

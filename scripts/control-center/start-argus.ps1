@@ -9,6 +9,9 @@ Write-Host "=== Start Argus ==="
 Write-Host "Provider: internal_paper (default)"
 Write-Host "Live trading: DISABLED"
 
+# Browser Start/Stop must not kill the page serving the request.
+$KeepDashboard = $env:ARGUS_KEEP_DASHBOARD -eq "1"
+
 try {
   if (-not (Test-Path (Join-Path $Root ".env"))) {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
@@ -25,14 +28,19 @@ try {
   $eocPid = $pids.eoc
   $workerPid = $pids.worker
 
-  # After a code update, recycle dashboard (and API) so Today shows Start/Stop.
+  # After a code update, recycle API (and dashboard only when not started from the browser).
   if ($updated) {
-    Write-Host "Code changed — refreshing API and dashboard processes..."
-    Stop-PidIfRunning $pids.eoc "EOC launcher"
+    Write-Host "Code changed — refreshing services..."
     Stop-PidIfRunning $pids.api "API launcher"
-    Stop-ArgusPortListeners @(8000, 3000)
+    if (-not $KeepDashboard) {
+      Stop-PidIfRunning $pids.eoc "EOC launcher"
+      Stop-ArgusPortListeners @(8000, 3000)
+      $eocPid = $null
+    } else {
+      Stop-ArgusPortListeners @(8000)
+      Write-Host "Keeping dashboard running (browser Start)."
+    }
     $apiPid = $null
-    $eocPid = $null
   }
 
   if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
@@ -53,9 +61,11 @@ try {
     Write-Host "Worker already running"
   }
 
-  # Always prefer a fresh dashboard after update; otherwise start if down.
+  # Dashboard: keep as-is from browser Start; otherwise start/recycle as needed.
   $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl) 2)
-  if ($updated -or -not $eocUp) {
+  if ($KeepDashboard) {
+    Write-Host "Dashboard left running for browser control"
+  } elseif ($updated -or -not $eocUp) {
     if ($eocUp -and -not $updated) {
       Write-Host "EOC already responding"
     } else {
@@ -92,13 +102,19 @@ try {
     Write-Host "FAIL Dashboard not ready within 120s"
   }
 
-  if (-not ($okApi -and $okEoc)) {
+  if ($KeepDashboard) {
+    if (-not $okApi) {
+      throw "Argus API did not become healthy. Check runtime\control-center\*.log"
+    }
+  } elseif (-not ($okApi -and $okEoc)) {
     throw "Argus did not become healthy. Check runtime\control-center\*.log"
   }
 
-  $dash = Get-ArgusDashboardUrl
-  Write-Host "Opening Today: $dash"
-  Start-Process $dash
+  if (-not $KeepDashboard) {
+    $dash = Get-ArgusDashboardUrl
+    Write-Host "Opening Home: $dash"
+    Start-Process $dash
+  }
   Write-Host "=== Argus started ==="
 } catch {
   Show-ArgusNotification -Title "Argus startup failed" -Message $_.Exception.Message -Level "critical"
