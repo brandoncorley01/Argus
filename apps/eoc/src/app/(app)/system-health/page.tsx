@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { GenerateDailyReportForm } from "@/components/GenerateDailyReportForm";
 import {
   EmptyState,
   ErrorState,
@@ -419,12 +420,15 @@ export default async function SystemHealthPage() {
       )}
 
       <Panel title="Daily trading reports (paper)">
+        <div style={{ marginBottom: "1rem" }}>
+          <GenerateDailyReportForm />
+        </div>
         {!reports ? (
           <ErrorState>Daily reports unavailable.</ErrorState>
         ) : reports.length === 0 ? (
           <EmptyState>
-            No daily reports yet. Generate via POST /api/v1/operations/daily-reports/generate
-            (Founder/Operator) or wait for the 00:15 UTC worker cron.
+            No daily reports yet. Use Generate above, the Control Center shortcut, or
+            wait for the 00:15 UTC worker cron.
           </EmptyState>
         ) : (
           <table className="data-table">

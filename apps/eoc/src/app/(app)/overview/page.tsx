@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { GenerateDailyReportForm } from "@/components/GenerateDailyReportForm";
 import {
   EmptyState,
   ErrorState,
@@ -11,28 +12,27 @@ import {
 } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { formatTimestamp } from "@/lib/format";
+import {
+  FOUNDER_MILESTONE,
+  milestoneProgressPercent,
+} from "@/lib/milestone";
 import { isFounder, isOperator, primaryRole, roleLabel } from "@/lib/rbac";
 import { apiFetch } from "@/lib/server/api";
 import {
   getIncidents,
-  getInstitutionalHealth,
   getMicroLiveStatus,
   getOperatingMode,
   getProcessReady,
-  getProtectiveActions,
-  getServices,
-  getWorkerInstances,
   soft,
 } from "@/lib/server/control-plane";
 
-export const metadata: Metadata = { title: "Executive Overview" };
+export const metadata: Metadata = { title: "Founder Dashboard" };
 
 type SystemHealth = {
   overall_status: string;
   paper?: {
     default_provider_key: string | null;
     default_provider_is_internal_paper: boolean;
-    active_kill_switch_count: number;
     last_paper_order_at: string | null;
   };
   worker_instances?: Array<{ instance_key: string; status: string }>;
@@ -48,14 +48,6 @@ type SystemHealth = {
     kind: string;
     severity: string;
     description: string;
-    occurred_at?: string | null;
-  }>;
-  incident_history?: Array<{
-    id: string;
-    title: string;
-    severity: string;
-    status: string;
-    opened_at?: string | null;
   }>;
   runtime_monitor?: Record<string, { status: string; detail: string }>;
 };
@@ -84,18 +76,21 @@ type DailyReport = {
   content?: { daily_pnl?: string | null; trade_count?: number };
 };
 
+function formatUptime(seconds: number | undefined): string {
+  if (seconds == null) return "—";
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
 export default async function OverviewPage() {
   const user = await requireUser();
   const role = primaryRole(user);
+  const canGenerateReport = isFounder(user) || isOperator(user);
 
   const [
     mode,
-    health,
     ready,
-    services,
     incidents,
-    protective,
-    workers,
     microLive,
     systemHealth,
     providers,
@@ -103,12 +98,8 @@ export default async function OverviewPage() {
     dailyReports,
   ] = await Promise.all([
     soft(getOperatingMode),
-    soft(getInstitutionalHealth),
     soft(getProcessReady),
-    soft(getServices),
     soft(getIncidents),
-    soft(getProtectiveActions),
-    soft(getWorkerInstances),
     soft(getMicroLiveStatus),
     soft(() => apiFetch<SystemHealth>("/api/v1/operations/system-health")),
     soft(() => apiFetch<PaperProviderRow[]>("/api/v1/paper/providers")),
@@ -122,7 +113,7 @@ export default async function OverviewPage() {
 
   const openIncidents =
     incidents?.filter((i) => i.status === "open" || i.status === "investigating")
-      .length ?? null;
+      .length ?? 0;
 
   const defaultProvider =
     providers?.find((p) => p.provider.is_default)?.provider ?? null;
@@ -141,48 +132,90 @@ export default async function OverviewPage() {
 
   const todayPnl = dailyReports?.[0]?.content?.daily_pnl ?? null;
   const todayTrades = dailyReports?.[0]?.content?.trade_count;
+  const reportDate = dailyReports?.[0]?.report_date;
 
+  const portfolio = portfolios?.[0] ?? null;
   let openPositions: PaperPosition[] | null = null;
-  if (portfolios && portfolios.length > 0) {
-    const first = portfolios[0];
+  if (portfolio) {
     openPositions = await soft(() =>
-      apiFetch<PaperPosition[]>(`/api/v1/paper/portfolios/${first.id}/positions`),
+      apiFetch<PaperPosition[]>(`/api/v1/paper/portfolios/${portfolio.id}/positions`),
     );
   }
+  const openPositionRows =
+    openPositions?.filter((p) => Number(p.quantity) !== 0) ?? [];
 
-  const workerCount = workers?.length ?? systemHealth?.worker_instances?.length ?? null;
-  const overallHealth =
-    systemHealth?.overall_status ?? health?.status ?? (ready ? "ready" : null);
+  const overallHealth = systemHealth?.overall_status ?? (ready ? "ready" : null);
+  const activeAlerts = systemHealth?.active_alerts ?? [];
+  const alertCount = Math.max(activeAlerts.length, openIncidents);
+  const progress = milestoneProgressPercent();
 
-  const paperStatus = portfolios
-    ? portfolios.some((p) => p.kill_switch_active)
-      ? "kill switch active"
-      : `${portfolios.length} portfolio(s)`
-    : "unavailable";
-
-  const uptimeSec = systemHealth?.uptime_seconds;
-  const uptimeLabel =
-    uptimeSec == null
-      ? "—"
-      : `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`;
-  const activeAlertCount = systemHealth?.active_alerts?.length ?? openIncidents;
-  const lastBackup = systemHealth?.backup?.available
-    ? formatTimestamp(systemHealth.backup.completed_at ?? null)
-    : systemHealth?.backup?.note ?? "none";
-
-  const dashboardTitle =
-    role === "FOUNDER"
-      ? "Founder dashboard"
-      : role === "OPERATOR"
-        ? "Operator dashboard"
-        : "Viewer dashboard";
+  const monitorFailed = systemHealth?.runtime_monitor
+    ? Object.values(systemHealth.runtime_monitor).filter((p) => p.status === "failed")
+        .length
+    : null;
 
   return (
     <>
       <PageHeader
-        title={dashboardTitle}
-        description={`Signed in as ${user.username} (${roleLabel(role)}). Live control-plane reads only — empty means unavailable, not a fabricated zero.`}
+        title={
+          role === "FOUNDER"
+            ? "Founder dashboard"
+            : role === "OPERATOR"
+              ? "Operator dashboard"
+              : "Viewer dashboard"
+        }
+        description={`Signed in as ${user.username} (${roleLabel(role)}). Provider ${FOUNDER_MILESTONE.provider} · Live trading ${FOUNDER_MILESTONE.liveTrading}.`}
       />
+
+      <Panel title="Current milestone" className="rise">
+        <div style={{ marginBottom: "1rem" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "1rem",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+            }}
+          >
+          <div>
+            <div style={{ fontSize: "1.15rem", fontWeight: 600 }}>
+              {FOUNDER_MILESTONE.label}
+            </div>
+            <p style={{ margin: "0.35rem 0 0", color: "var(--ink-soft)" }}>
+              {FOUNDER_MILESTONE.sprint} · Phases {FOUNDER_MILESTONE.phasesComplete}/
+              {FOUNDER_MILESTONE.phasesTotal} complete · {FOUNDER_MILESTONE.note}
+            </p>
+          </div>
+          <Metric
+            label="Foundation progress"
+            value={`${progress}%`}
+            hint={`Phase ${FOUNDER_MILESTONE.phasesComplete + 1} planned`}
+          />
+          </div>
+          <div
+            role="progressbar"
+            aria-valuenow={progress}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            style={{
+              marginTop: "0.85rem",
+              height: "0.45rem",
+              borderRadius: "999px",
+              background: "var(--line, #d8d4cc)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${progress}%`,
+                height: "100%",
+                background: "var(--accent, #2f5d50)",
+              }}
+            />
+          </div>
+        </div>
+      </Panel>
 
       <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
         <Panel className="rise-delay-1">
@@ -195,178 +228,102 @@ export default async function OverviewPage() {
                 <StatusBadge status={null} label="unavailable" />
               )
             }
-            hint="System health / institutional projection"
+            hint={
+              monitorFailed != null
+                ? `${monitorFailed} runtime probe(s) failed`
+                : "Institutional / system health"
+            }
           />
         </Panel>
         <Panel className="rise-delay-1">
           <Metric
-            label="Paper trading"
-            value={paperStatus}
+            label="Portfolio summary"
+            value={
+              portfolio
+                ? portfolio.kill_switch_active
+                  ? "Kill switch"
+                  : portfolio.cash_balance
+                : "—"
+            }
             hint={
-              systemHealth?.paper?.last_paper_order_at
-                ? `Last trade ${formatTimestamp(systemHealth.paper.last_paper_order_at)}`
-                : "Internal paper books"
+              portfolio
+                ? `${portfolio.name} · ${portfolio.status}`
+                : "No paper portfolios"
             }
           />
         </Panel>
         <Panel className="rise-delay-2">
           <Metric
-            label="Provider"
-            value={providerLabel}
+            label="Today's P&L"
+            value={todayPnl ?? "—"}
             hint={
-              providerIsPaper
-                ? "internal_paper · certified paper path"
-                : "Check default provider registry"
+              todayPnl != null
+                ? `Report ${reportDate ?? ""}${todayTrades != null ? ` · ${todayTrades} fills` : ""}`
+                : "Generate a daily report when ready"
             }
           />
         </Panel>
         <Panel className="rise-delay-2">
+          <Metric
+            label="Active alerts"
+            value={alertCount}
+            hint={
+              openIncidents
+                ? `${openIncidents} open/investigating incident(s)`
+                : "Critical/high ops + incidents"
+            }
+          />
+        </Panel>
+      </div>
+
+      <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
+        <Panel>
+          <Metric
+            label="Open positions"
+            value={openPositions == null ? "—" : openPositionRows.length}
+            hint={portfolio ? portfolio.name : "No book selected"}
+          />
+        </Panel>
+        <Panel>
+          <Metric
+            label="Provider"
+            value={providerLabel}
+            hint={providerIsPaper ? "Certified paper path" : "Check registry"}
+          />
+        </Panel>
+        <Panel>
           <Metric
             label="Live trading"
             value={liveDisabled ? "Disabled" : "Check status"}
             hint={
               microLive
                 ? `activation=${microLive.activation_state}`
-                : "Not certified · deny-by-default"
+                : "Deny-by-default"
             }
           />
         </Panel>
-      </div>
-
-      <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
         <Panel>
           <Metric
-            label="Workers"
-            value={workerCount === null ? "—" : workerCount}
-            hint="Registered worker instances"
-          />
-        </Panel>
-        <Panel>
-          <Metric
-            label="Today's P&L"
-            value={todayPnl ?? "—"}
+            label="Uptime / backup"
+            value={formatUptime(systemHealth?.uptime_seconds)}
             hint={
-              todayPnl != null
-                ? `Paper daily report${todayTrades != null ? ` · ${todayTrades} fills` : ""}`
-                : "No daily report yet (paper only when generated)"
+              systemHealth?.backup?.available
+                ? `Last backup ${formatTimestamp(systemHealth.backup.completed_at ?? null)}`
+                : systemHealth?.backup?.note ?? "No verified backup yet"
             }
-          />
-        </Panel>
-        <Panel>
-          <Metric
-            label="Open positions"
-            value={
-              openPositions == null
-                ? "—"
-                : openPositions.filter((p) => Number(p.quantity) !== 0).length
-            }
-            hint={
-              portfolios?.[0]
-                ? `From portfolio ${portfolios[0].name}`
-                : "No portfolios"
-            }
-          />
-        </Panel>
-        <Panel>
-          <Metric
-            label="Active alerts"
-            value={activeAlertCount === null ? "—" : activeAlertCount}
-            hint="Critical/high ops events + open incidents"
-          />
-        </Panel>
-      </div>
-
-      <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
-        <Panel>
-          <Metric
-            label="Runtime uptime"
-            value={uptimeLabel}
-            hint="API process uptime"
-          />
-        </Panel>
-        <Panel>
-          <Metric
-            label="Last restart"
-            value={formatTimestamp(systemHealth?.process_started_at ?? null)}
-            hint="API process start time"
-          />
-        </Panel>
-        <Panel>
-          <Metric
-            label="Last backup"
-            value={lastBackup}
-            hint={
-              systemHealth?.backup?.integrity_ok === false
-                ? "Integrity failed"
-                : systemHealth?.backup?.integrity_ok
-                  ? "Integrity verified"
-                  : "From backups/LAST_OK.json"
-            }
-          />
-        </Panel>
-        <Panel>
-          <Metric
-            label="Alerts"
-            value={openIncidents === null ? "—" : openIncidents}
-            hint="Open + investigating incidents"
           />
         </Panel>
       </div>
 
       <div className="grid grid-2">
-        <Panel title="Executive summary" className="rise-delay-3">
-          <ul style={{ margin: 0, paddingLeft: "1.1rem", color: "var(--ink-soft)" }}>
-            <li>
-              Role surface: {roleLabel(role)}. Mutations require matching backend
-              authority; this UI never elevates privileges.
-            </li>
-            <li>
-              Operating mode: {mode?.current_mode ?? "unavailable"} · Emergency
-              stop:{" "}
-              {mode
-                ? mode.emergency_stop_active
-                  ? "ACTIVE"
-                  : "inactive"
-                : "unknown"}
-            </li>
-            <li>
-              API readiness: {ready ? "ready" : "unavailable"} · Services:{" "}
-              {services ? services.length : "unavailable"}
-            </li>
-            <li>
-              Protective recommendations:{" "}
-              {protective ? protective.length : "unavailable"}
-            </li>
-          </ul>
-          <div className="form-actions" style={{ marginTop: "1rem" }}>
-            <Link className="btn" href="/system-health">
-              System Health
-            </Link>
-            <Link className="btn secondary" href="/paper">
-              Paper Trading
-            </Link>
-            {isOperator(user) ? (
-              <Link className="btn secondary" href="/operations">
-                Operating mode
-              </Link>
-            ) : null}
-            <Link className="btn secondary" href="/incidents">
-              Incidents
-            </Link>
-            {isFounder(user) ? (
-              <Link className="btn secondary" href="/administration">
-                Administration
-              </Link>
-            ) : null}
-          </div>
-        </Panel>
-
-        <Panel title="Open positions (sample book)">
+        <Panel title="Open positions" className="rise-delay-3">
           {!portfolios ? (
             <ErrorState>Paper portfolios unavailable.</ErrorState>
-          ) : !openPositions ? (
-            <EmptyState>No position data for the first portfolio.</EmptyState>
-          ) : openPositions.filter((p) => Number(p.quantity) !== 0).length === 0 ? (
+          ) : !portfolio ? (
+            <EmptyState>No portfolios. Create one under Paper Trading.</EmptyState>
+          ) : openPositions == null ? (
+            <EmptyState>Position data unavailable.</EmptyState>
+          ) : openPositionRows.length === 0 ? (
             <EmptyState>No open positions.</EmptyState>
           ) : (
             <div className="table-wrap">
@@ -375,100 +332,17 @@ export default async function OverviewPage() {
                   <tr>
                     <th>Symbol</th>
                     <th>Qty</th>
+                    <th>Unrealized</th>
                     <th>Realized</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {openPositions
-                    .filter((p) => Number(p.quantity) !== 0)
-                    .slice(0, 8)
-                    .map((p) => (
-                      <tr key={p.symbol}>
-                        <td>{p.symbol}</td>
-                        <td>{p.quantity}</td>
-                        <td>{p.realized_pnl ?? "—"}</td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-      </div>
-
-      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Runtime monitor">
-          {!systemHealth?.runtime_monitor ? (
-            <EmptyState>Runtime monitor unavailable.</EmptyState>
-          ) : (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Component</th>
-                    <th>Status</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(systemHealth.runtime_monitor).map(([key, probe]) => (
-                    <tr key={key}>
-                      <td>{key}</td>
-                      <td>
-                        <StatusBadge status={probe.status} label={probe.status} />
-                      </td>
-                      <td>{probe.detail}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Active alerts">
-          {!systemHealth?.active_alerts ? (
-            <EmptyState>Alert feed unavailable.</EmptyState>
-          ) : systemHealth.active_alerts.length === 0 ? (
-            <EmptyState>No active critical/high alerts.</EmptyState>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: "1.1rem", color: "var(--ink-soft)" }}>
-              {systemHealth.active_alerts.slice(0, 8).map((a, idx) => (
-                <li key={`${a.kind}-${idx}`}>
-                  [{a.severity}] {a.description}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      </div>
-
-      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Incident history">
-          {!systemHealth?.incident_history ? (
-            <EmptyState>Incident history unavailable.</EmptyState>
-          ) : systemHealth.incident_history.length === 0 ? (
-            <EmptyState>No incidents recorded.</EmptyState>
-          ) : (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Title</th>
-                    <th>Severity</th>
-                    <th>Status</th>
-                    <th>Opened</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {systemHealth.incident_history.slice(0, 8).map((row) => (
-                    <tr key={row.id}>
-                      <td>
-                        <Link href={`/incidents/${row.id}`}>{row.title}</Link>
-                      </td>
-                      <td>{row.severity}</td>
-                      <td>{row.status}</td>
-                      <td>{formatTimestamp(row.opened_at)}</td>
+                  {openPositionRows.slice(0, 12).map((p) => (
+                    <tr key={p.symbol}>
+                      <td>{p.symbol}</td>
+                      <td>{p.quantity}</td>
+                      <td>{p.unrealized_pnl ?? "—"}</td>
+                      <td>{p.realized_pnl ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -476,47 +350,89 @@ export default async function OverviewPage() {
             </div>
           )}
           <div className="form-actions" style={{ marginTop: "0.75rem" }}>
-            <Link className="btn secondary" href="/incidents">
-              All incidents
+            <Link className="btn secondary" href="/paper">
+              Paper Trading
             </Link>
           </div>
         </Panel>
 
-        <Panel title="Service snapshot">
-          {!services ? (
-            <ErrorState>Service health list unavailable.</ErrorState>
-          ) : services.length === 0 ? (
-            <EmptyState>No registered services returned.</EmptyState>
+        <Panel title="Active alerts" className="rise-delay-3">
+          {activeAlerts.length === 0 && openIncidents === 0 ? (
+            <EmptyState>No active critical/high alerts.</EmptyState>
           ) : (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Service</th>
-                    <th>Kind</th>
-                    <th>Status</th>
-                    <th>Last observed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {services.slice(0, 8).map((row) => (
-                    <tr key={row.service.id}>
-                      <td>{row.service.display_name}</td>
-                      <td>{row.service.service_kind}</td>
-                      <td>
-                        <StatusBadge
-                          status={row.projection?.status}
-                          label={row.projection?.status ?? "no projection"}
-                        />
-                      </td>
-                      <td>
-                        {formatTimestamp(row.projection?.last_observed_at)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ul style={{ margin: 0, paddingLeft: "1.1rem", color: "var(--ink-soft)" }}>
+              {activeAlerts.slice(0, 8).map((a, idx) => (
+                <li key={`${a.kind}-${idx}`}>
+                  [{a.severity}] {a.description}
+                </li>
+              ))}
+              {activeAlerts.length === 0 && openIncidents > 0 ? (
+                <li>
+                  {openIncidents} open/investigating incident(s) — see Incidents.
+                </li>
+              ) : null}
+            </ul>
+          )}
+          <div className="form-actions" style={{ marginTop: "0.75rem" }}>
+            <Link className="btn secondary" href="/incidents">
+              Incidents
+            </Link>
+            <Link className="btn secondary" href="/system-health">
+              System Health
+            </Link>
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
+        <Panel title="Operating snapshot">
+          <ul style={{ margin: 0, paddingLeft: "1.1rem", color: "var(--ink-soft)" }}>
+            <li>
+              Mode: {mode?.current_mode ?? "unavailable"} · Emergency stop:{" "}
+              {mode
+                ? mode.emergency_stop_active
+                  ? "ACTIVE"
+                  : "inactive"
+                : "unknown"}
+            </li>
+            <li>
+              API: {ready ? "ready" : "unavailable"} · Workers:{" "}
+              {systemHealth?.worker_instances?.length ?? "—"} · Last restart:{" "}
+              {formatTimestamp(systemHealth?.process_started_at ?? null)}
+            </li>
+            <li>
+              Backup integrity:{" "}
+              {systemHealth?.backup?.integrity_ok == null
+                ? "unknown"
+                : systemHealth.backup.integrity_ok
+                  ? "ok"
+                  : "failed"}
+            </li>
+          </ul>
+          <div className="form-actions" style={{ marginTop: "1rem" }}>
+            <Link className="btn" href="/system-health">
+              System Health
+            </Link>
+            {isOperator(user) ? (
+              <Link className="btn secondary" href="/operations">
+                Operating mode
+              </Link>
+            ) : null}
+            {isFounder(user) ? (
+              <Link className="btn secondary" href="/administration">
+                Administration
+              </Link>
+            ) : null}
+          </div>
+        </Panel>
+
+        <Panel title="Daily paper report">
+          {canGenerateReport ? (
+            <GenerateDailyReportForm />
+          ) : (
+            <EmptyState>
+              Report generation requires Founder or Operator authority.
+            </EmptyState>
           )}
         </Panel>
       </div>

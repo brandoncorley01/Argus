@@ -21,9 +21,13 @@ function New-ArgusShortcut([string]$Name, [string]$ScriptLeaf) {
 
 New-ArgusShortcut "Start Argus" "start-argus.ps1"
 New-ArgusShortcut "Stop Argus" "stop-argus.ps1"
+New-ArgusShortcut "Restart Argus" "restart-argus.ps1"
 New-ArgusShortcut "Argus Status" "status-argus.ps1"
+New-ArgusShortcut "Backup Argus" "backup-argus.ps1"
+New-ArgusShortcut "Generate Argus Daily Report" "generate-daily-report.ps1"
 New-ArgusShortcut "Open Argus Dashboard" "open-dashboard.ps1"
 
 Write-Host "Desktop shortcuts installed."
 Write-Host "Dashboard URL: $(Get-ArgusDashboardUrl)"
 Write-Host "Provider: internal_paper · Live trading: DISABLED"
+Write-Host "Milestone: Founder RC1 (Sprint 5)"
