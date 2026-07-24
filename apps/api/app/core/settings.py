@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     health_supervisor_lease_seconds: int = Field(default=45, ge=5, le=600)
     health_supervisor_failure_threshold: int = Field(default=3, ge=1, le=100)
 
+    # Optional override; default is <repo>/backups (Sprint 4 last-backup panel).
+    argus_backups_dir: str | None = Field(default=None)
+
     @field_validator("database_url", "redis_url")
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:

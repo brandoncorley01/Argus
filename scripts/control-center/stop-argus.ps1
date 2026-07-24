@@ -12,6 +12,7 @@ Write-Host "Live trading remains DISABLED."
 $pids = Read-ArgusPids $Root
 Stop-PidIfRunning $pids.eoc "EOC launcher"
 Stop-PidIfRunning $pids.api "API launcher"
+Stop-PidIfRunning $pids.worker "Worker launcher"
 
 # Best-effort: stop listeners on known ports if still held by python/node
 foreach ($port in @(8000, 3000)) {
@@ -29,5 +30,5 @@ foreach ($port in @(8000, 3000)) {
 }
 
 & "$Root\scripts\infra-stop.ps1"
-Write-ArgusPids -Root $Root -ApiPid $null -EocPid $null
+Write-ArgusPids -Root $Root -ApiPid $null -EocPid $null -WorkerPid $null
 Write-Host "=== Argus stopped (data preserved) ==="

@@ -60,6 +60,26 @@ type SystemHealth = {
     status: string;
   }>;
   generated_at: string;
+  runtime_monitor?: Record<string, { status: string; detail: string }>;
+  backup?: {
+    available: boolean;
+    completed_at?: string | null;
+    integrity_ok?: boolean | null;
+    filename?: string | null;
+    note?: string | null;
+  };
+  active_alerts?: Array<{
+    kind: string;
+    severity: string;
+    description: string;
+  }>;
+  incident_history?: Array<{
+    id: string;
+    title: string;
+    severity: string;
+    status: string;
+    opened_at?: string | null;
+  }>;
 };
 
 type DailyReport = {
@@ -123,6 +143,12 @@ export default async function SystemHealthPage() {
                   <dd style={{ margin: 0 }}>{formatUptime(health.uptime_seconds)}</dd>
                 </div>
                 <div>
+                  <dt className="metric-label">Last restart</dt>
+                  <dd style={{ margin: 0 }}>
+                    {formatTimestamp(health.process_started_at)}
+                  </dd>
+                </div>
+                <div>
                   <dt className="metric-label">Postgres / Redis</dt>
                   <dd style={{ margin: 0 }}>
                     {health.readiness?.postgres ? "ready" : "not ready"} /{" "}
@@ -167,7 +193,64 @@ export default async function SystemHealthPage() {
                       : health.reconciliation.note ?? "unavailable"}
                   </dd>
                 </div>
+                <div>
+                  <dt className="metric-label">Last backup</dt>
+                  <dd style={{ margin: 0 }}>
+                    {health.backup?.available
+                      ? `${formatTimestamp(health.backup.completed_at ?? null)} · integrity=${
+                          health.backup.integrity_ok == null
+                            ? "unknown"
+                            : health.backup.integrity_ok
+                              ? "ok"
+                              : "failed"
+                        }`
+                      : health.backup?.note ?? "unavailable"}
+                  </dd>
+                </div>
               </dl>
+            </Panel>
+          </div>
+
+          <div className="grid grid-2">
+            <Panel title="Runtime monitor">
+              {!health.runtime_monitor ? (
+                <EmptyState>Runtime monitor unavailable.</EmptyState>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Component</th>
+                      <th>Status</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(health.runtime_monitor).map(([key, probe]) => (
+                      <tr key={key}>
+                        <td>{key}</td>
+                        <td>
+                          <StatusBadge status={probe.status} label={probe.status} />
+                        </td>
+                        <td>{probe.detail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Panel>
+
+            <Panel title="Active alerts">
+              {!health.active_alerts || health.active_alerts.length === 0 ? (
+                <EmptyState>No active critical/high alerts.</EmptyState>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                  {health.active_alerts.map((a, idx) => (
+                    <li key={`${a.kind}-${idx}`}>
+                      [{a.severity}] {a.description}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Panel>
           </div>
 
@@ -299,6 +382,33 @@ export default async function SystemHealthPage() {
                       <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
                         {e.correlation_id}
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+
+          <Panel title="Incident history">
+            {!health.incident_history || health.incident_history.length === 0 ? (
+              <EmptyState>No incidents recorded.</EmptyState>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Severity</th>
+                    <th>Status</th>
+                    <th>Opened</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {health.incident_history.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.title}</td>
+                      <td>{row.severity}</td>
+                      <td>{row.status}</td>
+                      <td>{formatTimestamp(row.opened_at)}</td>
                     </tr>
                   ))}
                 </tbody>

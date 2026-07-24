@@ -87,6 +87,57 @@ def test_system_health_and_correlation_header(
     assert body["paper"]["default_provider_is_internal_paper"] is True
     assert body["paper"]["default_provider_key"] == "internal_paper"
     assert set(body["incidents_by_severity"]) >= {"critical", "high", "medium", "info"}
+    assert "runtime_monitor" in body
+    assert set(body["runtime_monitor"]) >= {"api", "worker", "scheduler", "reconciliation"}
+    for key in ("api", "worker", "scheduler", "reconciliation"):
+        assert body["runtime_monitor"][key]["status"] in {
+            "ok",
+            "failed",
+            "degraded",
+            "unknown",
+        }
+    assert "backup" in body
+    assert "available" in body["backup"]
+    assert "active_alerts" in body
+    assert isinstance(body["active_alerts"], list)
+    assert "incident_history" in body
+    assert isinstance(body["incident_history"], list)
+    assert "uptime_seconds" in body
+    assert "process_started_at" in body
+
+
+def test_system_health_backup_meta(tmp_path, monkeypatch, client: TestClient, db_session: Session) -> None:
+    u, p = _unique("ob"), "ops-pass-1234"
+    _bootstrap(db_session, u, p)
+    cookies, _ = _login(client, u, p)
+
+    dump = tmp_path / "argus_postgres_test.sql"
+    dump.write_text("-- PostgreSQL database dump\n" + ("x" * 200), encoding="utf-8")
+    import hashlib
+
+    sha = hashlib.sha256(dump.read_bytes()).hexdigest()
+    meta = {
+        "ok": True,
+        "integrity_ok": True,
+        "completed_at": "2026-07-23T00:00:00+00:00",
+        "filename": dump.name,
+        "size_bytes": dump.stat().st_size,
+        "sha256": sha,
+        "note": "test",
+    }
+    (tmp_path / "LAST_OK.json").write_text(
+        __import__("json").dumps(meta), encoding="utf-8"
+    )
+    monkeypatch.setenv("ARGUS_BACKUPS_DIR", str(tmp_path))
+    clear_settings_cache()
+
+    res = client.get("/api/v1/operations/system-health", cookies=cookies)
+    assert res.status_code == 200, res.text
+    backup = res.json()["backup"]
+    assert backup["available"] is True
+    assert backup["integrity_ok"] is True
+    assert backup["filename"] == dump.name
+    clear_settings_cache()
 
 
 def test_operational_event_severities_and_secret_reject(

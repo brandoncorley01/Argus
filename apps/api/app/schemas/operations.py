@@ -89,3 +89,8 @@ class SystemHealthRead(BaseModel):
     process_started_at: datetime
     recent_events: list[dict[str, Any]]
     generated_at: datetime
+    # Sprint 4 — operational stability (aggregated from existing subsystems + backup meta)
+    runtime_monitor: dict[str, Any] = Field(default_factory=dict)
+    backup: dict[str, Any] = Field(default_factory=dict)
+    active_alerts: list[dict[str, Any]] = Field(default_factory=list)
+    incident_history: list[dict[str, Any]] = Field(default_factory=list)

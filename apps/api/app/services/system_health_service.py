@@ -20,7 +20,10 @@ service never fabricates a healthy status or a zero P&L to fill a gap.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -35,8 +38,10 @@ from app.models import (
     IncidentSeverity,
     IncidentStatus,
     ServiceHealthProjection,
+    WorkerInstanceStatus,
 )
 from app.models.micro_live import ReconciliationRun
+from app.models.operations import OperationalSeverity
 from app.models.paper_trading import ExecutionProvider, PaperOrder
 from app.services.health_evaluation_service import HealthEvaluationService
 from app.services.health_supervisor_service import HealthSupervisorService
@@ -50,6 +55,10 @@ from app.services.service_registry_service import ServiceRegistryService
 APP_STARTED_AT: datetime = datetime.now(UTC)
 
 DEFAULT_PAPER_PROVIDER_KEY = "internal_paper"
+WORKER_STALE_SECONDS = 120
+SCHEDULER_FAILURE_LOOKBACK = timedelta(hours=1)
+# apps/api/app/services -> repo root
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def map_incident_severity(severity: IncidentSeverity) -> str:
@@ -150,6 +159,212 @@ class SystemHealthService:
             counts[key] = counts.get(key, 0) + 1
         return counts
 
+    def _backups_dir(self) -> Path:
+        settings = get_settings()
+        if settings.argus_backups_dir:
+            return Path(settings.argus_backups_dir)
+        return _REPO_ROOT / "backups"
+
+    def _backup_section(self) -> dict[str, Any]:
+        """Read last successful backup metadata written by Control Center scripts.
+
+        Never invents a successful backup. Verifies sha256 when the dump exists.
+        """
+        backups = self._backups_dir()
+        last_ok = backups / "LAST_OK.json"
+        meta_path: Path | None = last_ok if last_ok.is_file() else None
+        if meta_path is None:
+            candidates = sorted(
+                backups.glob("argus_postgres_*.meta.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            meta_path = candidates[0] if candidates else None
+        if meta_path is None or not meta_path.is_file():
+            return {
+                "available": False,
+                "integrity_ok": None,
+                "note": "No verified backup metadata found under backups/.",
+            }
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {
+                "available": False,
+                "integrity_ok": False,
+                "note": f"Backup metadata unreadable: {meta_path.name}",
+            }
+
+        dump_name = data.get("filename") or data.get("path")
+        dump_path = Path(dump_name) if dump_name else None
+        if dump_path is not None and not dump_path.is_absolute():
+            dump_path = backups / dump_path.name
+        expected_sha = data.get("sha256")
+        integrity_ok: bool | None = data.get("integrity_ok")
+        if dump_path is not None and dump_path.is_file() and expected_sha:
+            digest = hashlib.sha256(dump_path.read_bytes()).hexdigest()
+            integrity_ok = digest == expected_sha
+        elif integrity_ok is None and data.get("ok") is True:
+            integrity_ok = True
+
+        return {
+            "available": bool(data.get("ok", True)),
+            "completed_at": data.get("completed_at"),
+            "filename": dump_path.name if dump_path else data.get("filename"),
+            "size_bytes": data.get("size_bytes"),
+            "sha256": expected_sha,
+            "integrity_ok": integrity_ok,
+            "note": data.get("note"),
+        }
+
+    def _incident_history(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self.db.scalars(
+            select(Incident).order_by(Incident.opened_at.desc()).limit(limit)
+        )
+        return [
+            {
+                "id": str(row.id),
+                "title": row.title,
+                "severity": map_incident_severity(row.severity),
+                "status": row.status.value,
+                "opened_at": row.opened_at.isoformat() if row.opened_at else None,
+            }
+            for row in rows
+        ]
+
+    def _active_alerts(
+        self,
+        *,
+        recent_events: list[dict[str, Any]],
+        incidents_by_severity: dict[str, int],
+    ) -> list[dict[str, Any]]:
+        alerts: list[dict[str, Any]] = []
+        for event in recent_events:
+            if event["severity"] in {
+                OperationalSeverity.CRITICAL.value,
+                OperationalSeverity.HIGH.value,
+            }:
+                alerts.append(
+                    {
+                        "kind": "operational_event",
+                        "severity": event["severity"],
+                        "component": event["component"],
+                        "description": event["description"],
+                        "occurred_at": event["occurred_at"],
+                        "correlation_id": event["correlation_id"],
+                    }
+                )
+        open_critical = incidents_by_severity.get("critical", 0) + incidents_by_severity.get(
+            "high", 0
+        )
+        if open_critical:
+            alerts.append(
+                {
+                    "kind": "incident_summary",
+                    "severity": "critical" if incidents_by_severity.get("critical") else "high",
+                    "component": "api",
+                    "description": (
+                        f"{open_critical} open/investigating incident(s) at critical/high severity"
+                    ),
+                    "occurred_at": None,
+                    "correlation_id": None,
+                }
+            )
+        return alerts[:15]
+
+    def _runtime_monitor(
+        self,
+        *,
+        now: datetime,
+        readiness: dict[str, Any],
+        worker_instances: list[dict[str, Any]],
+        reconciliation: dict[str, Any],
+        recent_events: list[dict[str, Any]],
+        critical_service_count: int,
+    ) -> dict[str, Any]:
+        api_ok = bool(readiness.get("postgres")) and bool(readiness.get("redis"))
+        api_status = "ok" if api_ok and critical_service_count == 0 else (
+            "failed" if not api_ok else "degraded"
+        )
+
+        running = [
+            w
+            for w in worker_instances
+            if w["status"] == WorkerInstanceStatus.RUNNING.value
+        ]
+        fresh = []
+        for w in running:
+            try:
+                seen = datetime.fromisoformat(w["last_seen_at"])
+            except (TypeError, ValueError):
+                continue
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=UTC)
+            if (now - seen).total_seconds() <= WORKER_STALE_SECONDS:
+                fresh.append(w)
+        if fresh:
+            worker_status = "ok"
+            worker_detail = f"{len(fresh)} fresh running instance(s)"
+        elif running:
+            worker_status = "failed"
+            worker_detail = "Worker registered but heartbeat is stale"
+        elif worker_instances:
+            worker_status = "failed"
+            worker_detail = "Worker instances present but none running"
+        else:
+            worker_status = "failed"
+            worker_detail = "No worker instances registered"
+
+        lookback = now - SCHEDULER_FAILURE_LOOKBACK
+        scheduler_failures = []
+        for event in recent_events:
+            if event["component"] != "scheduler":
+                continue
+            if event["severity"] not in {
+                OperationalSeverity.CRITICAL.value,
+                OperationalSeverity.HIGH.value,
+            }:
+                continue
+            try:
+                occurred = datetime.fromisoformat(event["occurred_at"])
+            except (TypeError, ValueError):
+                continue
+            if occurred.tzinfo is None:
+                occurred = occurred.replace(tzinfo=UTC)
+            if occurred >= lookback:
+                scheduler_failures.append(event)
+        if scheduler_failures:
+            scheduler_status = "failed"
+            scheduler_detail = scheduler_failures[0]["description"]
+        elif worker_status == "ok":
+            scheduler_status = "ok"
+            scheduler_detail = "Scheduler crons hosted by running health supervisor worker"
+        else:
+            scheduler_status = "failed"
+            scheduler_detail = "Scheduler unavailable while worker is not healthy"
+
+        if not reconciliation.get("available"):
+            recon_status = "unknown"
+            recon_detail = reconciliation.get("note") or "No reconciliation run yet"
+        elif reconciliation.get("status") == "failed":
+            recon_status = "failed"
+            recon_detail = "Last reconciliation run failed"
+        elif int(reconciliation.get("discrepancy_count") or 0) > 0:
+            recon_status = "degraded"
+            recon_detail = (
+                f"Last run completed with {reconciliation['discrepancy_count']} discrepancy(ies)"
+            )
+        else:
+            recon_status = "ok"
+            recon_detail = "Last reconciliation completed without discrepancies"
+
+        return {
+            "api": {"status": api_status, "detail": "Postgres/Redis readiness + critical services"},
+            "worker": {"status": worker_status, "detail": worker_detail},
+            "scheduler": {"status": scheduler_status, "detail": scheduler_detail},
+            "reconciliation": {"status": recon_status, "detail": recon_detail},
+        }
+
     def build(self) -> dict[str, Any]:
         settings = get_settings()
         now = datetime.now(UTC)
@@ -197,6 +412,49 @@ class SystemHealthService:
         ]
 
         overall_status = institutional.status.value if institutional is not None else "unknown"
+        readiness = {
+            "postgres": check_postgres(settings),
+            "redis": check_redis(settings),
+        }
+        reconciliation = self._reconciliation_section()
+        incidents_by_severity = self._incidents_by_severity()
+        backup = self._backup_section()
+        runtime_monitor = self._runtime_monitor(
+            now=now,
+            readiness=readiness,
+            worker_instances=worker_instances,
+            reconciliation=reconciliation,
+            recent_events=recent_events,
+            critical_service_count=critical_count,
+        )
+        active_alerts = self._active_alerts(
+            recent_events=recent_events,
+            incidents_by_severity=incidents_by_severity,
+        )
+        if backup.get("available") and backup.get("integrity_ok") is False:
+            active_alerts.insert(
+                0,
+                {
+                    "kind": "backup",
+                    "severity": "critical",
+                    "component": "database",
+                    "description": "Last backup failed integrity verification",
+                    "occurred_at": backup.get("completed_at"),
+                    "correlation_id": None,
+                },
+            )
+        for key, probe in runtime_monitor.items():
+            if probe["status"] == "failed":
+                active_alerts.append(
+                    {
+                        "kind": "runtime_monitor",
+                        "severity": "critical" if key in {"api", "worker"} else "high",
+                        "component": key if key != "reconciliation" else "paper_provider",
+                        "description": f"{key} monitor: {probe['detail']}",
+                        "occurred_at": now.isoformat(),
+                        "correlation_id": None,
+                    }
+                )
 
         return {
             "overall_status": overall_status,
@@ -215,17 +473,18 @@ class SystemHealthService:
             "healthy_service_count": healthy_count,
             "warning_service_count": warning_count,
             "critical_service_count": critical_count,
-            "readiness": {
-                "postgres": check_postgres(settings),
-                "redis": check_redis(settings),
-            },
+            "readiness": readiness,
             "host": host,
             "paper": self._paper_section(),
-            "reconciliation": self._reconciliation_section(),
-            "incidents_by_severity": self._incidents_by_severity(),
+            "reconciliation": reconciliation,
+            "incidents_by_severity": incidents_by_severity,
             "worker_instances": worker_instances,
             "uptime_seconds": (now - APP_STARTED_AT).total_seconds(),
             "process_started_at": APP_STARTED_AT.isoformat(),
             "recent_events": recent_events,
             "generated_at": now.isoformat(),
+            "runtime_monitor": runtime_monitor,
+            "backup": backup,
+            "active_alerts": active_alerts[:15],
+            "incident_history": self._incident_history(),
         }

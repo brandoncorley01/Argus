@@ -49,6 +49,8 @@ docker-compose.override.yml
 # Local DB dumps (never commit SQL archives; keep README only)
 backups/**
 !backups/README.md
+!**/.gitkeep
+
 
 # Local runtime control-center pid/logs (do not commit)
 runtime/control-center/

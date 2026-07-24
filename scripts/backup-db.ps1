@@ -18,6 +18,8 @@ $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $OutDir = Join-Path $Root "backups"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $OutFile = Join-Path $OutDir "argus_postgres_$Stamp.sql"
+$MetaFile = Join-Path $OutDir "argus_postgres_$Stamp.meta.json"
+$LastOk = Join-Path $OutDir "LAST_OK.json"
 
 Write-Host "Backing up database '$Db' via docker exec (password not printed)..."
 docker exec argus-postgres pg_isready -U $User -d $Db | Out-Host
@@ -31,6 +33,25 @@ if (-not (Test-Path $OutFile) -or (Get-Item $OutFile).Length -lt 100) {
   Write-Error "Backup failed or file too small: $OutFile"
 }
 
+$sha = (Get-FileHash -Algorithm SHA256 -Path $OutFile).Hash.ToLowerInvariant()
+$size = (Get-Item $OutFile).Length
+$completedAt = (Get-Date).ToUniversalTime().ToString("o")
+$meta = [ordered]@{
+  ok            = $true
+  integrity_ok  = $true
+  completed_at  = $completedAt
+  filename      = (Split-Path -Leaf $OutFile)
+  path          = $OutFile
+  size_bytes    = $size
+  sha256        = $sha
+  database      = $Db
+  note          = "Created by scripts/backup-db.ps1; trading history preserved as SQL dump only."
+}
+($meta | ConvertTo-Json) | Set-Content -Path $MetaFile -Encoding utf8
+($meta | ConvertTo-Json) | Set-Content -Path $LastOk -Encoding utf8
+
 Write-Host "Backup written: $OutFile"
-Write-Host "Size bytes: $((Get-Item $OutFile).Length)"
+Write-Host "Size bytes: $size"
+Write-Host "SHA256: $sha"
+Write-Host "Metadata: $MetaFile"
 Write-Output $OutFile

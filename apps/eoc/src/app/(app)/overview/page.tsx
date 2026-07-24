@@ -36,6 +36,28 @@ type SystemHealth = {
     last_paper_order_at: string | null;
   };
   worker_instances?: Array<{ instance_key: string; status: string }>;
+  uptime_seconds?: number;
+  process_started_at?: string;
+  backup?: {
+    available: boolean;
+    completed_at?: string | null;
+    integrity_ok?: boolean | null;
+    note?: string | null;
+  };
+  active_alerts?: Array<{
+    kind: string;
+    severity: string;
+    description: string;
+    occurred_at?: string | null;
+  }>;
+  incident_history?: Array<{
+    id: string;
+    title: string;
+    severity: string;
+    status: string;
+    opened_at?: string | null;
+  }>;
+  runtime_monitor?: Record<string, { status: string; detail: string }>;
 };
 
 type PaperProviderRow = {
@@ -138,6 +160,16 @@ export default async function OverviewPage() {
       : `${portfolios.length} portfolio(s)`
     : "unavailable";
 
+  const uptimeSec = systemHealth?.uptime_seconds;
+  const uptimeLabel =
+    uptimeSec == null
+      ? "—"
+      : `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`;
+  const activeAlertCount = systemHealth?.active_alerts?.length ?? openIncidents;
+  const lastBackup = systemHealth?.backup?.available
+    ? formatTimestamp(systemHealth.backup.completed_at ?? null)
+    : systemHealth?.backup?.note ?? "none";
+
   const dashboardTitle =
     role === "FOUNDER"
       ? "Founder dashboard"
@@ -237,6 +269,43 @@ export default async function OverviewPage() {
         </Panel>
         <Panel>
           <Metric
+            label="Active alerts"
+            value={activeAlertCount === null ? "—" : activeAlertCount}
+            hint="Critical/high ops events + open incidents"
+          />
+        </Panel>
+      </div>
+
+      <div className="grid grid-4" style={{ marginBottom: "1rem" }}>
+        <Panel>
+          <Metric
+            label="Runtime uptime"
+            value={uptimeLabel}
+            hint="API process uptime"
+          />
+        </Panel>
+        <Panel>
+          <Metric
+            label="Last restart"
+            value={formatTimestamp(systemHealth?.process_started_at ?? null)}
+            hint="API process start time"
+          />
+        </Panel>
+        <Panel>
+          <Metric
+            label="Last backup"
+            value={lastBackup}
+            hint={
+              systemHealth?.backup?.integrity_ok === false
+                ? "Integrity failed"
+                : systemHealth?.backup?.integrity_ok
+                  ? "Integrity verified"
+                  : "From backups/LAST_OK.json"
+            }
+          />
+        </Panel>
+        <Panel>
+          <Metric
             label="Alerts"
             value={openIncidents === null ? "—" : openIncidents}
             hint="Open + investigating incidents"
@@ -327,7 +396,92 @@ export default async function OverviewPage() {
         </Panel>
       </div>
 
-      <div style={{ marginTop: "1rem" }}>
+      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
+        <Panel title="Runtime monitor">
+          {!systemHealth?.runtime_monitor ? (
+            <EmptyState>Runtime monitor unavailable.</EmptyState>
+          ) : (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Status</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(systemHealth.runtime_monitor).map(([key, probe]) => (
+                    <tr key={key}>
+                      <td>{key}</td>
+                      <td>
+                        <StatusBadge status={probe.status} label={probe.status} />
+                      </td>
+                      <td>{probe.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Active alerts">
+          {!systemHealth?.active_alerts ? (
+            <EmptyState>Alert feed unavailable.</EmptyState>
+          ) : systemHealth.active_alerts.length === 0 ? (
+            <EmptyState>No active critical/high alerts.</EmptyState>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: "1.1rem", color: "var(--ink-soft)" }}>
+              {systemHealth.active_alerts.slice(0, 8).map((a, idx) => (
+                <li key={`${a.kind}-${idx}`}>
+                  [{a.severity}] {a.description}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
+
+      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
+        <Panel title="Incident history">
+          {!systemHealth?.incident_history ? (
+            <EmptyState>Incident history unavailable.</EmptyState>
+          ) : systemHealth.incident_history.length === 0 ? (
+            <EmptyState>No incidents recorded.</EmptyState>
+          ) : (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Severity</th>
+                    <th>Status</th>
+                    <th>Opened</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {systemHealth.incident_history.slice(0, 8).map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <Link href={`/incidents/${row.id}`}>{row.title}</Link>
+                      </td>
+                      <td>{row.severity}</td>
+                      <td>{row.status}</td>
+                      <td>{formatTimestamp(row.opened_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="form-actions" style={{ marginTop: "0.75rem" }}>
+            <Link className="btn secondary" href="/incidents">
+              All incidents
+            </Link>
+          </div>
+        </Panel>
+
         <Panel title="Service snapshot">
           {!services ? (
             <ErrorState>Service health list unavailable.</ErrorState>

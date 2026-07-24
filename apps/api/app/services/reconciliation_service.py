@@ -49,6 +49,9 @@ class ReconciliationService:
         comparison_state: dict[str, Any],
         actor: AuthenticatedPrincipal,
     ) -> ReconciliationRun:
+        from app.models.operations import OperationalComponent, OperationalSeverity
+        from app.services.operational_log_service import OperationalLogError, OperationalLogService
+
         run = ReconciliationRun(
             provider_key=provider_key,
             status=ReconciliationRunStatus.RUNNING.value,
@@ -57,30 +60,69 @@ class ReconciliationService:
         self.db.add(run)
         self.db.flush()
 
-        discrepancies = self._diff(authoritative_state, comparison_state)
-        for disc in discrepancies:
-            self.db.add(
-                ReconciliationDiscrepancy(
-                    run_id=run.id,
-                    kind=disc["kind"],
-                    detail=disc["detail"],
-                    resolved=False,
+        try:
+            discrepancies = self._diff(authoritative_state, comparison_state)
+            for disc in discrepancies:
+                self.db.add(
+                    ReconciliationDiscrepancy(
+                        run_id=run.id,
+                        kind=disc["kind"],
+                        detail=disc["detail"],
+                        resolved=False,
+                    )
                 )
-            )
-        run.discrepancies = discrepancies
-        run.status = ReconciliationRunStatus.COMPLETED.value
-        run.completed_at = _utcnow()
+            run.discrepancies = discrepancies
+            run.status = ReconciliationRunStatus.COMPLETED.value
+            run.completed_at = _utcnow()
 
-        self.audit.append(
-            action="micro_live.reconciliation.run",
-            resource_type="reconciliation_run",
-            resource_id=str(run.id),
-            actor_user_id=actor.user.id,
-            payload={"provider_key": provider_key, "discrepancy_count": len(discrepancies)},
-        )
-        self.db.commit()
-        self.db.refresh(run)
-        return run
+            self.audit.append(
+                action="micro_live.reconciliation.run",
+                resource_type="reconciliation_run",
+                resource_id=str(run.id),
+                actor_user_id=actor.user.id,
+                payload={"provider_key": provider_key, "discrepancy_count": len(discrepancies)},
+            )
+            if discrepancies:
+                try:
+                    OperationalLogService(self.db).append(
+                        component=OperationalComponent.PAPER_PROVIDER,
+                        severity=OperationalSeverity.HIGH,
+                        description=(
+                            f"Reconciliation completed with {len(discrepancies)} discrepancy(ies)"
+                        ),
+                        correlation_id=str(run.id),
+                        details={
+                            "provider_key": provider_key,
+                            "discrepancy_count": len(discrepancies),
+                        },
+                        actor_user_id=actor.user.id,
+                        commit=False,
+                    )
+                except OperationalLogError:
+                    pass
+            self.db.commit()
+            self.db.refresh(run)
+            return run
+        except Exception as exc:
+            run.status = ReconciliationRunStatus.FAILED.value
+            run.completed_at = _utcnow()
+            try:
+                OperationalLogService(self.db).append(
+                    component=OperationalComponent.PAPER_PROVIDER,
+                    severity=OperationalSeverity.CRITICAL,
+                    description=f"Reconciliation failure: {exc}",
+                    correlation_id=str(run.id),
+                    details={"provider_key": provider_key},
+                    actor_user_id=actor.user.id,
+                    commit=False,
+                )
+            except OperationalLogError:
+                pass
+            try:
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+            raise
 
     def _diff(
         self, authoritative: dict[str, Any], comparison: dict[str, Any]
