@@ -1,9 +1,10 @@
 # Force this PC onto GitHub main Home UI (Start / Stop).
-# Run from PowerShell (works even if local Argus is stale):
-#   irm https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/force-home-update.ps1 | iex
-$ErrorActionPreference = "Stop"
+# Prefer this cache-busted command:
+#   irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/force-home-update.ps1?$(Get-Random)" | iex
+$ErrorActionPreference = "Continue"
 
 Write-Host "=== Force Argus Home update ==="
+Write-Host "Script revision: force-home-update-v3"
 
 $candidates = @(
   (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
@@ -22,46 +23,85 @@ foreach ($c in $candidates) {
 }
 
 if (-not $Root) {
-  throw "Could not find Argus folder. Open PowerShell in your Argus folder and run this again."
+  throw "Could not find Argus folder. Open PowerShell in C:\Users\brand\OneDrive\Desktop\Argus and run again."
 }
 
 Write-Host "Argus folder: $Root"
 Set-Location $Root
 
-# Keep secrets and local runtime; discard stale UI that blocks GitHub main.
-$preserve = @(".env", ".env.paper", ".env.local")
-foreach ($name in $preserve) {
-  if (Test-Path (Join-Path $Root $name)) {
-    Write-Host "Keeping $name"
+function Invoke-Git {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
+  Write-Host ("> git " + ($GitArgs -join " "))
+  & git @GitArgs
+  return $LASTEXITCODE
+}
+
+# 1) Fetch GitHub main
+$code = Invoke-Git fetch origin
+if ($code -ne 0) { throw "git fetch failed — check internet / GitHub access." }
+
+# 2) Delete known local UI leftovers that block checkout (tracked or untracked).
+$killPaths = @(
+  "ARGUS_FOUNDER_QUICKSTART.md",
+  "apps\eoc\src\app\(app)\layout.tsx",
+  "apps\eoc\src\app\(app)\today",
+  "apps\eoc\src\app\(app)\trading",
+  "apps\eoc\src\app\(app)\portfolio",
+  "apps\eoc\src\app\(app)\reports",
+  "apps\eoc\src\app\(app)\settings",
+  "apps\eoc\src\app\globals.css",
+  "apps\eoc\src\app\login\page.tsx",
+  "apps\eoc\src\app\page.tsx",
+  "apps\eoc\src\components\SideNav.tsx",
+  "apps\eoc\src\components\founder",
+  "apps\eoc\src\lib\actions\auth.ts",
+  "apps\eoc\src\lib\actions\operations.ts",
+  "apps\eoc\src\lib\actions\control.ts",
+  "apps\eoc\src\lib\founder",
+  "apps\eoc\src\lib\build.ts",
+  "apps\eoc\src\middleware.ts",
+  "scripts\control-center\_common.ps1",
+  "scripts\control-center\install-desktop-shortcuts.ps1",
+  "scripts\control-center\end-trading-day.ps1",
+  "scripts\control-center\start-argus.ps1",
+  "scripts\control-center\stop-argus.ps1"
+)
+
+Write-Host "Removing local conflicting files..."
+foreach ($rel in $killPaths) {
+  $full = Join-Path $Root $rel
+  if (Test-Path $full) {
+    Write-Host "  remove $rel"
+    Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
 
-git fetch origin
-if ($LASTEXITCODE -ne 0) { throw "git fetch failed — check internet / GitHub access." }
+# 3) Clean any other untracked non-ignored junk, then hard-reset to origin/main.
+$null = Invoke-Git clean -fd
+$null = Invoke-Git checkout -f -B main origin/main
+$code = Invoke-Git reset --hard origin/main
+if ($code -ne 0) { throw "Could not reset to origin/main." }
+$null = Invoke-Git clean -fd
 
-Write-Host "Clearing local UI conflicts so GitHub main can load..."
-# Drop modified tracked files and untracked Founder pages that blocked checkout.
-git reset --hard HEAD 2>&1 | Out-Host
-git clean -fd 2>&1 | Out-Host
-
-git checkout -f -B main origin/main
-if ($LASTEXITCODE -ne 0) {
-  # Last resort: point branch at origin/main even if checkout complained.
-  git symbolic-ref HEAD refs/heads/main 2>&1 | Out-Host
-  git reset --hard origin/main
-  if ($LASTEXITCODE -ne 0) { throw "Could not reset to origin/main." }
-} else {
-  git reset --hard origin/main
-  if ($LASTEXITCODE -ne 0) { throw "Could not reset to origin/main." }
-}
-
-git clean -fd 2>&1 | Out-Host
-
-$sha = (git rev-parse --short HEAD).Trim()
-$branch = (git rev-parse --abbrev-ref HEAD).Trim()
+$sha = (& git rev-parse --short HEAD).Trim()
+$branch = (& git rev-parse --abbrev-ref HEAD).Trim()
 Write-Host "OK  Now on $branch @ $sha"
 
-# Stop anything on the dashboard port so the new UI can load.
+if ($branch -ne "main") { throw "Expected branch main, got $branch" }
+
+$today = Join-Path $Root "apps\eoc\src\app\(app)\today\page.tsx"
+if (-not (Test-Path -LiteralPath $today)) {
+  throw "Home page missing after update: $today"
+}
+$todayText = Get-Content -LiteralPath $today -Raw
+if ($todayText -notmatch "ControlBar") {
+  throw "Home page still missing Start/Stop ControlBar after update."
+}
+if ($todayText -notmatch "home-start-stop-v1") {
+  Write-Host "WARN: build marker not found in today page text (may still be ok)."
+}
+
+# 4) Kill old dashboard process
 foreach ($port in @(3000)) {
   try {
     $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
@@ -83,7 +123,7 @@ Write-Host "Starting Argus with updated Home..."
 & $starter
 
 Write-Host ""
-Write-Host "When Home opens, you must see:"
-Write-Host "  - Start Argus / Stop Argus buttons at the top"
+Write-Host "SUCCESS markers to look for on Home:"
+Write-Host "  - Start Argus / Stop Argus at the top"
 Write-Host "  - UI build: home-start-stop-v1 at the bottom"
-Write-Host "If you still see ACTION NEEDED cards, you are not on this update."
+Write-Host "If you still see ACTION NEEDED, hard-refresh the browser (Ctrl+F5)."
