@@ -37,7 +37,7 @@ Or from PowerShell:
 
 Status · Restart · Backup · Generate Daily Report
 
-If the browser says **refused to connect** on `127.0.0.1:3000`, Argus is stopped — double-click **Start Argus** first.
+If the browser says **refused to connect** on `127.0.0.1:3000`, Argus is stopped — double-click **Start Argus** on the Desktop (or **`Start-Argus.cmd`** in the Argus folder) first. Do not use `/get-desktop` until Argus is running.
 
 ## Morning
 
