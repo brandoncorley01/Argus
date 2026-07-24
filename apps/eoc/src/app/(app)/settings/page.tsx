@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { ControlBar } from "@/components/founder/ControlBar";
-import { PageHeader, Panel } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { deriveStatus } from "@/lib/founder/simple";
 import { getProcessReady, soft } from "@/lib/server/control-plane";
@@ -23,31 +23,14 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Start, Stop, and desktop shortcuts. Live trading stays locked."
+        description="Start and stop Argus. Live trading stays locked."
       />
 
       <ControlBar status={status} />
 
-      <Panel title="What the installer adds">
-        <ul className="plain-list">
-          <li>Start Argus</li>
-          <li>Stop Argus</li>
-          <li>Open Argus</li>
-          <li>End Trading Day</li>
-        </ul>
-        <div className="form-actions" style={{ marginTop: "0.75rem" }}>
-          <a className="btn" href="/api/founder/desktop-installer" download>
-            Download desktop installer
-          </a>
-        </div>
-      </Panel>
-
       <div className="form-actions" style={{ marginTop: "1rem" }}>
         <Link className="btn secondary" href="/today">
           Back to Today
-        </Link>
-        <Link className="btn secondary" href="/get-desktop">
-          Open download page
         </Link>
       </div>
     </>

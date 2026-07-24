@@ -13,7 +13,6 @@ const PRIMARY = [
   { href: "/portfolio", label: "Portfolio" },
   { href: "/reports", label: "Reports" },
   { href: "/settings", label: "Settings" },
-  { href: "/get-desktop", label: "Get desktop" },
 ] as const;
 
 const ADVANCED = [

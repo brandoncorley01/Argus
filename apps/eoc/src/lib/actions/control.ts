@@ -29,7 +29,7 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
     return Promise.resolve({
       ok: false,
       message: `Script missing: ${scriptLeaf}`,
-      detail: "Use the desktop Start/Stop shortcuts instead.",
+      detail: "Double-click Start-Argus.cmd in your Argus folder instead.",
     });
   }
 
@@ -52,7 +52,7 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
       resolve({
         ok: false,
         message: "Command timed out",
-        detail: "Try the matching desktop shortcut.",
+        detail: "Double-click Start-Argus.cmd or Stop-Argus.cmd in your Argus folder.",
       });
     }, timeoutMs);
 
@@ -67,7 +67,7 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
       resolve({
         ok: false,
         message: err.message,
-        detail: "Desktop shortcuts still work when the browser cannot launch scripts.",
+        detail: "Double-click Start-Argus.cmd in your Argus folder.",
       });
     });
     child.on("close", (code) => {
@@ -126,24 +126,6 @@ export async function refreshStatusAction(): Promise<ActionResult> {
   revalidatePath("/today");
   revalidatePath("/control");
   return { ok: true, message: "Status refreshed." };
-}
-
-export async function installDesktopShortcutsAction(): Promise<ActionResult> {
-  const res = await runPs1("install-desktop-shortcuts.ps1", 60_000);
-  if (res.ok) {
-    return {
-      ok: true,
-      message: "Desktop shortcuts installed: Start, Stop, Open, End Trading Day.",
-      detail: res.detail,
-    };
-  }
-  return {
-    ok: false,
-    message: "Could not install shortcuts from the browser.",
-    detail:
-      res.detail ||
-      "Download the installer from the link below and double-click it on this PC.",
-  };
 }
 
 function isImmutableConflict(err: unknown): boolean {

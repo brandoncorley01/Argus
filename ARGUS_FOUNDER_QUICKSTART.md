@@ -1,75 +1,25 @@
-# Argus Founder Quickstart
+# Argus — Founder quickstart
 
-Operate Argus **without Cursor**.
+## How to start
 
-**Home:** http://127.0.0.1:3000/today  
-**Paper trading:** Active path  
-**Live trading:** Locked
+1. Open your **Argus** folder in File Explorer
+2. Double-click **`Start-Argus.cmd`**
+3. Sign in at http://127.0.0.1:3000/today
 
-## One-time setup
+That is the whole daily start.
 
-1. Ensure `.env` exists.
-2. Bootstrap a Founder account if needed (`docs/architecture/AUTHENTICATION.md`).
-3. In File Explorer open your **Argus** folder and double-click:
+## How to stop
 
-**`Install-Argus-Desktop.cmd`**
+On the **Today** page, click **Stop Argus**.  
+Or double-click **`Stop-Argus.cmd`** in the Argus folder.
 
-(No browser needed. Argus does not have to be running.)
+## If the browser says “refused to connect”
 
-That adds Desktop icons: **Start Argus**, **Stop Argus**, **Open Argus**, **End Trading Day**.
-
-Or from PowerShell:
-
-```powershell
-.\scripts\control-center\install-desktop-shortcuts.ps1
-```
-
-### ARGUS — DAILY (use these)
-
-| Shortcut | What it does |
-| --- | --- |
-| **Start Argus** | Updates code, starts everything, opens Today |
-| **Open Argus** | Opens Today (needs Argus already started) |
-| **End Trading Day** | Report + backup (does not stop Argus) |
-| **Stop Argus** | Stops services; keeps your paper data |
-
-### ARGUS — TOOLS (optional)
-
-Status · Restart · Backup · Generate Daily Report
-
-If the browser says **refused to connect** on `127.0.0.1:3000`, Argus is stopped — double-click **Start Argus** on the Desktop (or **`Start-Argus.cmd`** in the Argus folder) first. Do not use `/get-desktop` until Argus is running.
-
-## Morning
-
-1. Double-click **Start Argus** (it updates itself from GitHub — you do not need to run git).
-2. Sign in
-3. On **Today**, use **Start Argus** / **Stop Argus** if you need them again
-4. Confirm status is **Running**
-
-## During the day
-
-- Stay on **Today** for Start / Stop / status
-- Use **Trading** / **Portfolio** / **Reports** only when you want detail
-- Ignore **Advanced** unless something is wrong
-
-## End of day
-
-1. **End Trading Day** (or the button on Today)
-2. **Stop Argus**
-
-A PC reboot alone does not load new Argus code. **Start Argus** does — that is the only step you need after updates.
-
-## Manual commands
-
-```powershell
-.\scripts\control-center\start-argus.ps1
-.\scripts\control-center\status-argus.ps1
-.\scripts\control-center\end-trading-day.ps1
-.\scripts\control-center\stop-argus.ps1
-```
+Argus is not running. Double-click **`Start-Argus.cmd`** again.  
+Do not look for a desktop installer.
 
 ## Notes
 
-- First start can take a few minutes
-- Logs: `runtime/control-center/*.log`
-- Live trading remains locked
+- **Start-Argus.cmd** updates code, starts Argus, and opens Today
+- Live trading stays locked
+- Paper data is kept when you stop

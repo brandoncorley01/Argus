@@ -538,53 +538,6 @@ table.data th {
   border-color: #732424;
 }
 
-.control-btn-desktop {
-  width: 100%;
-  min-height: 3.1rem;
-  font-size: 1.05rem;
-}
-
-.desktop-banner {
-  margin-bottom: 1rem;
-  border: 2px solid var(--accent);
-  background: var(--accent-soft);
-}
-
-.desktop-banner-login {
-  margin: 0 0 1.25rem;
-  padding: 1rem;
-  border: 2px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--accent-soft);
-}
-
-.desktop-download-cta {
-  display: inline-flex;
-  justify-content: center;
-  text-align: center;
-  text-decoration: none;
-}
-
-.desktop-download-panel {
-  width: min(520px, 100%);
-}
-
-.desktop-download-steps {
-  margin: 1.25rem 0 0;
-  padding-left: 1.2rem;
-  color: var(--ink-soft);
-  line-height: 1.55;
-}
-
-.desktop-download-steps code {
-  font-size: 0.85em;
-}
-
-.control-download-link {
-  color: var(--accent-deep);
-  text-decoration: underline;
-}
-
 .control-feedback-detail {
   display: block;
   margin-top: 0.25rem;
@@ -610,12 +563,6 @@ table.data th {
 
 .control-feedback.err {
   color: var(--bad);
-}
-
-.control-desktop-note {
-  margin: 1rem 0 0;
-  color: var(--muted);
-  font-size: 0.85rem;
 }
 
 .simple-row {
@@ -755,8 +702,7 @@ table.data th {
 
   .control-btn,
   .control-btn-start,
-  .control-btn-stop,
-  .control-btn-desktop {
+  .control-btn-stop {
     width: 100%;
   }
 }
