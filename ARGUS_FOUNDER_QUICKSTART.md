@@ -10,7 +10,15 @@ Operate Argus **without Cursor**.
 
 1. Ensure `.env` exists.
 2. Bootstrap a Founder account if needed (`docs/architecture/AUTHENTICATION.md`).
-3. Install shortcuts:
+3. In File Explorer open your **Argus** folder and double-click:
+
+**`Install-Argus-Desktop.cmd`**
+
+(No browser needed. Argus does not have to be running.)
+
+That adds Desktop icons: **Start Argus**, **Stop Argus**, **Open Argus**, **End Trading Day**.
+
+Or from PowerShell:
 
 ```powershell
 .\scripts\control-center\install-desktop-shortcuts.ps1
@@ -20,14 +28,16 @@ Operate Argus **without Cursor**.
 
 | Shortcut | What it does |
 | --- | --- |
-| **Start Argus** | Starts everything and opens Home |
-| **Open Argus** | Opens Home (status + Start/Stop) |
+| **Start Argus** | Updates code, starts everything, opens Today |
+| **Open Argus** | Opens Today (needs Argus already started) |
 | **End Trading Day** | Report + backup (does not stop Argus) |
 | **Stop Argus** | Stops services; keeps your paper data |
 
 ### ARGUS — TOOLS (optional)
 
 Status · Restart · Backup · Generate Daily Report
+
+If the browser says **refused to connect** on `127.0.0.1:3000`, Argus is stopped — double-click **Start Argus** first.
 
 ## Morning
 
