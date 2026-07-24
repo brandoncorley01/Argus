@@ -128,6 +128,24 @@ export async function refreshStatusAction(): Promise<ActionResult> {
   return { ok: true, message: "Status refreshed." };
 }
 
+export async function installDesktopShortcutsAction(): Promise<ActionResult> {
+  const res = await runPs1("install-desktop-shortcuts.ps1", 60_000);
+  if (res.ok) {
+    return {
+      ok: true,
+      message: "Desktop shortcuts installed: Start, Stop, Open, End Trading Day.",
+      detail: res.detail,
+    };
+  }
+  return {
+    ok: false,
+    message: "Could not install shortcuts from the browser.",
+    detail:
+      res.detail ||
+      "Download the installer from the link below and double-click it on this PC.",
+  };
+}
+
 function isImmutableConflict(err: unknown): boolean {
   if (!(err instanceof ApiClientError)) return false;
   const body = err.body as { detail?: { code?: string } | string } | null;

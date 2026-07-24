@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 
 import {
   backupArgusAction,
+  installDesktopShortcutsAction,
   refreshStatusAction,
   restartArgusAction,
   startArgusAction,
@@ -12,72 +13,51 @@ import {
   type ActionResult,
 } from "@/lib/actions/control";
 
-type Kind = "start" | "stop" | "restart" | "backup" | "refresh";
+function Feedback({ result }: { result: ActionResult | null }) {
+  if (!result) return null;
+  return (
+    <p className={`control-feedback ${result.ok ? "ok" : "err"}`} role="status">
+      {result.message}
+      {result.detail ? (
+        <span className="control-feedback-detail"> {result.detail.slice(0, 240)}</span>
+      ) : null}
+    </p>
+  );
+}
 
-const ACTIONS: Record<
-  Kind,
-  { label: string; busy: string; run: () => Promise<ActionResult>; className: string }
-> = {
-  start: {
-    label: "Start Argus",
-    busy: "Starting…",
-    run: startArgusAction,
-    className: "btn control-btn control-btn-start",
-  },
-  stop: {
-    label: "Stop Argus",
-    busy: "Stopping…",
-    run: stopArgusAction,
-    className: "btn secondary control-btn",
-  },
-  restart: {
-    label: "Restart",
-    busy: "Restarting…",
-    run: restartArgusAction,
-    className: "btn secondary control-btn",
-  },
-  backup: {
-    label: "Backup",
-    busy: "Backing up…",
-    run: backupArgusAction,
-    className: "btn secondary control-btn",
-  },
-  refresh: {
-    label: "Refresh status",
-    busy: "Refreshing…",
-    run: refreshStatusAction,
-    className: "btn secondary control-btn",
-  },
-};
-
-export function ControlButton({ kind }: { kind: Kind }) {
+function BigButton({
+  label,
+  busyLabel,
+  className,
+  run,
+}: {
+  label: string;
+  busyLabel: string;
+  className: string;
+  run: () => Promise<ActionResult>;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
-  const cfg = ACTIONS[kind];
 
   return (
     <div className="control-btn-wrap">
       <button
         type="button"
-        className={cfg.className}
+        className={className}
         disabled={pending}
         onClick={() => {
           setResult(null);
           startTransition(async () => {
-            const res = await cfg.run();
+            const res = await run();
             setResult(res);
             router.refresh();
           });
         }}
       >
-        {pending ? cfg.busy : cfg.label}
+        {pending ? busyLabel : label}
       </button>
-      {result ? (
-        <p className={`control-feedback ${result.ok ? "ok" : "err"}`} role="status">
-          {result.message}
-        </p>
-      ) : null}
+      <Feedback result={result} />
     </div>
   );
 }
@@ -101,31 +81,64 @@ export function ControlBar({
           </div>
         </div>
         <p className="control-hint">
-          {status === "Stopped"
-            ? "Press Start Argus to begin."
-            : status === "Attention"
-              ? "Something needs a look — then continue as usual."
-              : "Paper trading only. Live trading stays locked."}
+          Use <strong>Start</strong> and <strong>Stop</strong> below — or the same
+          icons on your Desktop after you install shortcuts.
         </p>
       </div>
 
-      <div className="control-actions">
-        {status === "Stopped" ? (
-          <ControlButton kind="start" />
-        ) : (
-          <>
-            <ControlButton kind="refresh" />
-            <ControlButton kind="stop" />
-          </>
-        )}
-        <ControlButton kind="restart" />
-        <ControlButton kind="backup" />
+      <div className="control-primary">
+        <BigButton
+          label="Start Argus"
+          busyLabel="Starting…"
+          className="btn control-btn control-btn-start"
+          run={startArgusAction}
+        />
+        <BigButton
+          label="Stop Argus"
+          busyLabel="Stopping…"
+          className="btn control-btn control-btn-stop"
+          run={stopArgusAction}
+        />
       </div>
 
-      <p className="control-desktop-note">
-        Prefer desktop? Use <strong>Start Argus</strong> / <strong>Stop Argus</strong>{" "}
-        shortcuts — same scripts as these buttons.
-      </p>
+      <div className="control-actions">
+        <BigButton
+          label="Refresh status"
+          busyLabel="Refreshing…"
+          className="btn secondary control-btn"
+          run={refreshStatusAction}
+        />
+        <BigButton
+          label="Restart"
+          busyLabel="Restarting…"
+          className="btn secondary control-btn"
+          run={restartArgusAction}
+        />
+        <BigButton
+          label="Backup"
+          busyLabel="Backing up…"
+          className="btn secondary control-btn"
+          run={backupArgusAction}
+        />
+      </div>
+
+      <div className="control-desktop-block">
+        <BigButton
+          label="Install desktop shortcuts"
+          busyLabel="Installing…"
+          className="btn control-btn control-btn-desktop"
+          run={installDesktopShortcutsAction}
+        />
+        <p className="control-desktop-note">
+          Puts <strong>Start Argus</strong>, <strong>Stop Argus</strong>,{" "}
+          <strong>Open Argus</strong>, and <strong>End Trading Day</strong> on your
+          Desktop. Or{" "}
+          <a className="control-download-link" href="/api/founder/desktop-installer">
+            download the installer
+          </a>{" "}
+          and double-click it.
+        </p>
+      </div>
     </section>
   );
 }
