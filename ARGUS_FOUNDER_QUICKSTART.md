@@ -31,21 +31,23 @@ Status · Restart · Backup · Generate Daily Report
 
 ## Morning
 
-1. Double-click **Start Argus**
+1. Double-click **Start Argus** (it updates itself from GitHub — you do not need to run git).
 2. Sign in
-3. On **Home**, confirm status is **Running**
-4. That’s it
+3. On **Today**, use **Start Argus** / **Stop Argus** if you need them again
+4. Confirm status is **Running**
 
 ## During the day
 
-- Stay on **Home** for Start / Stop / status
+- Stay on **Today** for Start / Stop / status
 - Use **Trading** / **Portfolio** / **Reports** only when you want detail
-- Ignore **Advanced…** unless something is wrong
+- Ignore **Advanced** unless something is wrong
 
 ## End of day
 
-1. **End Trading Day** (or the button on Home)
+1. **End Trading Day** (or the button on Today)
 2. **Stop Argus**
+
+A PC reboot alone does not load new Argus code. **Start Argus** does — that is the only step you need after updates.
 
 ## Manual commands
 

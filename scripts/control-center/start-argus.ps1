@@ -1,4 +1,4 @@
-# Start Argus Control Center — infra, API, worker, EOC; open Founder Dashboard.
+# Start Argus Control Center — update code, infra, API, worker, dashboard; open Today.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
@@ -14,6 +14,9 @@ try {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
   }
 
+  # You should not need to run git yourself — Start keeps the Founder UI current.
+  $updated = Sync-ArgusCode $Root
+
   & "$Root\scripts\infra-up.ps1"
   & "$Root\scripts\migrate-up.ps1"
 
@@ -21,6 +24,16 @@ try {
   $apiPid = $pids.api
   $eocPid = $pids.eoc
   $workerPid = $pids.worker
+
+  # After a code update, recycle dashboard (and API) so Today shows Start/Stop.
+  if ($updated) {
+    Write-Host "Code changed — refreshing API and dashboard processes..."
+    Stop-PidIfRunning $pids.eoc "EOC launcher"
+    Stop-PidIfRunning $pids.api "API launcher"
+    Stop-ArgusPortListeners @(8000, 3000)
+    $apiPid = $null
+    $eocPid = $null
+  }
 
   if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
     Write-Host "Starting API on 127.0.0.1:8000..."
@@ -40,10 +53,16 @@ try {
     Write-Host "Worker already running"
   }
 
-  if (-not (Test-HttpOk (Get-ArgusDashboardUrl) 2)) {
-    $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/")
-    if (-not $eocUp) {
-      Write-Host "Starting EOC on 127.0.0.1:3000..."
+  # Always prefer a fresh dashboard after update; otherwise start if down.
+  $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl) 2)
+  if ($updated -or -not $eocUp) {
+    if ($eocUp -and -not $updated) {
+      Write-Host "EOC already responding"
+    } else {
+      if ($eocUp) {
+        Stop-ArgusPortListeners @(3000)
+      }
+      Write-Host "Starting dashboard on 127.0.0.1:3000..."
       $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
       $envBlock = "`$env:ARGUS_API_BASE_URL='http://127.0.0.1:8000'"
       $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
@@ -51,8 +70,6 @@ try {
         "Set-Location '$Root'; $envBlock; pnpm eoc:dev *> '$eocLog'"
       )
       $eocPid = $eocProc.Id
-    } else {
-      Write-Host "EOC already responding"
     }
   } else {
     Write-Host "EOC already responding"
@@ -66,13 +83,13 @@ try {
   while ((Get-Date) -lt $deadline) {
     if ((Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl))) {
       $okEoc = $true
-      Write-Host "OK  EOC ready (http://127.0.0.1:3000)"
+      Write-Host "OK  Dashboard ready ($(Get-ArgusDashboardUrl))"
       break
     }
     Start-Sleep -Seconds 2
   }
   if (-not $okEoc) {
-    Write-Host "FAIL EOC not ready within 120s"
+    Write-Host "FAIL Dashboard not ready within 120s"
   }
 
   if (-not ($okApi -and $okEoc)) {
@@ -80,7 +97,7 @@ try {
   }
 
   $dash = Get-ArgusDashboardUrl
-  Write-Host "Opening Founder Dashboard: $dash"
+  Write-Host "Opening Today: $dash"
   Start-Process $dash
   Write-Host "=== Argus started ==="
 } catch {

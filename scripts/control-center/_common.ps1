@@ -32,6 +32,58 @@ function Get-ArgusApiReadyUrl {
   return "http://127.0.0.1:8000/ready"
 }
 
+function Sync-ArgusCode([string]$Root) {
+  # Founder-friendly: Start Argus updates itself. Never block startup if offline.
+  if (-not (Test-Path (Join-Path $Root ".git"))) {
+    Write-Host "Code update skipped (not a git checkout)."
+    return $false
+  }
+  Write-Host "Updating Argus from GitHub (so Start/Stop on Today stay current)..."
+  Push-Location $Root
+  try {
+    $null = git rev-parse --abbrev-ref HEAD 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: git unavailable — continuing with local files."
+      return $false
+    }
+    $branch = (git rev-parse --abbrev-ref HEAD).Trim()
+    git fetch origin 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: could not reach GitHub — continuing with local files."
+      return $false
+    }
+    git pull --ff-only "origin" $branch 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: could not fast-forward ($branch) — continuing with local files."
+      return $false
+    }
+    Write-Host "OK  Code up to date on branch $branch"
+    return $true
+  } catch {
+    Write-Host "WARN: code update skipped: $($_.Exception.Message)"
+    return $false
+  } finally {
+    Pop-Location
+  }
+}
+
+function Stop-ArgusPortListeners([int[]]$Ports) {
+  foreach ($port in $Ports) {
+    try {
+      $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+      foreach ($c in $conns) {
+        if ($c.OwningProcess) {
+          Write-Host "Recycling process on port $port (PID $($c.OwningProcess))"
+          Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+        }
+      }
+    } catch {
+      # Ignore when Get-NetTCPConnection is unavailable
+    }
+  }
+  Start-Sleep -Milliseconds 600
+}
+
 function Test-HttpOk([string]$Url, [int]$TimeoutSec = 3) {
   try {
     $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec
