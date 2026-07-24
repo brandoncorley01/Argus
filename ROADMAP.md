@@ -5,7 +5,7 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Current release target
 
-**Founder Release Candidate (RC1) — Sprint 5** — daily Founder paper operation without Cursor.
+**Founder RC1 — Daily Paper Operation (Sprint 5)** — Founder paper operation without Cursor.
 
 **v0.1 Foundation** — smallest complete institutional control plane (Phases 0–15 complete; Phase 16 planned).
 

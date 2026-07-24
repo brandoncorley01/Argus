@@ -5,7 +5,7 @@ import { roleLabel } from "@/lib/rbac";
 import type { CurrentUser } from "@/lib/types";
 
 const NAV = [
-  { href: "/overview", label: "Executive Overview" },
+  { href: "/overview", label: "Founder Dashboard" },
   { href: "/operations", label: "Operations" },
   { href: "/system-health", label: "System Health" },
   { href: "/services", label: "Services" },

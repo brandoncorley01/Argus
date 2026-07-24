@@ -4,7 +4,7 @@
  */
 export const FOUNDER_MILESTONE = {
   id: "founder-rc1",
-  label: "Founder Release Candidate (RC1)",
+  label: "Founder RC1 — Daily Paper Operation",
   sprint: "Sprint 5",
   phasesComplete: 15,
   phasesTotal: 16,

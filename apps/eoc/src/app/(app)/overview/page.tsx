@@ -247,19 +247,19 @@ export default async function OverviewPage() {
             }
             hint={
               portfolio
-                ? `${portfolio.name} · ${portfolio.status}`
+                ? `${portfolio.name} · ${portfolio.status} · ${openPositionRows.length} open`
                 : "No paper portfolios"
             }
           />
         </Panel>
         <Panel className="rise-delay-2">
           <Metric
-            label="Today's P&L"
+            label="Paper P&L"
             value={todayPnl ?? "—"}
             hint={
               todayPnl != null
-                ? `Report ${reportDate ?? ""}${todayTrades != null ? ` · ${todayTrades} fills` : ""}`
-                : "Generate a daily report when ready"
+                ? `Report date ${reportDate ?? ""}${todayTrades != null ? ` · ${todayTrades} fills` : ""}`
+                : "From latest daily paper report (not live)"
             }
           />
         </Panel>

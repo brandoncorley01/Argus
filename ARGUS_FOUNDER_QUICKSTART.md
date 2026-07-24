@@ -2,7 +2,7 @@
 
 Operate Argus **without Cursor**. GitHub remains the source of truth for code; the Control Center and Founder Dashboard are how you run paper trading day to day.
 
-**Milestone:** Founder Release Candidate (RC1) — Sprint 5  
+**Milestone:** Founder RC1 — Daily Paper Operation (Sprint 5)  
 **Provider:** `internal_paper`  
 **Live trading:** Disabled (not certified)  
 **Dashboard:** http://127.0.0.1:3000/overview  
@@ -46,7 +46,7 @@ Shortcuts created:
 
 ## During the day
 
-- Use **Open Argus Dashboard** for portfolio summary, open positions, today's P&L, and active alerts.
+- Use **Open Argus Dashboard** for portfolio summary, open positions, paper P&L, and active alerts.
 - Generate a daily paper report from the dashboard form (or the desktop shortcut).
 - System Health holds runtime monitor, backup integrity, workers, and incident history.
 - Cursor may be used for other projects — Argus does not require it to stay open.
