@@ -6,6 +6,16 @@
 2. Sign in
 3. On **Home**, press **Start Argus** or **Stop Argus**
 
-That is the whole product flow.
+You should see **UI build: home-start-stop-v1** at the bottom of Home.
+
+## If Home still looks old (no Start / Stop)
+
+Paste this in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/force-home-update.ps1 | iex
+```
+
+That pulls GitHub `main`, restarts Argus, and opens the new Home.
 
 Live trading stays locked. Paper data is kept when you stop.
