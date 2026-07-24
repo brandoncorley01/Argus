@@ -28,17 +28,38 @@ if (-not $Root) {
 Write-Host "Argus folder: $Root"
 Set-Location $Root
 
+# Keep secrets and local runtime; discard stale UI that blocks GitHub main.
+$preserve = @(".env", ".env.paper", ".env.local")
+foreach ($name in $preserve) {
+  if (Test-Path (Join-Path $Root $name)) {
+    Write-Host "Keeping $name"
+  }
+}
+
 git fetch origin
 if ($LASTEXITCODE -ne 0) { throw "git fetch failed — check internet / GitHub access." }
 
-git checkout -B main origin/main
-if ($LASTEXITCODE -ne 0) { throw "Could not checkout origin/main." }
+Write-Host "Clearing local UI conflicts so GitHub main can load..."
+# Drop modified tracked files and untracked Founder pages that blocked checkout.
+git reset --hard HEAD 2>&1 | Out-Host
+git clean -fd 2>&1 | Out-Host
 
-git reset --hard origin/main
-if ($LASTEXITCODE -ne 0) { throw "Could not reset to origin/main." }
+git checkout -f -B main origin/main
+if ($LASTEXITCODE -ne 0) {
+  # Last resort: point branch at origin/main even if checkout complained.
+  git symbolic-ref HEAD refs/heads/main 2>&1 | Out-Host
+  git reset --hard origin/main
+  if ($LASTEXITCODE -ne 0) { throw "Could not reset to origin/main." }
+} else {
+  git reset --hard origin/main
+  if ($LASTEXITCODE -ne 0) { throw "Could not reset to origin/main." }
+}
+
+git clean -fd 2>&1 | Out-Host
 
 $sha = (git rev-parse --short HEAD).Trim()
-Write-Host "OK  Now on main @ $sha"
+$branch = (git rev-parse --abbrev-ref HEAD).Trim()
+Write-Host "OK  Now on $branch @ $sha"
 
 # Stop anything on the dashboard port so the new UI can load.
 foreach ($port in @(3000)) {
@@ -54,6 +75,10 @@ foreach ($port in @(3000)) {
 }
 
 $starter = Join-Path $Root "scripts\control-center\start-argus.ps1"
+if (-not (Test-Path $starter)) {
+  throw "Start script missing after update: $starter"
+}
+
 Write-Host "Starting Argus with updated Home..."
 & $starter
 
