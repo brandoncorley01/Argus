@@ -3,29 +3,63 @@ import path from "node:path";
 
 /**
  * Downloadable Windows installer for Founder desktop shortcuts.
- * Embeds the absolute repo path so double-click works from Downloads.
+ * Searches common Argus locations so the download works even if the
+ * server-side path differs from this PC.
  */
 export async function GET() {
   const root = process.env.ARGUS_REPO_ROOT
     ? process.env.ARGUS_REPO_ROOT
     : path.resolve(process.cwd(), "..", "..");
-  const installer = path.join(root, "scripts", "control-center", "install-desktop-shortcuts.ps1");
-  // CMD-safe quoted path (escape embedded double-quotes if any)
-  const quoted = `"${installer.replace(/"/g, "")}"`;
+  const preferred = path
+    .join(root, "scripts", "control-center", "install-desktop-shortcuts.ps1")
+    .replace(/"/g, "");
 
   const cmd = `@echo off
+setlocal EnableExtensions
 title Install Argus Desktop Shortcuts
-echo Installing Argus Start / Stop / Open / End Trading Day shortcuts...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${quoted}
-if errorlevel 1 (
+echo.
+echo === Argus desktop installer ===
+echo This puts Start Argus and Stop Argus on your Desktop.
+echo.
+
+set "INSTALLER="
+if exist "${preferred}" set "INSTALLER=${preferred}"
+
+if not defined INSTALLER if exist "%USERPROFILE%\\OneDrive\\Desktop\\Argus\\scripts\\control-center\\install-desktop-shortcuts.ps1" (
+  set "INSTALLER=%USERPROFILE%\\OneDrive\\Desktop\\Argus\\scripts\\control-center\\install-desktop-shortcuts.ps1"
+)
+if not defined INSTALLER if exist "%USERPROFILE%\\Desktop\\Argus\\scripts\\control-center\\install-desktop-shortcuts.ps1" (
+  set "INSTALLER=%USERPROFILE%\\Desktop\\Argus\\scripts\\control-center\\install-desktop-shortcuts.ps1"
+)
+if not defined INSTALLER if exist "%USERPROFILE%\\OneDrive\\Documents\\Argus\\scripts\\control-center\\install-desktop-shortcuts.ps1" (
+  set "INSTALLER=%USERPROFILE%\\OneDrive\\Documents\\Argus\\scripts\\control-center\\install-desktop-shortcuts.ps1"
+)
+
+if not defined INSTALLER (
+  echo Could not find Argus on this PC.
+  echo Expected a folder named Argus with scripts\\control-center inside.
   echo.
-  echo Install failed. Open PowerShell in the Argus folder and run:
-  echo   .\\scripts\\control-center\\install-desktop-shortcuts.ps1
   pause
   exit /b 1
 )
+
+echo Found: %INSTALLER%
+echo Installing shortcuts...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER%"
+if errorlevel 1 (
+  echo.
+  echo Install failed.
+  pause
+  exit /b 1
+)
+
 echo.
-echo Done. Check your Desktop for Start Argus and Stop Argus.
+echo Done. Check your Desktop for:
+echo   Start Argus
+echo   Stop Argus
+echo   Open Argus
+echo   End Trading Day
+echo.
 pause
 `;
 

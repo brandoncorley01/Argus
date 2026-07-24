@@ -544,10 +544,40 @@ table.data th {
   font-size: 1.05rem;
 }
 
-.control-desktop-block {
-  margin-top: 1.1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--line);
+.desktop-banner {
+  margin-bottom: 1rem;
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.desktop-banner-login {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.desktop-download-cta {
+  display: inline-flex;
+  justify-content: center;
+  text-align: center;
+  text-decoration: none;
+}
+
+.desktop-download-panel {
+  width: min(520px, 100%);
+}
+
+.desktop-download-steps {
+  margin: 1.25rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+.desktop-download-steps code {
+  font-size: 0.85em;
 }
 
 .control-download-link {

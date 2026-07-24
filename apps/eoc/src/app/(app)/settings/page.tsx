@@ -4,8 +4,8 @@ import Link from "next/link";
 import { ControlBar } from "@/components/founder/ControlBar";
 import { PageHeader, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
-import { getProcessReady, soft } from "@/lib/server/control-plane";
 import { deriveStatus } from "@/lib/founder/simple";
+import { getProcessReady, soft } from "@/lib/server/control-plane";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -28,24 +28,26 @@ export default async function SettingsPage() {
 
       <ControlBar status={status} />
 
-      <Panel title="Desktop shortcuts">
-        <p className="muted-note" style={{ marginTop: 0 }}>
-          Prefer icons on your Desktop? Use <strong>Install desktop shortcuts</strong>{" "}
-          above, or download{" "}
-          <a href="/api/founder/desktop-installer">Install-Argus-Desktop.cmd</a> and
-          double-click it.
-        </p>
+      <Panel title="What the installer adds">
         <ul className="plain-list">
           <li>Start Argus</li>
           <li>Stop Argus</li>
           <li>Open Argus</li>
           <li>End Trading Day</li>
         </ul>
+        <div className="form-actions" style={{ marginTop: "0.75rem" }}>
+          <a className="btn" href="/api/founder/desktop-installer" download>
+            Download desktop installer
+          </a>
+        </div>
       </Panel>
 
       <div className="form-actions" style={{ marginTop: "1rem" }}>
-        <Link className="btn" href="/today">
+        <Link className="btn secondary" href="/today">
           Back to Today
+        </Link>
+        <Link className="btn secondary" href="/get-desktop">
+          Open download page
         </Link>
       </div>
     </>
