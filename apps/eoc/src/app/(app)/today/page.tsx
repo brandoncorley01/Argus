@@ -14,6 +14,7 @@ import {
   pnlClass,
 } from "@/lib/founder/simple";
 import { apiFetch } from "@/lib/server/api";
+import { ARGUS_UI_BUILD } from "@/lib/build";
 import {
   getIncidents,
   getMicroLiveStatus,
@@ -179,6 +180,10 @@ export default async function TodayPage() {
           <EndDayButton />
         </Panel>
       </div>
+
+      <p className="muted-note" style={{ marginTop: "1.5rem" }}>
+        UI build: {ARGUS_UI_BUILD}
+      </p>
     </div>
   );
 }
