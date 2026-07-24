@@ -20,6 +20,13 @@ try {
   # You should not need to run git yourself — Start keeps the Founder UI current.
   $updated = Sync-ArgusCode $Root
 
+  # Drop stale Next.js cache so Home Start/Stop cannot be masked by old builds.
+  $nextCache = Join-Path $Root "apps\eoc\.next"
+  if ($updated -and (Test-Path $nextCache)) {
+    Write-Host "Clearing stale dashboard cache..."
+    Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
   & "$Root\scripts\infra-up.ps1"
   & "$Root\scripts\migrate-up.ps1"
 
