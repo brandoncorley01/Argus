@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default async function LoginPage() {
   try {
     await apiFetch<CurrentUser>("/api/v1/auth/me");
-    redirect("/overview");
+    redirect("/today");
   } catch {
     // show login
   }
@@ -22,8 +22,7 @@ export default async function LoginPage() {
       <div className="login-panel rise">
         <h1>Argus</h1>
         <p className="lede">
-          Executive Operations Center. Authenticate against the institutional
-          control plane. No fabricated status is shown here.
+          Sign in to run paper trading. Live trading stays locked.
         </p>
         <LoginForm />
       </div>

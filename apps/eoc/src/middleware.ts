@@ -11,6 +11,10 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/today/:path*",
+    "/trading/:path*",
+    "/portfolio/:path*",
+    "/reports/:path*",
     "/overview/:path*",
     "/operations/:path*",
     "/system-health/:path*",

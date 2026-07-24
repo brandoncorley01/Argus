@@ -9,6 +9,15 @@ export type ActionResult =
   | { ok: true; message?: string }
   | { ok: false; message: string };
 
+function alreadyExists(err: unknown): boolean {
+  if (!(err instanceof ApiClientError)) return false;
+  const body = err.body as { detail?: { code?: string } | string } | null;
+  if (body && typeof body === "object" && body.detail && typeof body.detail === "object") {
+    if (body.detail.code === "report_immutable") return true;
+  }
+  return err.message.toLowerCase().includes("immutable");
+}
+
 export async function generateDailyReportAction(
   formData: FormData,
 ): Promise<ActionResult> {
@@ -26,11 +35,16 @@ export async function generateDailyReportAction(
     );
     revalidatePath("/overview");
     revalidatePath("/system-health");
+    revalidatePath("/today");
+    revalidatePath("/reports");
     return {
       ok: true,
       message: `Daily paper report generated for ${report.report_date}.`,
     };
   } catch (err) {
+    if (alreadyExists(err)) {
+      return { ok: true, message: "A report already exists for this date." };
+    }
     if (err instanceof ApiClientError) {
       return { ok: false, message: err.message };
     }

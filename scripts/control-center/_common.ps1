@@ -21,7 +21,7 @@ function Get-ArgusPidFile([string]$Root) {
 }
 
 function Get-ArgusDashboardUrl {
-  return "http://127.0.0.1:3000/overview"
+  return "http://127.0.0.1:3000/today"
 }
 
 function Get-ArgusApiHealthUrl {

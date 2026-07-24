@@ -95,7 +95,7 @@ export async function loginAction(
     // Prefer raw getSetCookie if available for full lines
     const raw = res.headers.getSetCookie?.() ?? setCookies;
     await setSessionFromLogin(login, raw);
-    redirect("/overview");
+    redirect("/today");
   } catch (err) {
     if (err && typeof err === "object" && "digest" in err) {
       throw err; // Next.js redirect

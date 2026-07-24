@@ -10,7 +10,7 @@ export default async function AppLayout({
 }) {
   const user = await requireUser();
   const h = await headers();
-  const pathname = h.get("x-pathname") || h.get("x-url") || "/overview";
+  const pathname = h.get("x-pathname") || h.get("x-url") || "/today";
 
   return (
     <div className="app-shell">

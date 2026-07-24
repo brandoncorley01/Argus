@@ -165,6 +165,11 @@ export default async function OverviewPage() {
               : "Viewer dashboard"
         }
         description={`Signed in as ${user.username} (${roleLabel(role)}). Provider ${FOUNDER_MILESTONE.provider} · Live trading ${FOUNDER_MILESTONE.liveTrading}.`}
+        actions={
+          <Link className="btn" href="/today">
+            Back to Home (Start / Stop)
+          </Link>
+        }
       />
 
       <Panel title="Current milestone" className="rise">

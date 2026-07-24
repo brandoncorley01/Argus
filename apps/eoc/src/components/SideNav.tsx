@@ -1,26 +1,41 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
 
 import { logoutAction } from "@/lib/actions/auth";
 import { roleLabel } from "@/lib/rbac";
 import type { CurrentUser } from "@/lib/types";
 
-const NAV = [
-  { href: "/overview", label: "Founder Dashboard" },
-  { href: "/operations", label: "Operations" },
-  { href: "/system-health", label: "System Health" },
+const PRIMARY = [
+  { href: "/today", label: "Home" },
+  { href: "/trading", label: "Trading" },
+  { href: "/portfolio", label: "Portfolio" },
+  { href: "/reports", label: "Reports" },
+] as const;
+
+const ADVANCED = [
+  { href: "/overview", label: "Classic dashboard" },
+  { href: "/system-health", label: "System health" },
   { href: "/services", label: "Services" },
   { href: "/workers", label: "Workers" },
-  { href: "/incidents", label: "Incidents" },
-  { href: "/market", label: "Market Intelligence" },
-  { href: "/strategies", label: "Strategy Laboratory" },
-  { href: "/paper", label: "Paper Trading" },
-  { href: "/micro-live", label: "Micro-Live Institution" },
-  { href: "/treasury", label: "Treasury & Analytics" },
-  { href: "/audit", label: "Audit Explorer" },
-  { href: "/configurations", label: "Configurations" },
+  { href: "/operations", label: "Operating mode" },
+  { href: "/incidents", label: "Issues" },
+  { href: "/audit", label: "Audit" },
+  { href: "/paper", label: "Paper details" },
+  { href: "/micro-live", label: "Live controls" },
+  { href: "/market", label: "Market" },
+  { href: "/strategies", label: "Strategies" },
+  { href: "/treasury", label: "Treasury" },
+  { href: "/configurations", label: "Config" },
   { href: "/policies", label: "Policies" },
-  { href: "/administration", label: "Administration", founderOnly: true },
+  { href: "/administration", label: "Admin", founderOnly: true },
 ] as const;
+
+function current(pathname: string, href: string) {
+  if (href === "/today") return pathname === "/today" || pathname === "/";
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export function SideNav({
   user,
@@ -29,8 +44,14 @@ export function SideNav({
   user: CurrentUser;
   pathname: string;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(
+    () =>
+      !PRIMARY.some((p) => current(pathname, p.href)) &&
+      pathname !== "/today",
+  );
   const isFounder = user.roles.includes("FOUNDER");
-  const primary = user.roles.includes("FOUNDER")
+  const role = user.roles.includes("FOUNDER")
     ? "FOUNDER"
     : user.roles.includes("OPERATOR")
       ? "OPERATOR"
@@ -40,37 +61,78 @@ export function SideNav({
     <aside className="side-nav" aria-label="Primary">
       <div className="brand">
         <div className="brand-mark">Argus</div>
-        <div className="brand-sub">Executive Operations Center</div>
+        <div className="brand-sub">Daily paper trading</div>
       </div>
-      <ul className="nav-list">
-        {NAV.filter((item) => !("founderOnly" in item && item.founderOnly) || isFounder).map(
-          (item) => {
-            const current =
-              pathname === item.href || pathname.startsWith(`${item.href}/`);
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className="nav-link"
-                  aria-current={current ? "page" : undefined}
-                >
-                  {item.label}
-                </Link>
-              </li>
-            );
-          },
-        )}
-      </ul>
-      <div className="nav-meta">
-        <div>
-          <strong>{user.username}</strong>
+
+      <button
+        type="button"
+        className="mobile-nav-toggle"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((v) => !v)}
+      >
+        {menuOpen ? "Close" : "Menu"}
+      </button>
+
+      <div className={`nav-collapse ${menuOpen ? "is-open" : ""}`}>
+        <ul className="nav-list">
+          {PRIMARY.map((item) => (
+            <li key={item.href}>
+              <Link
+                href={item.href}
+                className="nav-link"
+                aria-current={current(pathname, item.href) ? "page" : undefined}
+                onClick={() => setMenuOpen(false)}
+              >
+                {item.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+
+        <button
+          type="button"
+          className="nav-advanced-toggle"
+          aria-expanded={showAdvanced}
+          onClick={() => setShowAdvanced((v) => !v)}
+        >
+          {showAdvanced ? "Hide advanced" : "Advanced…"}
+        </button>
+
+        {showAdvanced ? (
+          <>
+            <ul className="nav-list nav-list-advanced">
+              {ADVANCED.filter(
+                (i) => !("founderOnly" in i && i.founderOnly) || isFounder,
+              ).map((item) => (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    className="nav-link"
+                    aria-current={current(pathname, item.href) ? "page" : undefined}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    {item.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <Link href="/today" className="btn secondary nav-back" onClick={() => setMenuOpen(false)}>
+              Back to Home
+            </Link>
+          </>
+        ) : null}
+
+        <div className="nav-meta">
+          <div>
+            <strong>{user.username}</strong>
+          </div>
+          <div>{roleLabel(role)}</div>
+          <form action={logoutAction} style={{ marginTop: "0.75rem" }}>
+            <button type="submit" className="btn secondary">
+              Sign out
+            </button>
+          </form>
         </div>
-        <div>{roleLabel(primary)}</div>
-        <form action={logoutAction} style={{ marginTop: "0.75rem" }}>
-          <button type="submit" className="btn secondary">
-            Sign out
-          </button>
-        </form>
       </div>
     </aside>
   );
