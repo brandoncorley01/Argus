@@ -22,7 +22,7 @@ import {
   soft,
 } from "@/lib/server/control-plane";
 
-export const metadata: Metadata = { title: "Home" };
+export const metadata: Metadata = { title: "Today" };
 
 type SystemHealth = {
   overall_status: string;
@@ -31,6 +31,7 @@ type SystemHealth = {
   backup?: { available: boolean; integrity_ok?: boolean | null; completed_at?: string | null };
   worker_instances?: Array<{ status: string }>;
   process_started_at?: string;
+  generated_at?: string;
 };
 
 type Portfolio = {
@@ -45,6 +46,7 @@ type Position = {
   quantity: string;
   unrealized_pnl?: string | null;
   realized_pnl?: string | null;
+  average_cost?: string;
 };
 
 type DailyReport = {
@@ -104,63 +106,92 @@ export default async function TodayPage() {
 
   const pnl = reports?.[0]?.content?.daily_pnl ?? null;
   const reportDate = reports?.[0]?.report_date;
+  const cash = portfolio ? Number(portfolio.cash_balance) : NaN;
+  const deployed = open.reduce((s, p) => {
+    const qty = Math.abs(Number(p.quantity) || 0);
+    const cost = Number(p.average_cost) || 0;
+    return s + qty * cost;
+  }, 0);
+  const unrealized = open.reduce((s, p) => s + (Number(p.unrealized_pnl) || 0), 0);
+  const portfolioValue =
+    Number.isFinite(cash) ? cash + deployed + unrealized : null;
 
   const attention: string[] = [];
-  if (ready == null) attention.push("Argus is stopped — press Start Argus.");
+  if (ready == null) attention.push("Argus looks stopped — press Start Argus.");
   if (portfolio?.kill_switch_active) attention.push("Paper trading is paused.");
   if (workerFailed) attention.push("A background service needs attention — try Restart.");
-  if (health?.backup?.integrity_ok === false) attention.push("Last backup failed — press Backup.");
+  if (health?.backup?.integrity_ok === false) {
+    attention.push("Last backup failed — press Backup.");
+  }
   if (criticalAlerts > 0) attention.push("There are unresolved alerts.");
 
   return (
     <div className="founder-home">
       <header className="page-header rise">
         <div>
-          <h1>{greeting(name)}</h1>
-          <p>Start, stop, and check Argus here. Everything else is secondary.</p>
+          <h1>{greeting(name)}.</h1>
+          <p>Start and Stop Argus here. Everything else is secondary.</p>
         </div>
       </header>
 
+      {/* Start / Stop are intentionally first — above summary cards */}
       <ControlBar status={status} />
 
       <div className="simple-row">
         <div className="simple-chip">
+          <span className="metric-label">Argus</span>
+          <StatusBadge
+            status={
+              status === "Running" ? "healthy" : status === "Stopped" ? "unhealthy" : "degraded"
+            }
+            label={
+              status === "Running"
+                ? "Running"
+                : status === "Stopped"
+                  ? "Stopped"
+                  : "Attention needed"
+            }
+          />
+        </div>
+        <div className="simple-chip">
           <span className="metric-label">Paper trading</span>
-          <strong>{portfolio?.kill_switch_active ? "Paused" : ready ? "Active" : "—"}</strong>
+          <StatusBadge
+            status={portfolio?.kill_switch_active ? "degraded" : ready ? "healthy" : null}
+            label={portfolio?.kill_switch_active ? "Paused" : ready ? "Active" : "Unavailable"}
+          />
         </div>
         <div className="simple-chip">
           <span className="metric-label">Live trading</span>
-          <strong>{liveLocked ? "Locked" : "Check Advanced"}</strong>
+          <StatusBadge status={null} label={liveLocked ? "Locked" : "Check Advanced"} />
         </div>
         <div className="simple-chip">
-          <span className="metric-label">Last update</span>
-          <strong>{formatTimestamp(health?.process_started_at ?? null)}</strong>
+          <span className="metric-label">Last updated</span>
+          <strong>
+            {formatTimestamp(health?.generated_at ?? health?.process_started_at ?? null)}
+          </strong>
+        </div>
+      </div>
+
+      <div className="simple-row" style={{ marginTop: "0.75rem" }}>
+        <div className="simple-chip">
+          <span className="metric-label">Today&apos;s P&amp;L</span>
+          <strong className={pnlClass(pnl)}>{money(pnl)}</strong>
+        </div>
+        <div className="simple-chip">
+          <span className="metric-label">Portfolio value</span>
+          <strong>{portfolioValue == null ? "Unavailable" : money(portfolioValue)}</strong>
+        </div>
+        <div className="simple-chip">
+          <span className="metric-label">Open positions</span>
+          <strong>{open.length}</strong>
+        </div>
+        <div className="simple-chip">
+          <span className="metric-label">Paper cash</span>
+          <strong>{portfolio ? money(portfolio.cash_balance) : "Unavailable"}</strong>
         </div>
       </div>
 
       <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Today">
-          <div className="metric">
-            <span className="metric-label">P&amp;L</span>
-            <span className={`metric-value ${pnlClass(pnl)}`}>{money(pnl)}</span>
-            <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
-              {pnl != null
-                ? `From report ${reportDate ?? ""}`
-                : "No report yet — use End Trading Day or Reports"}
-            </span>
-          </div>
-          <div className="metric" style={{ marginTop: "1rem" }}>
-            <span className="metric-label">Cash</span>
-            <span className="metric-value">
-              {portfolio ? money(portfolio.cash_balance) : "Unavailable"}
-            </span>
-          </div>
-          <div className="metric" style={{ marginTop: "1rem" }}>
-            <span className="metric-label">Open positions</span>
-            <span className="metric-value">{open.length}</span>
-          </div>
-        </Panel>
-
         <Panel title="Do I need to do anything?">
           {attention.length === 0 ? (
             <p className="attention-ok">All clear. No action needed.</p>
@@ -176,11 +207,16 @@ export default async function TodayPage() {
               <StatusBadge status={a.severity} label={a.severity} /> {a.description}
             </p>
           ))}
+          {pnl == null ? (
+            <p className="muted-note" style={{ marginTop: "0.75rem" }}>
+              No daily report yet
+              {reportDate ? ` (latest on file: ${reportDate})` : ""}. Use End Trading Day
+              when you finish.
+            </p>
+          ) : null}
         </Panel>
-      </div>
 
-      <div style={{ marginTop: "1rem" }}>
-        <Panel title="Open positions" className="rise-delay-2">
+        <Panel title="Open positions">
           {open.length === 0 ? (
             <EmptyState>No open positions.</EmptyState>
           ) : (
@@ -219,7 +255,7 @@ export default async function TodayPage() {
       </div>
 
       <div style={{ marginTop: "1rem" }}>
-        <Panel title="End of day" className="rise-delay-3">
+        <Panel title="End of day">
           <p style={{ color: "var(--ink-soft)", marginTop: 0 }}>
             Creates or confirms today&apos;s report, then runs backup. Does not stop Argus
             and does not close positions.

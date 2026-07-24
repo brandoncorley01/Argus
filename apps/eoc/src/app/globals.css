@@ -425,14 +425,18 @@ table.data th {
   min-height: 0;
 }
 
-.nav-advanced-toggle {
+.nav-link-button {
+  width: 100%;
+  text-align: left;
   border: none;
   background: transparent;
-  color: var(--muted);
-  text-align: left;
-  padding: 0.35rem 0.7rem;
   cursor: pointer;
-  font-size: 0.85rem;
+  font: inherit;
+}
+
+.nav-link-button:hover {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
 }
 
 .nav-list-advanced {
@@ -446,6 +450,15 @@ table.data th {
 
 .control-bar {
   margin-bottom: 1rem;
+}
+
+.control-bar-title {
+  margin: 0 0 0.85rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 600;
 }
 
 .control-status-row {

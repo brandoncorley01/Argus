@@ -69,9 +69,10 @@ export function ControlBar({
 }) {
   return (
     <section className="control-bar panel" aria-label="Argus controls">
+      <h2 className="control-bar-title">Start / Stop Argus</h2>
       <div className="control-status-row">
         <div>
-          <div className="metric-label">Argus</div>
+          <div className="metric-label">Status right now</div>
           <div className={`control-status control-status-${status.toLowerCase()}`}>
             {status === "Running"
               ? "Running"
@@ -81,8 +82,8 @@ export function ControlBar({
           </div>
         </div>
         <p className="control-hint">
-          Use <strong>Start</strong> and <strong>Stop</strong> below — or the same
-          icons on your Desktop after you install shortcuts.
+          These two buttons are how you run Argus day to day. Desktop shortcuts
+          do the same thing.
         </p>
       </div>
 

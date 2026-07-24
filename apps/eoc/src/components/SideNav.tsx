@@ -8,10 +8,11 @@ import { roleLabel } from "@/lib/rbac";
 import type { CurrentUser } from "@/lib/types";
 
 const PRIMARY = [
-  { href: "/today", label: "Home" },
+  { href: "/today", label: "Today" },
   { href: "/trading", label: "Trading" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/reports", label: "Reports" },
+  { href: "/settings", label: "Settings" },
 ] as const;
 
 const ADVANCED = [
@@ -45,11 +46,8 @@ export function SideNav({
   pathname: string;
 }) {
   const [menuOpen, setMenuOpen] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(
-    () =>
-      !PRIMARY.some((p) => current(pathname, p.href)) &&
-      pathname !== "/today",
-  );
+  const onAdvancedRoute = !PRIMARY.some((p) => current(pathname, p.href));
+  const [showAdvanced, setShowAdvanced] = useState(onAdvancedRoute);
   const isFounder = user.roles.includes("FOUNDER");
   const role = user.roles.includes("FOUNDER")
     ? "FOUNDER"
@@ -61,7 +59,7 @@ export function SideNav({
     <aside className="side-nav" aria-label="Primary">
       <div className="brand">
         <div className="brand-mark">Argus</div>
-        <div className="brand-sub">Daily paper trading</div>
+        <div className="brand-sub">Founder dashboard</div>
       </div>
 
       <button
@@ -87,16 +85,17 @@ export function SideNav({
               </Link>
             </li>
           ))}
+          <li>
+            <button
+              type="button"
+              className="nav-link nav-link-button"
+              aria-expanded={showAdvanced}
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              Advanced
+            </button>
+          </li>
         </ul>
-
-        <button
-          type="button"
-          className="nav-advanced-toggle"
-          aria-expanded={showAdvanced}
-          onClick={() => setShowAdvanced((v) => !v)}
-        >
-          {showAdvanced ? "Hide advanced" : "Advanced…"}
-        </button>
 
         {showAdvanced ? (
           <>
@@ -116,8 +115,12 @@ export function SideNav({
                 </li>
               ))}
             </ul>
-            <Link href="/today" className="btn secondary nav-back" onClick={() => setMenuOpen(false)}>
-              Back to Home
+            <Link
+              href="/today"
+              className="btn secondary nav-back"
+              onClick={() => setMenuOpen(false)}
+            >
+              Back to Today
             </Link>
           </>
         ) : null}
