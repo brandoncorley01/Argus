@@ -1,5 +1,6 @@
-# Argus Phase 1 — local infrastructure foundation
-# Postgres 16 + Redis 7. No application schemas.
+# Argus local infrastructure foundation
+# Postgres 16 + Redis 7. Optional Phase 8 health supervisor worker (profile: workers).
+# The FastAPI API continues to run locally with uvicorn (not containerized here).
 
 name: argus
 
@@ -40,6 +41,26 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  health_supervisor:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    container_name: argus-health-supervisor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Inside Compose, talk to service DNS names (host .env URLs use 127.0.0.1).
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      ARGUS_WORKER_INSTANCE_KEY: compose-health-supervisor-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["workers"]
 
 volumes:
   argus_postgres_data:

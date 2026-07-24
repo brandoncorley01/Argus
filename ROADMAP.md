@@ -5,7 +5,9 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Current release target
 
-**v0.1 Foundation** — smallest complete institutional control plane.
+**Founder RC1 — Daily Paper Operation (Sprint 5)** — Founder paper operation without Cursor.
+
+**v0.1 Foundation** — smallest complete institutional control plane (Phases 0–15 complete; Phase 16 planned).
 
 | Phase | Status | Scope |
 | --- | --- | --- |
@@ -17,9 +19,15 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 | 5 — Authentication & RBAC | Done | Server-side sessions, Argon2id, CSRF, lockout, Founder bootstrap |
 | 6 — Config & policy versioning APIs | Done | Lifecycle versions, hash integrity, atomic activate, APIs + audit |
 | 7 — Operating-mode state machine | Done | Governed modes; PAPER/MICRO_LIVE/NORMAL_LIVE unavailable; emergency fail-closed |
-| 8 — Health supervisor (ARQ) | Planned | Meaningful health events; degrade → `SAFE_MODE` |
-| 9 — Executive Operations Center | Planned | Next.js operator UI (status, audit, mode) — no fake dashboards |
-| 10 — Hardening & CI | Planned | GitHub Actions, acceptance pack |
+| 8 — Health supervisor (ARQ) | Done | Governed registry, heartbeats, supervisor lease, incidents, SYSTEM SAFE_MODE |
+| 9 — Executive Operations Center | Done | Next.js EOC: auth bridge, role dashboards, ops/health/incidents/audit/config/policy |
+| 10 — Market Intelligence Platform | Done | Observation-only multi-provider intelligence (no trading/signals) |
+| 11 — Strategy Laboratory | Done | Versioned strategies, deterministic research engines, validation — no live trading |
+| 12 — Paper Trading Institution | Done | Internal paper execution provider + gateway (no brokerage account required) |
+| 13 — Micro-Live Institution | Done | Deny-by-default live-execution architecture; live trading disabled; no credentials required |
+| 14 — Treasury and Executive Analytics | Done | Simulated-ledger treasury, capital allocations, executive KPIs/attribution/forecasts/reports; external transfer execution structurally forbidden |
+| 15 — Operational Validation | Complete and Verified | System Health, ops events, host metrics, daily paper reports — verified locally Sprint 2 |
+| 16 — Hardening & CI follow-ups | Planned | Remote CI observation, multi-week soak tooling as needed |
 
 ## Explicitly out of scope (v0.1)
 
@@ -31,12 +39,13 @@ Capital preservation comes before profit. Live trading stays disabled until expl
 
 ## Near-term sequence
 
-1. Review/commit Phase 7 on `phase-7-operating-mode-state-machine` when Founder authorizes
-2. Phase 8 health supervisor worker
-3. Executive Operations Center once control-plane APIs are trustworthy
+1. Merge Phase 8–15 when Founder authorizes (stacked branches; keep phases identifiable)
+2. Observe GitHub Actions CI green on remote; optional multi-week paper soak
 
 ## Longer horizon (post-foundation)
 
 - Observation / research pipelines (maturity Level 2+)
 - Paper-trading execution under controls (Level 3)
+- Micro-live execution architecture exists (Phase 13) but remains deny-by-default; actual live activation requires a dedicated future phase, ADR, and independent review
+- Treasury and executive analytics (Phase 14) operate entirely on simulated/internal-paper ledgers; real external transfer execution requires a dedicated future phase, ADR, and independent review
 - Any live capability only after explicit Founder approval and unlocked feature registry entries

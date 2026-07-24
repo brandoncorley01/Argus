@@ -4,7 +4,7 @@ Application runtimes for Argus.
 
 | Path | Status |
 | --- | --- |
-| `api/` | Phase 2 FastAPI control-plane skeleton (health/ready only) |
-| Executive Operations Center (Next.js) | Not started |
+| `api/` | FastAPI control plane (Phases 2–8+; Phase 10 market observation) |
+| `eoc/` | Phase 9 Executive Operations Center (Next.js App Router) |
 
-See `api/README.md` and ADR-004.
+See `api/README.md`, `eoc/README.md`, ADR-004, and ADR-025.

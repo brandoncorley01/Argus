@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -21,11 +22,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-
-class Base(DeclarativeBase):
-    """SQLAlchemy 2.x declarative base for Argus institutional models."""
+from app.models.base import Base
 
 
 class InstitutionalRole(enum.StrEnum):
@@ -114,6 +113,53 @@ class IncidentStatus(enum.StrEnum):
     CLOSED = "closed"
 
 
+class ServiceKind(enum.StrEnum):
+    POSTGRES = "postgres"
+    REDIS = "redis"
+    API = "api"
+    WORKER = "worker"
+    SUPERVISOR = "supervisor"
+    OTHER = "other"
+
+
+class ServiceCriticality(enum.StrEnum):
+    CRITICAL = "critical"
+    IMPORTANT = "important"
+    INFORMATIONAL = "informational"
+
+
+class WorkerInstanceStatus(enum.StrEnum):
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    STALE = "stale"
+
+
+class ProtectiveActionType(enum.StrEnum):
+    RECOMMEND_SAFE_MODE = "recommend_safe_mode"
+    ENTER_SAFE_MODE = "enter_safe_mode"
+    RECOMMEND_OBSERVE_ONLY = "recommend_observe_only"
+    ESCALATE_INCIDENT = "escalate_incident"
+
+
+class ProtectiveActionStatus(enum.StrEnum):
+    PENDING = "pending"
+    APPLIED = "applied"
+    DISMISSED = "dismissed"
+    EXPIRED = "expired"
+    SUPERSEDED = "superseded"
+
+
+class IncidentLifecycleEventType(enum.StrEnum):
+    OPENED = "opened"
+    INVESTIGATING = "investigating"
+    MITIGATED = "mitigated"
+    CLOSED = "closed"
+    NOTE = "note"
+    SEVERITY_CHANGED = "severity_changed"
+
+
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     return [str(member.value) for member in enum_cls]
 
@@ -175,6 +221,42 @@ incident_severity_enum = Enum(
 incident_status_enum = Enum(
     IncidentStatus,
     name="incident_status",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+service_kind_enum = Enum(
+    ServiceKind,
+    name="service_kind",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+service_criticality_enum = Enum(
+    ServiceCriticality,
+    name="service_criticality",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+worker_instance_status_enum = Enum(
+    WorkerInstanceStatus,
+    name="worker_instance_status",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+protective_action_type_enum = Enum(
+    ProtectiveActionType,
+    name="protective_action_type",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+protective_action_status_enum = Enum(
+    ProtectiveActionStatus,
+    name="protective_action_status",
+    values_callable=_enum_values,
+    native_enum=True,
+)
+incident_lifecycle_event_type_enum = Enum(
+    IncidentLifecycleEventType,
+    name="incident_lifecycle_event_type",
     values_callable=_enum_values,
     native_enum=True,
 )
@@ -734,6 +816,13 @@ class Incident(Base):
     __table_args__ = (
         Index("ix_incidents_status", "status"),
         Index("ix_incidents_opened_at", "opened_at"),
+        Index("ix_incidents_correlation_key", "correlation_key"),
+        Index(
+            "ix_incidents_open_correlation",
+            "correlation_key",
+            unique=True,
+            postgresql_where=text("status::text IN ('open', 'investigating', 'mitigated')"),
+        ),
         CheckConstraint(
             "(status::text <> 'closed') OR (closed_at IS NOT NULL)",
             name="ck_incidents_closed_requires_closed_at",
@@ -746,6 +835,15 @@ class Incident(Base):
     severity: Mapped[IncidentSeverity] = mapped_column(incident_severity_enum, nullable=False)
     status: Mapped[IncidentStatus] = mapped_column(incident_status_enum, nullable=False)
     related_mode: Mapped[OperatingMode | None] = mapped_column(operating_mode_enum, nullable=True)
+    source_service_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("registered_services.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    correlation_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    opened_by_system: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -753,6 +851,345 @@ class Incident(Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RegisteredService(Base):
+    __tablename__ = "registered_services"
+    __table_args__ = (
+        UniqueConstraint("service_key", name="uq_registered_services_service_key"),
+        CheckConstraint(
+            "heartbeat_interval_seconds > 0",
+            name="ck_registered_services_interval_positive",
+        ),
+        CheckConstraint(
+            "heartbeat_timeout_seconds > heartbeat_interval_seconds",
+            name="ck_registered_services_timeout_gt_interval",
+        ),
+        CheckConstraint(
+            "expected_instance_count >= 0",
+            name="ck_registered_services_expected_instances_nonneg",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    service_kind: Mapped[ServiceKind] = mapped_column(service_kind_enum, nullable=False)
+    criticality: Mapped[ServiceCriticality] = mapped_column(
+        service_criticality_enum, nullable=False
+    )
+    heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    heartbeat_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_instance_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkerIdentity(Base):
+    __tablename__ = "worker_identities"
+    __table_args__ = (
+        UniqueConstraint("worker_key", name="uq_worker_identities_worker_key"),
+        Index("ix_worker_identities_service_id", "service_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("registered_services.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkerInstance(Base):
+    __tablename__ = "worker_instances"
+    __table_args__ = (
+        UniqueConstraint(
+            "worker_identity_id",
+            "instance_key",
+            name="uq_worker_instances_identity_instance",
+        ),
+        Index("ix_worker_instances_last_seen_at", "last_seen_at"),
+        Index("ix_worker_instances_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("worker_identities.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    instance_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    hostname: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    status: Mapped[WorkerInstanceStatus] = mapped_column(
+        worker_instance_status_enum, nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HealthHeartbeat(Base):
+    __tablename__ = "health_heartbeats"
+    __table_args__ = (
+        UniqueConstraint(
+            "service_id",
+            "sequence_number",
+            name="uq_health_heartbeats_service_sequence",
+        ),
+        Index("ix_health_heartbeats_service_received", "service_id", "received_at"),
+        Index("ix_health_heartbeats_observed_at", "observed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("registered_services.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    worker_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("worker_instances.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sequence_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[HealthStatus] = mapped_column(health_status_enum, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class HealthHeartbeatIdempotency(Base):
+    __tablename__ = "health_heartbeat_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "service_id",
+            "idempotency_key_hash",
+            name="uq_health_heartbeat_idempotency_service_key",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("registered_services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    heartbeat_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("health_heartbeats.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ServiceHealthProjection(Base):
+    __tablename__ = "service_health_projections"
+    __table_args__ = (
+        CheckConstraint(
+            "consecutive_failures >= 0",
+            name="ck_service_health_projections_failures_nonneg",
+        ),
+    )
+
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("registered_services.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    status: Mapped[HealthStatus] = mapped_column(health_status_enum, nullable=False)
+    last_heartbeat_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("health_heartbeats.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    last_sequence_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    evaluation_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class InstitutionalHealthState(Base):
+    __tablename__ = "institutional_health_state"
+    __table_args__ = (
+        CheckConstraint(
+            "singleton_key = 'current'",
+            name="ck_institutional_health_state_singleton",
+        ),
+    )
+
+    singleton_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    status: Mapped[HealthStatus] = mapped_column(health_status_enum, nullable=False)
+    evaluation_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HealthSupervisorLease(Base):
+    __tablename__ = "health_supervisor_leases"
+    __table_args__ = (
+        CheckConstraint(
+            "singleton_key = 'current'",
+            name="ck_health_supervisor_leases_singleton",
+        ),
+    )
+
+    singleton_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    holder_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("worker_instances.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_cycle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_cycle_result: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class IncidentLifecycleEvent(Base):
+    __tablename__ = "incident_lifecycle_events"
+    __table_args__ = (
+        Index("ix_incident_lifecycle_events_incident_occurred", "incident_id", "occurred_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[IncidentLifecycleEventType] = mapped_column(
+        incident_lifecycle_event_type_enum, nullable=False
+    )
+    from_status: Mapped[IncidentStatus | None] = mapped_column(incident_status_enum, nullable=True)
+    to_status: Mapped[IncidentStatus | None] = mapped_column(incident_status_enum, nullable=True)
+    from_severity: Mapped[IncidentSeverity | None] = mapped_column(
+        incident_severity_enum, nullable=True
+    )
+    to_severity: Mapped[IncidentSeverity | None] = mapped_column(
+        incident_severity_enum, nullable=True
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    opened_by_system: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ProtectiveActionRecommendation(Base):
+    __tablename__ = "protective_action_recommendations"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key_hash",
+            name="uq_protective_action_recommendations_idempotency",
+        ),
+        Index("ix_protective_action_recommendations_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action_type: Mapped[ProtectiveActionType] = mapped_column(
+        protective_action_type_enum, nullable=False
+    )
+    status: Mapped[ProtectiveActionStatus] = mapped_column(
+        protective_action_status_enum, nullable=False
+    )
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_service_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("registered_services.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    idempotency_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -780,6 +1217,16 @@ __all__ = [
     "OperatingModeIdempotency",
     "ServiceHealthEvent",
     "Incident",
+    "RegisteredService",
+    "WorkerIdentity",
+    "WorkerInstance",
+    "HealthHeartbeat",
+    "HealthHeartbeatIdempotency",
+    "ServiceHealthProjection",
+    "InstitutionalHealthState",
+    "HealthSupervisorLease",
+    "IncidentLifecycleEvent",
+    "ProtectiveActionRecommendation",
     "InstitutionalRole",
     "OperatingMode",
     "FeatureStatus",
@@ -790,4 +1237,214 @@ __all__ = [
     "HealthStatus",
     "IncidentSeverity",
     "IncidentStatus",
+    "ServiceKind",
+    "ServiceCriticality",
+    "WorkerInstanceStatus",
+    "ProtectiveActionType",
+    "ProtectiveActionStatus",
+    "IncidentLifecycleEventType",
+    "ExecutionProvider",
+    "ExecutionProviderHealth",
+    "ExecutionProviderKind",
+    "PaperCashLedger",
+    "PaperFill",
+    "PaperOrder",
+    "PaperOrderEvent",
+    "PaperOrderSide",
+    "PaperOrderStatus",
+    "PaperOrderType",
+    "PaperPortfolio",
+    "PaperPosition",
+    "PaperReplayCheckpoint",
+    "PaperReport",
+    "PaperRiskBreach",
+    "PaperRiskLimit",
+    "PaperSession",
+    "PortfolioStatus",
+    "ReportType",
+    "SessionStatus",
+    "MarketProvider",
+    "MarketProviderHealth",
+    "MarketInstrument",
+    "MarketOhlcvBar",
+    "MarketObservation",
+    "MarketNewsItem",
+    "MarketEconomicEvent",
+    "MarketResearchItem",
+    "MarketIngestionRun",
+    "MarketQualityFinding",
+    "MarketIngestionIdempotency",
+    "MarketProviderKind",
+    "ProviderHealthStatus",
+    "ObservationChannel",
+    "IngestionRunStatus",
+    "QualityFindingKind",
+    "StrategyLifecycleStatus",
+    "ResearchRunKind",
+    "ResearchRunStatus",
+    "StrategyDocument",
+    "StrategyVersion",
+    "StrategyLifecycleEvent",
+    "ResearchDataset",
+    "ResearchRun",
+    "ResearchRunResult",
+    "ValidationReport",
+    "StrategyComparison",
+]
+
+
+# Phase 10 market intelligence models (re-exported for Alembic metadata)
+from app.models.market_intelligence import (  # noqa: E402
+    IngestionRunStatus,
+    MarketEconomicEvent,
+    MarketIngestionIdempotency,
+    MarketIngestionRun,
+    MarketInstrument,
+    MarketNewsItem,
+    MarketObservation,
+    MarketOhlcvBar,
+    MarketProvider,
+    MarketProviderHealth,
+    MarketProviderKind,
+    MarketQualityFinding,
+    MarketResearchItem,
+    ObservationChannel,
+    ProviderHealthStatus,
+    QualityFindingKind,
+)
+
+# Phase 13 Micro-Live Institution models (deny-by-default; re-exported for
+# Alembic metadata)
+from app.models.micro_live import (  # noqa: E402
+    CredentialReference,
+    KillSwitch,
+    KillSwitchScope,
+    LiveActivationState,
+    LiveActivationStateRow,
+    LiveActivationTransition,
+    MicroCapitalPolicy,
+    ReconciliationDiscrepancy,
+    ReconciliationRun,
+    ReconciliationRunStatus,
+)
+
+# Phase 12 paper trading models
+from app.models.paper_trading import (  # noqa: E402
+    ExecutionProvider,
+    ExecutionProviderHealth,
+    ExecutionProviderKind,
+    PaperCashLedger,
+    PaperFill,
+    PaperOrder,
+    PaperOrderEvent,
+    PaperOrderSide,
+    PaperOrderStatus,
+    PaperOrderType,
+    PaperPortfolio,
+    PaperPosition,
+    PaperReplayCheckpoint,
+    PaperReport,
+    PaperRiskBreach,
+    PaperRiskLimit,
+    PaperSession,
+    PortfolioStatus,
+    ReportType,
+    SessionStatus,
+)
+
+# Phase 11 Strategy Laboratory models (re-exported for Alembic metadata)
+from app.models.strategy_laboratory import (  # noqa: E402
+    ResearchDataset,
+    ResearchRun,
+    ResearchRunKind,
+    ResearchRunResult,
+    ResearchRunStatus,
+    StrategyComparison,
+    StrategyDocument,
+    StrategyLifecycleEvent,
+    StrategyLifecycleStatus,
+    StrategyVersion,
+    ValidationReport,
+)
+
+__all__ += [
+    "CredentialReference",
+    "KillSwitch",
+    "KillSwitchScope",
+    "LiveActivationState",
+    "LiveActivationStateRow",
+    "LiveActivationTransition",
+    "MicroCapitalPolicy",
+    "ReconciliationDiscrepancy",
+    "ReconciliationRun",
+    "ReconciliationRunStatus",
+]
+
+# Phase 14 Treasury and Executive Analytics models (simulated-ledger only;
+# re-exported for Alembic metadata)
+from app.models.treasury import (  # noqa: E402
+    AttributionScope,
+    CapitalAllocation,
+    CapitalAllocationStatus,
+    CapitalAllocationTargetType,
+    CapitalPool,
+    CapitalReservation,
+    CapitalReservationStatus,
+    EnvironmentClass,
+    ExecutiveKpiSnapshot,
+    ExternalTransferDirection,
+    ExternalTransferInstruction,
+    ExternalTransferStatus,
+    ForecastScenario,
+    ForecastScenarioType,
+    InstitutionalReport,
+    InstitutionalReportType,
+    PerformanceAttributionSnapshot,
+    TreasuryAccount,
+    TreasuryAccountClassification,
+    TreasuryAccountStatus,
+    TreasuryLedgerEntry,
+)
+
+__all__ += [
+    "AttributionScope",
+    "CapitalAllocation",
+    "CapitalAllocationStatus",
+    "CapitalAllocationTargetType",
+    "CapitalPool",
+    "CapitalReservation",
+    "CapitalReservationStatus",
+    "EnvironmentClass",
+    "ExecutiveKpiSnapshot",
+    "ExternalTransferDirection",
+    "ExternalTransferInstruction",
+    "ExternalTransferStatus",
+    "ForecastScenario",
+    "ForecastScenarioType",
+    "InstitutionalReport",
+    "InstitutionalReportType",
+    "PerformanceAttributionSnapshot",
+    "TreasuryAccount",
+    "TreasuryAccountClassification",
+    "TreasuryAccountStatus",
+    "TreasuryLedgerEntry",
+]
+
+# Phase 15 Operational Validation models (re-exported for Alembic metadata).
+# Observes/reports on existing subsystems only — introduces no new external
+# services and no trading/strategy logic.
+from app.models.operations import (  # noqa: E402
+    DailyTradingReport,
+    HostResourceSnapshot,
+    OperationalComponent,
+    OperationalEvent,
+    OperationalSeverity,
+)
+
+__all__ += [
+    "DailyTradingReport",
+    "HostResourceSnapshot",
+    "OperationalComponent",
+    "OperationalEvent",
+    "OperationalSeverity",
 ]

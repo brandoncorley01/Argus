@@ -23,6 +23,7 @@ from app.services.audit_service import AuditError, AuditService
 from app.services.auth_service import AuthenticatedPrincipal, AuthError
 from app.services.mode_prerequisites import ModePrerequisiteEvaluator
 from app.services.mode_transitions import (
+    DEGRADE_ELIGIBLE_MODES,
     RISK_INCREASING_MODES,
     assert_transition,
     can_transition,
@@ -726,3 +727,166 @@ class OperatingModeService:
             expected_state_version=expected_state_version,
             is_recovery=True,
         )
+
+    def system_enter_safe_mode(
+        self,
+        *,
+        reason: str,
+        idempotency_key: str,
+        request_id: str | None = None,
+        incident_id: uuid.UUID | None = None,
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        """SYSTEM actor protective transition into SAFE_MODE (Phase 8).
+
+        No human principal. Audits use actor_user_id=None with payload actor=SYSTEM.
+        Eligible only from OBSERVE / PAPER / MICRO_LIVE / NORMAL_LIVE
+        (see DEGRADE_ELIGIBLE_MODES).
+        """
+        if not reason or not reason.strip():
+            raise OperatingModeError("invalid_transition", "reason is required")
+        if len(reason) > 2000:
+            raise OperatingModeError("invalid_transition", "reason exceeds maximum length")
+        if not idempotency_key or not idempotency_key.strip():
+            raise OperatingModeError("invalid_transition", "Idempotency-Key is required")
+
+        target_mode = OperatingMode.SAFE_MODE
+        operation = "system_safe_mode"
+        key_hash = hash_idempotency_key(idempotency_key.strip())
+        fingerprint = request_fingerprint(
+            operation=operation,
+            target_mode=target_mode.value,
+            reason=reason.strip(),
+            incident_id=str(incident_id) if incident_id else None,
+            expected_state_version=None,
+        )
+
+        replay = self._lookup_idempotency(
+            key_hash=key_hash,
+            fingerprint=fingerprint,
+            operation=operation,
+            actor=None,
+            request_id=request_id,
+        )
+        if replay is not None:
+            return {**replay, "idempotent_replay": True}
+
+        state = self._lock_state()
+        if state is None:
+            raise OperatingModeError(
+                "institutional_state_missing",
+                "Authoritative SystemState row is missing",
+            )
+
+        replay = self._lookup_idempotency(
+            key_hash=key_hash,
+            fingerprint=fingerprint,
+            operation=operation,
+            actor=None,
+            request_id=request_id,
+        )
+        if replay is not None:
+            return {**replay, "idempotent_replay": True}
+
+        current = state.current_mode
+        if current not in DEGRADE_ELIGIBLE_MODES:
+            raise OperatingModeError(
+                "health_degrade_not_applicable",
+                f"SYSTEM SAFE_MODE not applicable from {current.value}",
+            )
+        try:
+            assert_transition(current, target_mode)
+        except ValueError as exc:
+            raise OperatingModeError("invalid_transition", str(exc)) from exc
+
+        previous_version = state.state_version
+        new_version = previous_version + 1
+        now = _utcnow()
+        history = OperatingModeHistory(
+            from_mode=current,
+            to_mode=target_mode,
+            previous_state_version=previous_version,
+            new_state_version=new_version,
+            changed_by_user_id=None,
+            reason=reason.strip(),
+            request_id=request_id,
+            incident_id=incident_id,
+            idempotency_key_hash=key_hash,
+            request_fingerprint=fingerprint,
+            prerequisite_summary={"actor": "SYSTEM", "operation": operation},
+            changed_at=now,
+        )
+        self._db.add(history)
+        self._db.flush()
+
+        state.current_mode = target_mode
+        state.state_version = new_version
+        state.reason = reason.strip()
+        state.updated_by_user_id = None
+        state.updated_at = now
+        state.last_history_id = history.id
+
+        result: dict[str, Any] = {
+            "current_mode": target_mode.value,
+            "previous_mode": current.value,
+            "state_version": new_version,
+            "previous_state_version": previous_version,
+            "history_id": str(history.id),
+            "emergency_stop_active": state.emergency_stop_active,
+            "recovery_required": state.recovery_required,
+            "reason": reason.strip(),
+            "policy_version_id": None,
+            "actor": "SYSTEM",
+        }
+        self._db.add(
+            OperatingModeIdempotency(
+                idempotency_key_hash=key_hash,
+                request_fingerprint=fingerprint,
+                operation=operation,
+                history_id=history.id,
+                status="committed",
+                response_payload=result,
+            )
+        )
+        audits: list[dict[str, Any]] = [
+            {
+                "action": "operating_mode.safe_mode_entered",
+                "resource_type": "system_state",
+                "resource_id": str(state.id),
+                "actor_user_id": None,
+                "request_id": request_id,
+                "mode_at_time": target_mode,
+                "payload": {
+                    "actor": "SYSTEM",
+                    "previous_mode": current.value,
+                    "new_mode": target_mode.value,
+                    "previous_state_version": previous_version,
+                    "new_state_version": new_version,
+                    "history_id": str(history.id),
+                    "operation": operation,
+                    "incident_id": str(incident_id) if incident_id else None,
+                },
+            }
+        ]
+        try:
+            if commit:
+                self._commit_with_audits(audits)
+            else:
+                for item in audits:
+                    self._audit.append(**item)
+                self._db.flush()
+        except IntegrityError as exc:
+            self._db.rollback()
+            mapped = self._map_integrity_error(exc)
+            if mapped.code == "idempotency_conflict":
+                replay = self._lookup_idempotency(
+                    key_hash=key_hash,
+                    fingerprint=fingerprint,
+                    operation=operation,
+                    actor=None,
+                    request_id=request_id,
+                )
+                if replay is not None:
+                    return {**replay, "idempotent_replay": True}
+            raise mapped from None
+        return {**result, "idempotent_replay": False}

@@ -1,0 +1,11 @@
+{
+  "name": "argus",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "eoc:dev": "pnpm --filter @argus/eoc dev",
+    "eoc:build": "pnpm --filter @argus/eoc build",
+    "eoc:lint": "pnpm --filter @argus/eoc lint",
+    "eoc:typecheck": "pnpm --filter @argus/eoc typecheck"
+  }
+}

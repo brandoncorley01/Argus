@@ -11,11 +11,20 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 - RBAC enforcement for Founder-only user/role management; audit reads require authentication
 - Phase 6 configuration/policy versioning: lifecycle statuses, canonical payload hashing, secret detection, atomic activation with Institutional Identity updates, HTTP APIs under `/api/v1/configurations` and `/api/v1/policies`
 - Phase 7 operating-mode state machine: singleton authoritative state, transition matrix, durable idempotency, emergency fail-closed doctrine, APIs under `/api/v1/operating-mode`
+- Phase 8 institutional health supervisor and worker foundation: governed service registry, append-only heartbeats, projections, durable supervisor lease, incidents/lifecycle, protective actions, ARQ worker, SYSTEM `SAFE_MODE` integration
+- Phase 9 Executive Operations Center (`apps/eoc`): Next.js App Router BFF session bridge, role-aware dashboards, operations/services/workers/incidents/audit/configurations/policies/administration — real API state only
+- Phase 10 Market Intelligence Platform: multi-provider registry, historical OHLCV/news/calendar/research storage, replay-safe ingest, quality monitoring, `/api/v1/market` APIs, EOC `/market` — observation only
+- Phase 11 Strategy Laboratory: governed strategy versions, deterministic backtest/walk-forward/optimization/Monte Carlo, validation reports, `/api/v1/strategies`, EOC `/strategies` — research only
+- Phase 12 Paper Trading Institution: Execution Gateway, Internal Paper Provider (default), portfolios/orders/fills/P&L/risk/replay, `/api/v1/paper`, EOC `/paper` — no brokerage account required
+- Phase 13 Micro-Live Institution: deny-by-default live-execution architecture — `live_activation_state` machine (default `PAPER_ONLY`, no reachable path to `MICRO_LIVE_ACTIVE`), credential referencing (env var names only, never values), kill switches, versioned micro-capital policy, fixture-based reconciliation, `ExecutionGateway.assert_live_allowed`, optional disabled adapter scaffolds (Coinbase/Kraken/IBKR), `/api/v1/micro-live`, EOC `/micro-live` — live trading remains disabled; no credentials required
+- Phase 14 Treasury and Executive Analytics: simulated-ledger treasury accounts/pools/allocations/reservations, append-only internal ledger, external transfer *instructions* with execution structurally forbidden (`external_transfer_execution_forbidden`, no `executed` status exists), performance attribution and executive KPIs built from real paper/health/incident/strategy data (never invented), deterministic forecast scenarios, immutable content-hashed institutional reports with paper/live disclaimers, `/api/v1/treasury`, EOC `/treasury` — no real money movement possible
+- Phase 15 Operational Validation: System Health dashboard API + EOC, host CPU/memory/disk snapshots, operational event log with severities and correlation IDs, immutable daily paper trading reports, health-supervisor crons — `internal_paper` only
+- Governance frameworks: Engineering Constitution, Phase Execution, Independent Review, Release Certification
+- RC1 finalization: minimal CI, backup/restore scripts, durable RC evidence
 
 ### Planned
 
-- Health supervisor worker (ARQ)
-- Executive Operations Center (Next.js)
+- Phase 16 Hardening & CI follow-ups (remote CI soak, optional multi-week paper tooling)
 
 ## [0.1.0-foundation] — 2026-07-16
 

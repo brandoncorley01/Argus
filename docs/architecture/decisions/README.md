@@ -25,6 +25,17 @@ ADRs capture major technical decisions for Argus. Every major technical decision
 | [ADR-017](ADR-017-durable-operating-mode-idempotency.md) | Durable operating-mode idempotency | Accepted |
 | [ADR-018](ADR-018-emergency-stop-audit-doctrine.md) | Emergency-stop audit fail-closed doctrine | Accepted |
 | [ADR-019](ADR-019-mode-availability-and-prerequisites.md) | Mode availability and prerequisite honesty | Accepted |
+| [ADR-020](ADR-020-governed-service-registry.md) | Governed service registry for health supervision | Accepted |
+| [ADR-021](ADR-021-append-only-heartbeats.md) | Append-only heartbeats with ordering and idempotency | Accepted |
+| [ADR-022](ADR-022-durable-supervisor-lease.md) | Durable health supervisor lease in PostgreSQL | Accepted |
+| [ADR-023](ADR-023-system-actor-safe-mode.md) | SYSTEM actor auto-degrade to SAFE_MODE | Accepted |
+| [ADR-024](ADR-024-arq-health-worker-foundation.md) | ARQ worker foundation for health supervision | Accepted |
+| [ADR-025](ADR-025-eoc-bff-session-bridge.md) | Executive Operations Center BFF session bridge | Accepted |
+| [ADR-026](ADR-026-market-intelligence-observation-boundary.md) | Market Intelligence observation boundary | Accepted |
+| [ADR-027](ADR-027-strategy-laboratory-closed-registry.md) | Strategy Laboratory closed research registry | Accepted |
+| [ADR-028](ADR-028-execution-gateway-paper-provider.md) | Execution Gateway and Internal Paper Provider | Accepted |
+| [ADR-029](ADR-029-micro-live-deny-by-default.md) | Micro-Live Institution deny-by-default architecture | Accepted |
+| [ADR-030](ADR-030-treasury-simulated-ledger-boundary.md) | Treasury simulated-ledger boundary | Accepted |
 
 ## ADR template
 
