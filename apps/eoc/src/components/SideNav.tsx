@@ -44,7 +44,7 @@ export function SideNav({
   user: CurrentUser;
   pathname: string;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(
     () =>
       !PRIMARY.some((p) => current(pathname, p.href)) &&

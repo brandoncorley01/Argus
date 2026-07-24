@@ -106,7 +106,9 @@ def test_system_health_and_correlation_header(
     assert "process_started_at" in body
 
 
-def test_system_health_backup_meta(tmp_path, monkeypatch, client: TestClient, db_session: Session) -> None:
+def test_system_health_backup_meta(
+    tmp_path, monkeypatch, client: TestClient, db_session: Session
+) -> None:
     u, p = _unique("ob"), "ops-pass-1234"
     _bootstrap(db_session, u, p)
     cookies, _ = _login(client, u, p)
