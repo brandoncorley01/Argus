@@ -382,7 +382,10 @@ async function renderTodayPage() {
       {/* Open paper trades */}
       <section className="panel rise" aria-label="Open paper trades">
         <h2 style={{ marginTop: 0 }}>Open paper trades</h2>
-        <ActiveTrades positions={positions} />
+        <ActiveTrades
+          positions={positions}
+          portfolioId={portfolio?.id ?? null}
+        />
       </section>
 
       <section className="panel rise" aria-label="End of day">

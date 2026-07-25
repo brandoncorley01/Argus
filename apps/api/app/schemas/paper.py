@@ -123,6 +123,20 @@ class ClosedTradeRead(BaseModel):
     exit_reason: str | None = None
 
 
+class ClearSymbolPracticeResponse(BaseModel):
+    """Result of Founder clearing a bad/stale paper practice symbol."""
+
+    symbol: str
+    open_quantity: str
+    cash_refunded: str
+    positions_removed: int
+    fills_removed: int
+    orders_removed: int
+    bars_purged: int
+    cash_balance: str
+    message: str
+
+
 class SessionCreate(BaseModel):
     strategy_version_id: uuid.UUID | None = None
     seed: int = 42

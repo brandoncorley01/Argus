@@ -137,6 +137,14 @@ class MarketPriceRefreshService:
 
         bars: list[OhlcvBarIngest] = []
         for symbol in target:
+            # Drop test/manual junk bars so the next mark uses the public feed.
+            try:
+                from app.services.paper_trading_service import PaperTradingService
+
+                PaperTradingService(self.db).purge_untrusted_bars(symbol)
+                self.db.commit()
+            except Exception:  # noqa: BLE001 — refresh must continue even if purge fails
+                self.db.rollback()
             try:
                 raw = self._fetch_candles(symbol, start=start, end=now)
             except MarketPriceRefreshError as exc:

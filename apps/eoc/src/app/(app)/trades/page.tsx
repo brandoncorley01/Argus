@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { ActiveTrades, type PositionSummary } from "@/components/founder/ActiveTrades";
+import { ClearPaperSymbolButton } from "@/components/founder/ClearPaperSymbolButton";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
@@ -123,7 +124,10 @@ export default async function TradesPage() {
       </div>
 
       <Panel title="Open paper trades">
-        <ActiveTrades positions={positions} />
+        <ActiveTrades
+          positions={positions}
+          portfolioId={portfolio?.id ?? null}
+        />
       </Panel>
 
       <Panel title="Closed Trades">
@@ -134,7 +138,15 @@ export default async function TradesPage() {
           </EmptyState>
         ) : (
           <div className="open-trade-cards">
-            {closed.map((t) => (
+            {closed.map((t) => {
+              const entry = Number(t.entry_price);
+              const exit = Number(t.exit_price);
+              const absurd =
+                (t.symbol.toUpperCase().startsWith("BTC") &&
+                  ((entry > 0 && entry < 1000) || (exit > 0 && exit < 1000))) ||
+                (t.symbol.toUpperCase().startsWith("ETH") &&
+                  ((entry > 0 && entry < 50) || (exit > 0 && exit < 50)));
+              return (
               <article key={t.fill_id} className="open-trade-card">
                 <header className="open-trade-head">
                   <h3>{t.symbol}</h3>
@@ -142,6 +154,12 @@ export default async function TradesPage() {
                     {moneyPnl(t.realized_pnl)}
                   </span>
                 </header>
+                {absurd ? (
+                  <p className="attention-box" role="status">
+                    This closed paper P&amp;L used inaccurate test prices. Remove
+                    the {t.symbol} practice history and refresh real market data.
+                  </p>
+                ) : null}
                 <dl className="considering-dl">
                   <div>
                     <dt>Entry</dt>
@@ -163,8 +181,15 @@ export default async function TradesPage() {
                 {t.exit_reason ? (
                   <p className="muted-note">Why Argus decided: {t.exit_reason}</p>
                 ) : null}
+                {portfolio && absurd ? (
+                  <ClearPaperSymbolButton
+                    portfolioId={portfolio.id}
+                    symbol={t.symbol}
+                  />
+                ) : null}
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </Panel>

@@ -97,6 +97,22 @@ class PaperExecutionProvider(ExecutionProvider):
                 "fills": [],
             }
 
+    def clear_symbol_position(
+        self,
+        portfolio_id: uuid.UUID,
+        symbol: str,
+        *,
+        cash_after: Decimal | None = None,
+    ) -> None:
+        """Remove one simulated position from the in-memory paper book."""
+        key = _portfolio_key(self.provider_key, portfolio_id)
+        acct = _ACCOUNT_STORE.get(key)
+        if acct is None:
+            return
+        acct["positions"].pop(symbol.upper(), None)
+        if cash_after is not None:
+            acct["cash"] = Decimal(cash_after)
+
     def _acct(self, portfolio_id: uuid.UUID) -> dict[str, Any]:
         key = _portfolio_key(self.provider_key, portfolio_id)
         if key not in _ACCOUNT_STORE:

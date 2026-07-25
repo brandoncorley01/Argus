@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ClearPaperSymbolButton } from "@/components/founder/ClearPaperSymbolButton";
 import { EmptyState } from "@/components/ui";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
@@ -48,7 +49,13 @@ function TimeInTradeLabel({ openedAt }: { openedAt: string | null }) {
   return <>{label}</>;
 }
 
-export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
+export function ActiveTrades({
+  positions,
+  portfolioId = null,
+}: {
+  positions: PositionSummary[];
+  portfolioId?: string | null;
+}) {
   if (positions.length === 0) {
     return (
       <EmptyState>
@@ -61,10 +68,16 @@ export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
   return (
     <div className="open-trade-cards">
       {positions.map((p) => {
+        const entry = Number(p.average_cost);
+        const mark = p.mark_price != null ? Number(p.mark_price) : null;
+        const absurdEntry =
+          (p.symbol.toUpperCase().startsWith("BTC") && entry > 0 && entry < 1000) ||
+          (p.symbol.toUpperCase().startsWith("ETH") && entry > 0 && entry < 50);
         const stale =
           p.price_status === "unavailable" ||
           p.mark_price == null ||
-          p.unrealized_pnl == null;
+          p.unrealized_pnl == null ||
+          absurdEntry;
         const boughtOrSold =
           p.side === "long" || Number(p.quantity) > 0 ? "Bought" : "Sold";
         return (
@@ -73,6 +86,15 @@ export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
               <h3>{p.symbol}</h3>
               <span className="muted-note">{boughtOrSold}</span>
             </header>
+            {absurdEntry ? (
+              <p className="attention-box" role="status">
+                This paper entry looks inaccurate (test/stale price{" "}
+                {money(p.average_cost)}
+                {mark != null ? `, mark ${money(String(mark))}` : ""}). Remove it
+                and refresh recent prices so Argus can restart with real market
+                data.
+              </p>
+            ) : null}
             <dl className="considering-dl">
               <div>
                 <dt>Entry price</dt>
@@ -142,6 +164,12 @@ export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
               yet
               {p.state ? ` (state: ${p.state})` : ""}.
             </p>
+            {portfolioId ? (
+              <ClearPaperSymbolButton
+                portfolioId={portfolioId}
+                symbol={p.symbol}
+              />
+            ) : null}
           </article>
         );
       })}

@@ -11,6 +11,7 @@ from app.api.deps import RequireAnyAuthenticatedRead, RequireFounder, RequireFou
 from app.db.session import get_db
 from app.schemas.paper import (
     CheckpointRead,
+    ClearSymbolPracticeResponse,
     ClosedTradeRead,
     FillRead,
     KillSwitchRequest,
@@ -205,6 +206,29 @@ def list_closed_trades(
             ClosedTradeRead.model_validate(row)
             for row in service.list_closed_trades(portfolio_id, limit=limit)
         ]
+    except PaperTradingError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/portfolios/{portfolio_id}/symbols/{symbol}/clear-practice",
+    response_model=ClearSymbolPracticeResponse,
+)
+def clear_symbol_practice(
+    portfolio_id: uuid.UUID,
+    symbol: str,
+    principal: AuthenticatedPrincipal = Depends(RequireFounder),
+    service: PaperTradingService = Depends(get_service),
+) -> ClearSymbolPracticeResponse:
+    """Remove a paper symbol's open trade + history so Founder can restart cleanly."""
+    try:
+        return ClearSymbolPracticeResponse.model_validate(
+            service.clear_symbol_practice(
+                portfolio_id=portfolio_id,
+                symbol=symbol,
+                actor=principal,
+            )
+        )
     except PaperTradingError as exc:
         raise _http(exc) from exc
 

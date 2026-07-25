@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.execution.contracts import (
@@ -227,21 +227,42 @@ class PaperTradingService:
         }
 
     def _latest_mark(self, symbol: str) -> tuple[Decimal | None, datetime | None]:
-        """Latest OHLCV close for symbol, if market intelligence has bars."""
+        """Latest trustworthy OHLCV close for symbol (prefers public feed bars)."""
         inst = self.db.scalar(
             select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
         )
         if inst is None:
             return None, None
-        bar = self.db.scalar(
-            select(MarketOhlcvBar)
-            .where(MarketOhlcvBar.instrument_id == inst.id)
-            .order_by(MarketOhlcvBar.close_time.desc())
-            .limit(1)
+        bars = list(
+            self.db.scalars(
+                select(MarketOhlcvBar)
+                .where(MarketOhlcvBar.instrument_id == inst.id)
+                .order_by(MarketOhlcvBar.close_time.desc())
+                .limit(40)
+            )
         )
-        if bar is None:
+        if not bars:
             return None, None
-        return bar.close, bar.close_time
+        # Prefer Coinbase public candles; skip obvious test/manual junk.
+        for bar in bars:
+            if not self._bar_is_trustworthy(symbol, bar):
+                continue
+            return bar.close, bar.close_time
+        return None, None
+
+    @staticmethod
+    def _bar_is_trustworthy(symbol: str, bar: MarketOhlcvBar) -> bool:
+        src = (bar.source_attribution or "").lower()
+        if src in {"manual-operator-entry", "manual-desk", "test", "fixture"}:
+            return False
+        close = Decimal(bar.close)
+        sym = symbol.upper()
+        # Sanity floors — reject absurd test prices that break P&L honesty.
+        if sym.startswith("BTC") and close < Decimal("1000"):
+            return False
+        if sym.startswith("ETH") and close < Decimal("50"):
+            return False
+        return close > 0
 
     def list_position_summaries(self, portfolio_id: uuid.UUID) -> list[dict[str, Any]]:
         """Founder position rows. Marks come from market bars when present."""
@@ -1077,6 +1098,170 @@ class PaperTradingService:
                 .order_by(PaperReport.created_at.desc())
             )
         )
+
+    def clear_symbol_practice(
+        self,
+        portfolio_id: uuid.UUID,
+        symbol: str,
+        *,
+        actor: AuthenticatedPrincipal,
+        purge_untrusted_bars: bool = True,
+    ) -> dict[str, Any]:
+        """Remove a paper symbol's open trade and history so practice can restart.
+
+        Paper only. Refunds invested cash for any open quantity. Does not invent
+        prices or touch live execution. Audited.
+        """
+        from app.execution.providers.paper import PaperExecutionProvider
+        from app.models.paper_training import (
+            PaperCoachingDecision,
+            PaperTradeFeedback,
+        )
+
+        portfolio = self.get_portfolio(portfolio_id)
+        sym = symbol.upper().strip()
+        if not sym:
+            raise PaperTradingError("invalid_symbol", "Symbol is required.")
+
+        positions = list(
+            self.db.scalars(
+                select(PaperPosition).where(
+                    PaperPosition.portfolio_id == portfolio_id,
+                    PaperPosition.symbol == sym,
+                )
+            )
+        )
+        fills = list(
+            self.db.scalars(
+                select(PaperFill).where(
+                    PaperFill.portfolio_id == portfolio_id,
+                    PaperFill.symbol == sym,
+                )
+            )
+        )
+        orders = list(
+            self.db.scalars(
+                select(PaperOrder).where(
+                    PaperOrder.portfolio_id == portfolio_id,
+                    PaperOrder.symbol == sym,
+                )
+            )
+        )
+
+        refund = Decimal("0")
+        open_qty = Decimal("0")
+        for pos in positions:
+            if pos.quantity and pos.quantity != 0:
+                refund += abs(pos.quantity) * (pos.average_cost or Decimal("0"))
+                open_qty += pos.quantity
+
+        snapshot = {
+            "symbol": sym,
+            "open_quantity": str(open_qty),
+            "cash_refunded": str(refund),
+            "positions_removed": len(positions),
+            "fills_removed": len(fills),
+            "orders_removed": len(orders),
+        }
+
+        # Detach FKs, then delete fills -> events -> orders -> positions.
+        fill_ids = [f.id for f in fills]
+        order_ids = [o.id for o in orders]
+        if fill_ids:
+            self.db.execute(
+                update(PaperTradeFeedback)
+                .where(PaperTradeFeedback.fill_id.in_(fill_ids))
+                .values(fill_id=None)
+            )
+        if order_ids:
+            self.db.execute(
+                update(PaperCoachingDecision)
+                .where(PaperCoachingDecision.resulting_order_id.in_(order_ids))
+                .values(resulting_order_id=None)
+            )
+            self.db.execute(
+                update(PaperRiskBreach)
+                .where(PaperRiskBreach.order_id.in_(order_ids))
+                .values(order_id=None)
+            )
+            self.db.execute(
+                delete(PaperOrderEvent).where(PaperOrderEvent.order_id.in_(order_ids))
+            )
+        if fill_ids:
+            self.db.execute(delete(PaperFill).where(PaperFill.id.in_(fill_ids)))
+        if order_ids:
+            self.db.execute(delete(PaperOrder).where(PaperOrder.id.in_(order_ids)))
+        for pos in positions:
+            self.db.delete(pos)
+
+        if refund > 0:
+            portfolio.cash_balance = portfolio.cash_balance + refund
+            self.db.add(
+                PaperCashLedger(
+                    portfolio_id=portfolio.id,
+                    entry_type="practice_clear_refund",
+                    amount=refund,
+                    balance_after=portfolio.cash_balance,
+                    reference_type="paper_symbol",
+                    reference_id=sym,
+                    note=f"Founder cleared paper practice for {sym}; cash restored.",
+                )
+            )
+
+        bars_purged = 0
+        if purge_untrusted_bars:
+            bars_purged = self.purge_untrusted_bars(sym)
+
+        # Keep in-memory paper book aligned with DB cash / flat position.
+        provider = self.db.get(ExecutionProvider, portfolio.default_provider_id)
+        if provider is not None:
+            runtime = self.gateway.get_provider(provider.provider_key)
+            if isinstance(runtime, PaperExecutionProvider):
+                runtime.ensure_account(portfolio.id, cash=portfolio.cash_balance)
+                runtime.clear_symbol_position(
+                    portfolio.id, sym, cash_after=portfolio.cash_balance
+                )
+
+        self.audit.append(
+            action="paper.practice.clear_symbol",
+            resource_type="paper_portfolio",
+            resource_id=str(portfolio.id),
+            actor_user_id=actor.user.id,
+            payload={**snapshot, "bars_purged": bars_purged},
+        )
+        self.db.commit()
+        self.db.refresh(portfolio)
+        return {
+            **snapshot,
+            "bars_purged": bars_purged,
+            "cash_balance": str(portfolio.cash_balance),
+            "message": (
+                f"Cleared paper practice for {sym}. "
+                f"Refunded {refund} to paper cash. "
+                "Refresh recent prices to load real market data, then scan again."
+            ),
+        }
+
+    def purge_untrusted_bars(self, symbol: str) -> int:
+        """Remove test/manual junk bars that would poison marks and P&L."""
+        inst = self.db.scalar(
+            select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
+        )
+        if inst is None:
+            return 0
+        bars = list(
+            self.db.scalars(
+                select(MarketOhlcvBar).where(MarketOhlcvBar.instrument_id == inst.id)
+            )
+        )
+        removed = 0
+        for bar in bars:
+            if self._bar_is_trustworthy(symbol, bar):
+                continue
+            self.db.delete(bar)
+            removed += 1
+        return removed
+
 
 def is_new_entry_order(
     *, position_qty: Decimal, side: str, order_qty: Decimal

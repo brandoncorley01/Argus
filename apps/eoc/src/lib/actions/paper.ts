@@ -62,6 +62,35 @@ export async function runMarketScanAction(
   }
 }
 
+export async function clearSymbolPracticeAction(input: {
+  portfolioId: string;
+  symbol: string;
+}): Promise<PaperActionResult> {
+  try {
+    const result = await apiFetch<{ message: string }>(
+      `/api/v1/paper/portfolios/${input.portfolioId}/symbols/${encodeURIComponent(input.symbol)}/clear-practice`,
+      { method: "POST", requireCsrf: true },
+    );
+    revalidatePath("/today");
+    revalidatePath("/trades");
+    revalidatePath("/paper-training");
+    return {
+      ok: true,
+      message:
+        result.message ||
+        `Cleared paper practice for ${input.symbol}. Refresh recent prices next.`,
+    };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not clear that paper trade.";
+    return { ok: false, message };
+  }
+}
+
 export async function refreshRecentPricesAction(): Promise<PaperActionResult> {
   try {
     const result = await apiFetch<{
