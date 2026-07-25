@@ -1,6 +1,6 @@
 # Live Trading Cockpit
 
-Build id: `trading-cockpit-v1.5`.
+Build id: `trading-cockpit-v1.6`.
 
 Home is a live **Trading Cockpit** with heartbeat dials driven by verified scan,
 price, and paper-account updates. Motion reflects real poll ages and mark
@@ -11,19 +11,29 @@ changes — Argus does not invent heartbeats, prices, or P&L.
 Founder-facing timestamps use **US Eastern** (`America/New_York`, EST/EDT) with
 a fixed zone so server HTML matches the browser.
 
-## Short-timeframe scanning (v1.5)
+## Desk layout (v1.6)
+
+- **Live desk** — status chips + dials (pulse, prices, next scan, watching, open, P&L)
+- **Update prices** (feed) vs **Re-score now** (brain) are separate action cards
+- Practice mode toggle: **You approve** / **Auto enter**
+- Market wall tiles show a freshness dot; focus panel uses check glyphs and plan meters
+- Home keepalive: if the 1m/5m feed is ≥90s old, the open Home page pulls prices
+  and may re-score (worker still owns the primary cadence)
+
+## Short-timeframe scanning
 
 Argus evaluates opportunities on **1m and 5m** charts (not 15m-first):
 
 - Worker **auto-scans every minute** when Start Argus has the health-supervisor
   worker running
 - Price refresh pulls Coinbase **1m/5m** candles (about every 2 minutes, and
-  again immediately before a scan if bars are older than ~90 seconds)
-- Next-evaluation countdown uses the active short candle length (1 or 5 minutes)
-- Watch window is **20 minutes** so ideas do not sit through long unused intervals
+  again immediately before a scan if short-TF bars are older than ~90 seconds)
+- Feed age uses **1m/5m closes only** (a fresh 15m bar cannot hide a stale short book)
+- Bars older than **5 minutes** are stale for short-TF practice
+- Watch window is **20 minutes**
 
-If scans look idle, check that the worker is up (`status-argus` / worker.log) and
-press **Refresh recent prices**, then wait for the next one-minute cycle.
+If the feed looks old, press **Update prices**, confirm the worker is up
+(`status-argus` / worker.log), and leave Home open so keepalive can catch up.
 
 ## Heartbeat dials
 
@@ -39,7 +49,7 @@ Polled every **5 seconds**:
 
 ## Paper money path (honest)
 
-1. **Coaching (default):** Argus watches ideas; you press **Take** to open a
+1. **Coaching (default):** Argus watches ideas; you press **Take (paper)** to open a
    simulated trade.
 2. **Automatic Practice:** after each scan, Argus may enter Watching + risk-clear
    candidates (paper only, risk checks still apply).

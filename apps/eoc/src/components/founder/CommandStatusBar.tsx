@@ -82,64 +82,43 @@ export function CommandStatusBar({
     }
   }
 
+  const feedOutdated = marketDataLabel.toLowerCase().includes("outdated");
+
   return (
     <section className="panel command-status-bar" aria-label="Argus command status">
-      <div className="command-status-grid">
-        <div>
-          <div className="metric-label">Argus</div>
-          <div className={`command-pill command-pill-${argusStatus.toLowerCase()}`}>
-            {argusStatus}
-          </div>
-          <p className="muted-note" style={{ margin: "0.35rem 0 0" }}>
-            {statusExplanation}
-          </p>
-        </div>
-        <div>
-          <div className="metric-label">Trading mode</div>
-          <div
-            className={`command-pill ${tradingMode === "Paper" ? "command-pill-paper" : "command-pill-live"}`}
-          >
-            {tradingMode}
-          </div>
-          <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
-            {tradingMode === "Paper"
-              ? "Paper funds only — not real money."
-              : "Live mode requires existing authorization."}
-          </p>
-        </div>
-        <div>
-          <div className="metric-label">Broker / data</div>
-          <div
-            className={`command-pill ${connectionOk ? "command-pill-running" : "command-pill-warning"}`}
-          >
-            {connectionLabel}
-          </div>
-          <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
-            Market data: {marketDataLabel}
-          </p>
-        </div>
-        <div>
-          <div className="metric-label">Last heartbeat</div>
-          <strong>{lastHeartbeat}</strong>
-          <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
-            Build {buildId}
-          </p>
-        </div>
-      </div>
-
-      <div className="command-status-grid command-status-grid-secondary">
-        <div>
-          <div className="metric-label">Market scanner</div>
-          <strong>{scannerState}</strong>
-        </div>
-        <div>
-          <div className="metric-label">Last completed scan</div>
-          <strong>{lastScanLabel}</strong>
-        </div>
-        <div>
-          <div className="metric-label">Last trading decision</div>
-          <strong>{lastDecisionLabel}</strong>
-        </div>
+      <div className="status-chip-row" aria-label="System status">
+        <span
+          className={`status-chip tone-${
+            argusStatus === "Running"
+              ? "ok"
+              : argusStatus === "Warning"
+                ? "warn"
+                : argusStatus === "Paused"
+                  ? "warn"
+                  : "bad"
+          }`}
+          title={statusExplanation}
+        >
+          <i aria-hidden />
+          {argusStatus}
+        </span>
+        <span
+          className={`status-chip tone-${tradingMode === "Paper" ? "neutral" : "warn"}`}
+        >
+          {tradingMode}
+        </span>
+        <span className={`status-chip tone-${connectionOk ? "ok" : "bad"}`}>
+          {connectionLabel}
+        </span>
+        <span className={`status-chip tone-${feedOutdated ? "bad" : "ok"}`}>
+          Feed {marketDataLabel}
+        </span>
+        <span className="status-chip tone-neutral">Scan {scannerState}</span>
+        <span className="status-chip tone-neutral">Last scan {lastScanLabel}</span>
+        <span className="status-chip tone-neutral" title={lastDecisionLabel}>
+          Beat {lastHeartbeat}
+        </span>
+        <span className="status-chip tone-neutral">Build {buildId}</span>
       </div>
 
       <div className="command-actions">
@@ -166,8 +145,8 @@ export function CommandStatusBar({
           {busy === "pause"
             ? "Updating…"
             : pauseNewEntries
-              ? "Resume New Trades"
-              : "Pause New Trades"}
+              ? "Resume entries"
+              : "Pause entries"}
         </button>
         <button
           type="button"
@@ -181,8 +160,7 @@ export function CommandStatusBar({
       </div>
       {busy === "start" ? (
         <p className="muted-note" role="status">
-          Starting can take a few minutes. If this page never updates, press F5
-          then try Start again — Stop remains available.
+          Starting can take a few minutes. Stop stays available.
         </p>
       ) : null}
       <Feedback result={result} />

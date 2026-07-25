@@ -21,8 +21,8 @@ from app.models.paper_trading import PaperPortfolio, PaperPosition
 from app.services.strategy_engine import Bar, SmaCrossoverStrategy
 
 SCAN_INTERVAL = timedelta(minutes=1)
-# Short-TF practice: marks older than this are treated as needing refresh.
-STALE_BAR = timedelta(minutes=30)
+# Short-TF practice (1m/5m): marks older than this need a price refresh.
+STALE_BAR = timedelta(minutes=5)
 MIN_BARS = 25
 EVENT_RETENTION = timedelta(days=7)
 MAX_EVENTS_PER_CYCLE = 120
@@ -117,9 +117,19 @@ class MarketScanService:
                 select(MarketInstrument).where(MarketInstrument.is_active.is_(True))
             )
         )
+        # Prefer short-TF closes for "feed age" so 15m leftovers do not look current.
         latest_bar_at = self.db.scalar(
-            select(MarketOhlcvBar.close_time).order_by(desc(MarketOhlcvBar.close_time)).limit(1)
+            select(MarketOhlcvBar.close_time)
+            .where(MarketOhlcvBar.timeframe.in_(("1m", "5m")))
+            .order_by(desc(MarketOhlcvBar.close_time))
+            .limit(1)
         )
+        if latest_bar_at is None:
+            latest_bar_at = self.db.scalar(
+                select(MarketOhlcvBar.close_time)
+                .order_by(desc(MarketOhlcvBar.close_time))
+                .limit(1)
+            )
         pause = self.db.scalar(
             select(PaperPortfolio.pause_new_entries_active)
             .where(PaperPortfolio.status == "active")
@@ -847,8 +857,10 @@ class MarketScanService:
 
     def _ensure_short_tf_prices(self, now: datetime) -> None:
         """Refresh 1m/5m candles when the book is stale before a scan cycle."""
+        # Only short TFs count — a fresh 15m bar must not skip a 1m refresh.
         latest_bar_at = self.db.scalar(
             select(MarketOhlcvBar.close_time)
+            .where(MarketOhlcvBar.timeframe.in_(("1m", "5m")))
             .order_by(desc(MarketOhlcvBar.close_time))
             .limit(1)
         )

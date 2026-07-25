@@ -324,9 +324,9 @@ async function renderTodayPage() {
       <header className="page-header rise">
         <div>
           <h1>Argus</h1>
-          <p>
-            Live paper cockpit — Eastern time, verified market data only.{" "}
-            <Link href="/paper-training">Paper Training</Link>
+          <p className="muted-note">
+            Paper desk · EST ·{" "}
+            <Link href="/paper-training">Training</Link>
           </p>
         </div>
       </header>

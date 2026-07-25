@@ -1,12 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 
 import {
   coachingSkipAction,
   coachingTakeAction,
-  recordTrainingFeedbackAction,
   refreshRecentPricesAction,
   runMarketScanAction,
   setTrainingModeAction,
@@ -326,6 +324,7 @@ export function TradingCockpit({
     initial?.generated_at ?? null,
   );
   const [beatCount, setBeatCount] = useState(0);
+  const [keepAliveNote, setKeepAliveNote] = useState<string | null>(null);
   // null until mount — Date.now() in useState breaks hydration vs SSR HTML
   const [now, setNow] = useState<number | null>(null);
 
@@ -413,6 +412,46 @@ export function TradingCockpit({
     };
   }, [portfolioId]);
 
+  // Keepalive: if worker lags, Home pulls fresh 1m/5m prices and re-scores.
+  useEffect(() => {
+    let cancelled = false;
+    let busy = false;
+    const keepAlive = async () => {
+      if (cancelled || busy || pending) return;
+      const age = ageSeconds(cockpit?.market_data_at, Date.now());
+      const scanDue =
+        cockpit?.next_scan_at != null &&
+        Date.parse(cockpit.next_scan_at) <= Date.now();
+      if ((age == null || age < 90) && !scanDue) return;
+      busy = true;
+      try {
+        if (age == null || age >= 90) {
+          const r = await refreshRecentPricesAction();
+          if (!cancelled && r.ok) {
+            setKeepAliveNote("Prices updated");
+            setLastBeatAt(new Date().toISOString());
+          }
+        }
+        if (scanDue || age == null || age >= 90) {
+          const s = await runMarketScanAction(age != null && age >= 180);
+          if (!cancelled && s.ok) setKeepAliveNote("Markets re-scored");
+        }
+      } finally {
+        busy = false;
+        if (!cancelled) {
+          window.setTimeout(() => setKeepAliveNote(null), 4000);
+        }
+      }
+    };
+    const boot = window.setTimeout(() => void keepAlive(), 2500);
+    const id = window.setInterval(() => void keepAlive(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(boot);
+      window.clearInterval(id);
+    };
+  }, [cockpit?.market_data_at, cockpit?.next_scan_at, pending]);
+
   useEffect(() => {
     if (!selected) {
       setBars([]);
@@ -479,8 +518,7 @@ export function TradingCockpit({
       <section className="panel rise" aria-label="Trading Cockpit">
         <h2 style={{ marginTop: 0 }}>Live Trading Cockpit</h2>
         <p className="attention-box">
-          Cockpit data is unavailable. Start Argus, press Refresh recent prices,
-          then Scan markets now. Argus will not invent movement.
+          Cockpit unavailable. Start Argus, then Update prices.
         </p>
       </section>
     );
@@ -497,45 +535,46 @@ export function TradingCockpit({
       ? 0
       : Math.min(100, Math.round(((scanInterval - nextScanSec) / scanInterval) * 100));
   const beatFresh = beatAge != null && beatAge <= 12;
-  const feedOk = feedAge != null && !cockpit.market_data_stale;
+  // 1m/5m charts: fresh ≤3m, warn ≤10m
+  const feedOk = feedAge != null && feedAge <= 180;
+  const feedWarn = feedAge != null && feedAge > 180 && feedAge <= 600;
   const openCount = cockpit.open_trades || liveAccount.openCount || positionsOpen;
   const watchingN = cockpit.watching_count;
-  const whyNoTrades: string[] = [];
-  if (mode === "coaching" && openCount === 0) {
-    whyNoTrades.push(
-      "Coaching Mode is on — Argus will not enter a simulated trade until you press Take on a watched plan.",
-    );
-  }
-  if (mode === "automatic" && openCount === 0 && watchingN === 0) {
-    whyNoTrades.push(
-      "Automatic Practice is on, but no Watching candidates with clear risk are ready yet.",
-    );
-  }
-  if (mode === "automatic" && openCount === 0 && watchingN > 0) {
-    whyNoTrades.push(
-      "Automatic Practice is on. Argus enters only when a watched idea passes risk checks (stage Watching + risk clear).",
-    );
-  }
-  if (cockpit.pause_new_entries_active) {
-    whyNoTrades.push("Pause new trades is on — new paper entries are blocked.");
-  }
-  if (cockpit.kill_switch_active) {
-    whyNoTrades.push("Emergency stop is on — trading is halted.");
-  }
-  if (cockpit.market_data_stale) {
-    whyNoTrades.push(
-      "Price history is outdated — press Refresh recent prices so Argus can evaluate markets honestly.",
-    );
-  }
-  if (closedCount === 0 && (liveTotalPnl == null || liveTotalPnl === 0)) {
-    whyNoTrades.push(
-      "No closed paper trades yet — realized P&L appears after Argus exits at the planned stop or take-profit (or you close on Trades).",
-    );
+  const statusChips: Array<{ label: string; tone: "ok" | "warn" | "bad" | "neutral" }> =
+    [];
+  statusChips.push({
+    label: mode === "automatic" ? "Auto enter" : "Coaching",
+    tone: mode === "automatic" ? "ok" : "warn",
+  });
+  statusChips.push({
+    label: feedOk ? "Feed live" : feedWarn ? "Feed aging" : "Feed stale",
+    tone: feedOk ? "ok" : feedWarn ? "warn" : "bad",
+  });
+  statusChips.push({
+    label:
+      cockpit.scanner_state === "Scanning"
+        ? "Scanning"
+        : cockpit.scanner_state === "Delayed"
+          ? "Scan delayed"
+          : "Scan ready",
+    tone:
+      cockpit.scanner_state === "Scanning"
+        ? "ok"
+        : cockpit.scanner_state === "Delayed"
+          ? "warn"
+          : "neutral",
+  });
+  if (watchingN > 0) {
+    statusChips.push({ label: `${watchingN} watching`, tone: "warn" });
   }
   if (openCount > 0) {
-    whyNoTrades.push(
-      "Open paper trades are live on the dials — unrealized P&L moves with verified marks; Argus exits when stop or target is hit.",
-    );
+    statusChips.push({ label: `${openCount} open`, tone: "ok" });
+  }
+  if (cockpit.pause_new_entries_active) {
+    statusChips.push({ label: "Entries paused", tone: "warn" });
+  }
+  if (cockpit.kill_switch_active) {
+    statusChips.push({ label: "Stopped", tone: "bad" });
   }
 
   const entryN = watch?.entry_zone != null ? Number(watch.entry_zone) : null;
@@ -569,26 +608,34 @@ export function TradingCockpit({
 
   return (
     <div className="trading-cockpit">
-      {/* Live heartbeat dials — driven by real poll ages, not invented motion */}
-      <section className="panel rise heartbeat-panel" aria-label="Argus heartbeat">
+      <section className="panel rise heartbeat-panel" aria-label="Argus live desk">
         <div className="cockpit-head">
-          <h2 style={{ marginTop: 0 }}>Argus heartbeat</h2>
-          <span className={`status-light ${beatFresh ? "ok" : "warn"}`}>
-            {beatFresh
-              ? `Live · beat #${beatCount || 1}`
-              : beatAge == null
-                ? "Connecting…"
-                : `Last beat ${beatAge}s ago`}
+          <h2 style={{ marginTop: 0 }}>Live desk</h2>
+          <span className={`status-light ${beatFresh && feedOk ? "ok" : "warn"}`}>
+            {beatFresh && feedOk
+              ? `Live · ${beatCount || 1}`
+              : feedOk
+                ? "Updating…"
+                : "Catching up"}
           </span>
         </div>
-        <p className="muted-note heartbeat-note">
-          Auto-scan every minute on 1m/5m charts when the worker is running.
-          Dials use real scan / price / paper updates (Eastern time) — never
-          invented.
-        </p>
+
+        <div className="status-chip-row" aria-label="Status">
+          {statusChips.map((c) => (
+            <span key={c.label} className={`status-chip tone-${c.tone}`}>
+              <i aria-hidden />
+              {c.label}
+            </span>
+          ))}
+          <span className="status-chip tone-neutral">1m / 5m</span>
+          <span className="status-chip tone-neutral">
+            {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total} mkts
+          </span>
+        </div>
+
         <div className="argus-dial-row">
           <Dial
-            label="Argus pulse"
+            label="Pulse"
             valueLabel={beatAge == null ? "—" : `${beatAge}s`}
             pct={
               beatAge == null
@@ -599,7 +646,7 @@ export function TradingCockpit({
             beating={beatFresh}
           />
           <Dial
-            label="Price feed"
+            label="Prices"
             valueLabel={
               feedAge == null
                 ? "—"
@@ -610,13 +657,13 @@ export function TradingCockpit({
             pct={
               feedAge == null
                 ? 0
-                : Math.max(5, 100 - Math.min(100, (feedAge / 21600) * 100))
+                : Math.max(5, 100 - Math.min(100, (feedAge / 300) * 100))
             }
-            tone={feedOk ? "ok" : "warn"}
+            tone={feedOk ? "ok" : feedWarn ? "warn" : "bad"}
             beating={feedOk}
           />
           <Dial
-            label="Scan cycle"
+            label="Next scan"
             valueLabel={fmtCountdown(nextScanSec)}
             pct={scanFill}
             tone={cockpit.scanner_state === "Scanning" ? "ok" : "neutral"}
@@ -630,7 +677,7 @@ export function TradingCockpit({
             beating={watchingN > 0}
           />
           <Dial
-            label="Open paper"
+            label="Open"
             valueLabel={String(openCount)}
             pct={Math.min(100, openCount * 34)}
             tone={openCount ? "ok" : "neutral"}
@@ -661,7 +708,7 @@ export function TradingCockpit({
             label="Closed P&L"
             valueLabel={
               closedCount === 0
-                ? "none"
+                ? "—"
                 : liveTotalPnl != null && Number.isFinite(liveTotalPnl)
                   ? moneyPnl(String(liveTotalPnl))
                   : "—"
@@ -676,141 +723,114 @@ export function TradingCockpit({
             }
           />
         </div>
-        <p className="live-ticker">
-          Scanner <strong>{cockpit.scanner_state}</strong>
-          {" · "}
-          Charts <strong>1m / 5m</strong>
-          {" · "}
-          Markets{" "}
-          <strong>
-            {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total}
-          </strong>
-          {" · "}
-          Focus <strong>{cockpit.current_market ?? "rotating markets"}</strong>
-          {" · "}
-          Next scan <strong className="countdown">{fmtCountdown(nextScanSec)}</strong>
-          {" · "}
-          Paper{" "}
-          <strong>
-            {liveAccount.balance != null ? money(liveAccount.balance) : "—"}
-          </strong>
-          {" · "}
-          Feed{" "}
-          <strong>
-            {formatTimestamp(cockpit.market_data_at)}
-            {cockpit.market_data_stale ? " (outdated)" : ""}
-          </strong>
-          {" · "}
-          Practice{" "}
-          <strong>{mode === "automatic" ? "Automatic" : "Coaching"}</strong>
-        </p>
-        <div className="what-argus-actions">
+
+        <div className="action-card-row" aria-label="Manual controls">
           <button
             type="button"
-            className="btn control-btn control-btn-start"
+            className="action-card"
             disabled={pending}
             onClick={() =>
               startTransition(async () => {
                 const r = await refreshRecentPricesAction();
-                setMessage(r.message);
+                setMessage(r.ok ? "Prices updated from exchange" : r.message);
               })
             }
           >
-            Refresh recent prices
+            <span className="action-card-kicker">1 · Feed</span>
+            <strong>Update prices</strong>
+            <span className="action-card-hint">Download 1m/5m candles</span>
           </button>
           <button
             type="button"
-            className="btn secondary"
+            className="action-card"
             disabled={pending}
             onClick={() =>
               startTransition(async () => {
                 const r = await runMarketScanAction(true);
-                setMessage(r.message);
+                setMessage(r.ok ? "Markets re-scored" : r.message);
               })
             }
           >
-            Scan markets now
+            <span className="action-card-kicker">2 · Brain</span>
+            <strong>Re-score now</strong>
+            <span className="action-card-hint">Judge setups on fresh bars</span>
           </button>
-        </div>
-        {message ? <p className="attention-box">{message}</p> : null}
-        {cockpit.next_step ? (
-          <p className="muted-note">{cockpit.next_step}</p>
-        ) : null}
-      </section>
-
-      <section className="panel rise ops-confidence" aria-label="Why no trades yet">
-        <h2 style={{ marginTop: 0 }}>Why you may not see trades or profits yet</h2>
-        <ul className="ops-confidence-list">
-          {whyNoTrades.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-        <div className="what-argus-actions">
           {portfolioId ? (
-            <>
-              <button
-                type="button"
-                className={`btn ${mode === "coaching" ? "control-btn control-btn-start" : "secondary"}`}
-                disabled={pending || mode === "coaching"}
-                onClick={() =>
-                  startTransition(async () => {
-                    const r = await setTrainingModeAction({
-                      portfolioId,
-                      mode: "coaching",
-                    });
-                    setMessage(r.message);
-                    if (r.ok) setMode("coaching");
-                  })
-                }
-              >
-                Coaching (you approve Take)
-              </button>
-              <button
-                type="button"
-                className={`btn ${mode === "automatic" ? "control-btn control-btn-start" : "secondary"}`}
-                disabled={pending || mode === "automatic"}
-                onClick={() =>
-                  startTransition(async () => {
-                    const r = await setTrainingModeAction({
-                      portfolioId,
-                      mode: "automatic",
-                    });
-                    setMessage(r.message);
-                    if (r.ok) setMode("automatic");
-                  })
-                }
-              >
-                Automatic Practice (Argus may enter)
-              </button>
-            </>
+            <div className="action-card mode-card">
+              <span className="action-card-kicker">Practice</span>
+              <div className="mode-seg">
+                <button
+                  type="button"
+                  className={mode === "coaching" ? "is-on" : ""}
+                  disabled={pending || mode === "coaching"}
+                  onClick={() =>
+                    startTransition(async () => {
+                      const r = await setTrainingModeAction({
+                        portfolioId,
+                        mode: "coaching",
+                      });
+                      if (r.ok) setMode("coaching");
+                      setMessage(r.ok ? "Coaching on" : r.message);
+                    })
+                  }
+                >
+                  You approve
+                </button>
+                <button
+                  type="button"
+                  className={mode === "automatic" ? "is-on" : ""}
+                  disabled={pending || mode === "automatic"}
+                  onClick={() =>
+                    startTransition(async () => {
+                      const r = await setTrainingModeAction({
+                        portfolioId,
+                        mode: "automatic",
+                      });
+                      if (r.ok) setMode("automatic");
+                      setMessage(r.ok ? "Auto enter on" : r.message);
+                    })
+                  }
+                >
+                  Auto enter
+                </button>
+              </div>
+              <span className="action-card-hint">
+                {mode === "coaching" ? "Take required" : "Enters when clear"}
+              </span>
+            </div>
           ) : null}
-          <Link className="btn secondary" href="/paper-training">
-            Open Paper Training
-          </Link>
         </div>
-        {mode === "coaching" && watchingN > 0 ? (
-          <p className="attention-box">
-            Argus is watching {watchingN} idea
-            {watchingN === 1 ? "" : "s"}. Select a market below and press{" "}
-            <strong>Let Argus take this simulated trade</strong> to open a paper
-            position. Profits only appear after a paper trade is closed.
+
+        {(message || keepAliveNote) && (
+          <p className="live-flash" role="status">
+            {message || keepAliveNote}
           </p>
-        ) : null}
+        )}
       </section>
 
-      {/* Market wall */}
       <section className="panel rise" aria-label="Market wall">
-        <h2 style={{ marginTop: 0 }}>Market wall</h2>
-        <p className="muted-note">
-          Verified prices and scan status only. Tiles highlight when a real
-          price, score, or stage change arrives.
-        </p>
+        <div className="cockpit-head">
+          <h2 style={{ marginTop: 0 }}>Markets</h2>
+          <span className="muted-note">
+            {cockpit.current_market ?? "Rotating"} · tap a tile
+          </span>
+        </div>
         <div className="market-wall">
           {cockpit.wall.length === 0 ? (
-            <p className="muted-note">
-              No markets registered yet. Refresh recent prices to load the
-              practice universe.
-            </p>
+            <button
+              type="button"
+              className="action-card"
+              disabled={pending}
+              onClick={() =>
+                startTransition(async () => {
+                  const r = await refreshRecentPricesAction();
+                  setMessage(r.message);
+                })
+              }
+            >
+              <strong>Load markets</strong>
+              <span className="action-card-hint">Update prices first</span>
+            </button>
           ) : (
             cockpit.wall.map((t) => (
               <button
@@ -823,7 +843,13 @@ export function TradingCockpit({
               >
                 <header>
                   <strong>{t.symbol}</strong>
-                  <span className={`wall-status status-${t.status.replace(/\s+/g, "-").toLowerCase()}`}>
+                  <span
+                    className={`fresh-dot ${t.stale ? "is-stale" : "is-fresh"}`}
+                    title={t.stale ? "Stale" : "Fresh"}
+                  />
+                  <span
+                    className={`wall-status status-${t.status.replace(/\s+/g, "-").toLowerCase()}`}
+                  >
                     {t.status}
                   </span>
                 </header>
@@ -842,10 +868,7 @@ export function TradingCockpit({
                 />
                 <div className="wall-meta">
                   <span>{t.outlook}</span>
-                  <span>Strength {Math.round(t.signal_strength)}</span>
-                </div>
-                <div className="muted-note">
-                  Analyzed {formatTimestamp(t.last_analyzed_at) || "not yet"}
+                  <span>{Math.round(t.signal_strength)}</span>
                 </div>
               </button>
             ))
@@ -853,19 +876,21 @@ export function TradingCockpit({
         </div>
       </section>
 
-      {/* 5–7 Selected focus */}
-      <section className="panel rise focus-grid" aria-label="Selected market analysis">
+      <section className="panel rise focus-grid" aria-label="Selected market">
         <div>
-          <h2 style={{ marginTop: 0 }}>
-            {selected ? `${selected} analysis` : "Select a market"}
-          </h2>
+          <div className="cockpit-head">
+            <h2 style={{ marginTop: 0 }}>{selected ?? "Pick a market"}</h2>
+            {watch ? (
+              <span className={`status-chip chip-${watch.confidence.toLowerCase()}`}>
+                {watch.confidence}
+              </span>
+            ) : null}
+          </div>
           {watch ? (
             <p className="watch-narrative">{watch.narrative}</p>
           ) : (
             <p className="muted-note">
-              {tile?.stale
-                ? "Current market price is outdated. Refresh recent prices."
-                : "No active watch plan for this market. Argus may still be scanning or waiting for data."}
+              {tile?.stale ? "Stale — Update prices" : "No active watch on this tile"}
             </p>
           )}
           <CandleChart
@@ -875,17 +900,21 @@ export function TradingCockpit({
             target={targetN}
             current={curN}
           />
-          <p className="muted-note">
-            Chart data freshness: {formatTimestamp(barsAt) || "Unavailable"}.
-            Lines show planned entry, stop, and target from Argus — not decoration.
-          </p>
+          <div className="status-chip-row" style={{ marginTop: "0.55rem" }}>
+            <span className="status-chip">
+              Bars {formatTimestamp(barsAt) || "—"}
+            </span>
+            {watch?.timeframe ? (
+              <span className="status-chip">{watch.timeframe}</span>
+            ) : null}
+          </div>
           <label className="tech-toggle">
             <input
               type="checkbox"
               checked={showTechInd}
               onChange={(e) => setShowTechInd(e.target.checked)}
             />
-            Show optional technical details (strategy key / score)
+            Tech detail
           </label>
           {showTechInd && watch ? (
             <pre className="tech-details">
@@ -905,69 +934,58 @@ export function TradingCockpit({
         </div>
 
         <div>
-          <h3>What Argus is waiting for</h3>
+          <h3 style={{ marginTop: 0 }}>Checks</h3>
           {watch?.checklist?.length ? (
-            <>
-              <ul className="confirm-list">
-                {watch.checklist.map((c) => (
-                  <li key={c.key} className={`confirm-${c.status}`}>
-                    <span>{c.label}</span>
-                    <strong>
-                      {c.status === "passed"
-                        ? "Passed"
-                        : c.status === "failed"
-                          ? "Failed"
-                          : "Waiting"}
-                    </strong>
-                  </li>
-                ))}
-              </ul>
-              <p className="checklist-summary">{watch.checklist_summary}</p>
-            </>
+            <ul className="confirm-list">
+              {watch.checklist.map((c) => (
+                <li key={c.key} className={`confirm-${c.status}`}>
+                  <span>{c.label}</span>
+                  <strong aria-label={c.status}>
+                    {c.status === "passed" ? "●" : c.status === "failed" ? "✕" : "○"}
+                  </strong>
+                </li>
+              ))}
+            </ul>
           ) : (
-            <p className="muted-note">No confirmation checklist for this market.</p>
+            <p className="muted-note">No checklist yet</p>
           )}
 
-          <h3>Entry and exit plan</h3>
+          <h3>Plan</h3>
           {watch ? (
             <>
-              <dl className="considering-dl">
+              <div className="plan-meters" aria-label="Timers">
                 <div>
-                  <dt>Watching since</dt>
-                  <dd>{formatTimestamp(watch.watching_since)}</dd>
+                  <span>Next look</span>
+                  <strong className="countdown">{fmtCountdown(nextEvalLeft)}</strong>
                 </div>
                 <div>
-                  <dt>Time watched</dt>
-                  <dd>{fmtCountdown(watchedSec)}</dd>
+                  <span>Expires</span>
+                  <strong className="countdown">{fmtCountdown(expireLeft)}</strong>
                 </div>
                 <div>
-                  <dt>Next evaluation</dt>
-                  <dd className="countdown">{fmtCountdown(nextEvalLeft)}</dd>
+                  <span>Watched</span>
+                  <strong>{fmtCountdown(watchedSec)}</strong>
+                </div>
+              </div>
+              <dl className="considering-dl plan-compact">
+                <div>
+                  <dt>Entry</dt>
+                  <dd>{watch.entry_zone ? money(watch.entry_zone) : "—"}</dd>
                 </div>
                 <div>
-                  <dt>Opportunity expires</dt>
-                  <dd className="countdown">{fmtCountdown(expireLeft)}</dd>
-                </div>
-                <div>
-                  <dt>Planned entry</dt>
-                  <dd>
-                    {watch.entry_zone ? money(watch.entry_zone) : "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Stop-loss</dt>
+                  <dt>Stop</dt>
                   <dd>{watch.stop_loss ? money(watch.stop_loss) : "—"}</dd>
                 </div>
                 <div>
-                  <dt>Profit target</dt>
+                  <dt>Target</dt>
                   <dd>{watch.take_profit ? money(watch.take_profit) : "—"}</dd>
                 </div>
                 <div>
-                  <dt>Paper capital planned</dt>
+                  <dt>Size</dt>
                   <dd>{money(String(watch.paper_capital_planned))}</dd>
                 </div>
                 <div>
-                  <dt>Max dollar loss</dt>
+                  <dt>Max loss</dt>
                   <dd>
                     {watch.max_dollar_loss != null
                       ? money(String(watch.max_dollar_loss))
@@ -975,24 +993,12 @@ export function TradingCockpit({
                   </dd>
                 </div>
                 <div>
-                  <dt>Potential dollar profit</dt>
+                  <dt>Upside</dt>
                   <dd>
                     {watch.potential_dollar_profit != null
                       ? money(String(watch.potential_dollar_profit))
                       : "—"}
                   </dd>
-                </div>
-                <div>
-                  <dt>Risk / reward</dt>
-                  <dd>
-                    {watch.risk_reward != null
-                      ? Number(watch.risk_reward).toFixed(2)
-                      : "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Confidence</dt>
-                  <dd>{watch.confidence}</dd>
                 </div>
               </dl>
               <RiskRewardBar
@@ -1001,21 +1007,11 @@ export function TradingCockpit({
                 current={curN}
                 target={targetN}
               />
-              <p>
-                <strong>Why Argus is watching:</strong> {watch.why}
-              </p>
-              <p>
-                <strong>Waiting to see:</strong> {watch.waiting_for}
-              </p>
 
               {portfolioId &&
-              trainingMode === "coaching" &&
+              mode === "coaching" &&
               ["Watching", "Risk Review"].includes(watch.stage_raw) ? (
                 <div className="coach-actions">
-                  <p className="muted-note">
-                    Coaching Mode — feedback is recorded for later review and
-                    does not change Live rules.
-                  </p>
                   <label>
                     Note
                     <input
@@ -1038,7 +1034,7 @@ export function TradingCockpit({
                       })
                     }
                   >
-                    Let Argus take this simulated trade
+                    Take (paper)
                   </button>
                   <button
                     type="button"
@@ -1057,57 +1053,18 @@ export function TradingCockpit({
                   >
                     Skip
                   </button>
-                  <div className="idea-marks">
-                    {(["good_decision", "personal_note", "bad_decision"] as const).map(
-                      (code, i) => (
-                        <button
-                          key={code}
-                          type="button"
-                          className="btn secondary"
-                          disabled={pending}
-                          onClick={() =>
-                            startTransition(async () => {
-                              const r = await recordTrainingFeedbackAction({
-                                portfolioId,
-                                feedbackCode: code,
-                                symbol: watch.symbol,
-                                candidateId: watch.id,
-                                note:
-                                  note ||
-                                  ["Good", "Questionable", "Bad"][i],
-                              });
-                              setMessage(r.message);
-                            })
-                          }
-                        >
-                          {["Good", "Questionable", "Bad"][i]}
-                        </button>
-                      ),
-                    )}
-                  </div>
-                  <Link className="btn secondary" href="/paper-training">
-                    Open Paper Training
-                  </Link>
                 </div>
-              ) : (
-                <p className="muted-note">
-                  {trainingMode === "automatic"
-                    ? "Automatic Practice may enter if risk checks clear."
-                    : null}{" "}
-                  <Link href="/paper-training">Paper Training</Link>
-                </p>
-              )}
+              ) : null}
             </>
           ) : (
-            <p className="muted-note">Select a watched market to see the plan.</p>
+            <p className="muted-note">Tap a Watching / Setup Ready tile</p>
           )}
         </div>
       </section>
 
-      {/* 8–9 Activity */}
       <div className="grid grid-2 activity-dual">
-        <section className="panel rise" aria-label="What Argus is doing">
-          <h2 style={{ marginTop: 0 }}>What Argus is doing</h2>
+        <section className="panel rise" aria-label="Now">
+          <h2 style={{ marginTop: 0 }}>Now</h2>
           <ul className="doing-list">
             {cockpit.doing.map((d, i) => (
               <li key={`${d.text}-${i}`} className={`tone-${d.tone}`}>
@@ -1116,13 +1073,13 @@ export function TradingCockpit({
             ))}
           </ul>
         </section>
-        <section className="panel rise" aria-label="Why Argus decided">
-          <h2 style={{ marginTop: 0 }}>Why Argus decided</h2>
+        <section className="panel rise" aria-label="Decided">
+          <h2 style={{ marginTop: 0 }}>Decided</h2>
           <ul className="decided-list">
             {cockpit.decided.length === 0 ? (
-              <li className="muted-note">No decisions yet this session.</li>
+              <li className="muted-note">None yet</li>
             ) : (
-              cockpit.decided.map((d) => (
+              cockpit.decided.slice(0, 8).map((d) => (
                 <li key={d.id} className={`tone-${d.tone}`}>
                   <time dateTime={d.at}>{formatTimestamp(d.at)}</time>
                   <span>{d.text}</span>
@@ -1133,58 +1090,27 @@ export function TradingCockpit({
         </section>
       </div>
 
-      {/* 10 Technical details */}
       <details className="panel rise tech-panel">
-        <summary>Technical details (plain language)</summary>
-        <div className="tech-sections">
-          <section>
-            <h3>Market Data</h3>
-            <p>
-              Recent price candles: latest update{" "}
-              {formatTimestamp(cockpit.market_data_at) || "none"}.
-              {cockpit.market_data_stale
-                ? " Needs attention — prices are outdated."
-                : " Healthy."}
-            </p>
-          </section>
-          <section>
-            <h3>Strategy</h3>
-            <p>
-              Moving-average trend strategy (short-term). Scan interval{" "}
-              {cockpit.scan_interval_seconds / 60} minute(s). Opportunity time
-              remaining window: {cockpit.watch_ttl_seconds / 60} minutes.
-            </p>
-          </section>
-          <section>
-            <h3>Risk</h3>
-            <p>
-              Money currently at risk:{" "}
-              {account.inTrades != null ? money(account.inTrades) : "—"}. New
-              entries{" "}
-              {cockpit.trading_allowed ? "allowed" : "blocked or paused"}.
-            </p>
-          </section>
-          <section>
-            <h3>Trade Execution</h3>
-            <p>
-              Paper practice only. Open simulated trades:{" "}
-              {cockpit.open_trades || positionsOpen}. Live trading stays locked.
-            </p>
-          </section>
-          <section>
-            <h3>System Health</h3>
-            <p>
-              Scanner: {cockpit.scanner_state}.
-              {cockpit.kill_switch_active
-                ? " Emergency stop is on."
-                : cockpit.pause_new_entries_active
-                  ? " Pause new trades is on."
-                  : " Operating normally for paper."}
-            </p>
-          </section>
+        <summary>System detail</summary>
+        <div className="status-chip-row" style={{ marginTop: "0.75rem" }}>
+          <span className={`status-chip tone-${cockpit.market_data_stale ? "bad" : "ok"}`}>
+            Feed {formatTimestamp(cockpit.market_data_at) || "—"}
+          </span>
+          <span className="status-chip tone-neutral">
+            Scan every {Math.max(1, Math.round(cockpit.scan_interval_seconds / 60))}m
+          </span>
+          <span className="status-chip tone-neutral">
+            Watch window {Math.round(cockpit.watch_ttl_seconds / 60)}m
+          </span>
+          <span className={`status-chip tone-${cockpit.trading_allowed ? "ok" : "warn"}`}>
+            {cockpit.trading_allowed ? "Entries open" : "Entries blocked"}
+          </span>
+          <span className="status-chip tone-neutral">
+            At risk {account.inTrades != null ? money(account.inTrades) : "—"}
+          </span>
         </div>
         <details className="developer-info">
-          <summary>Developer information</summary>
+          <summary>Developer</summary>
           <pre className="tech-details">
             {JSON.stringify(
               {
@@ -1192,6 +1118,7 @@ export function TradingCockpit({
                 scanner_state: cockpit.scanner_state,
                 scan_progress: cockpit.scan_progress,
                 next_scan_at: cockpit.next_scan_at,
+                market_data_at: cockpit.market_data_at,
               },
               null,
               2,
@@ -1199,12 +1126,6 @@ export function TradingCockpit({
           </pre>
         </details>
       </details>
-
-      {message ? (
-        <p className="control-feedback ok" role="status">
-          {message}
-        </p>
-      ) : null}
     </div>
   );
 }
