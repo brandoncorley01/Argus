@@ -15,9 +15,12 @@ from app.schemas.paper import (
     KillSwitchRequest,
     OrderRead,
     OrderSubmit,
+    PauseNewEntriesRequest,
     PortfolioCreate,
     PortfolioRead,
+    PortfolioSummaryRead,
     PositionRead,
+    PositionSummaryRead,
     ProviderHealthRead,
     ProviderRead,
     ProviderWithHealth,
@@ -43,6 +46,7 @@ _ERROR_STATUS = {
     "order_not_found": status.HTTP_404_NOT_FOUND,
     "risk_blocked": status.HTTP_400_BAD_REQUEST,
     "kill_switch": status.HTTP_403_FORBIDDEN,
+    "pause_new_entries": status.HTTP_403_FORBIDDEN,
     "live_execution_forbidden": status.HTTP_403_FORBIDDEN,
     "short_forbidden": status.HTTP_400_BAD_REQUEST,
     "insufficient_buying_power": status.HTTP_400_BAD_REQUEST,
@@ -128,6 +132,59 @@ def kill_switch(
         return PortfolioRead.model_validate(
             service.set_kill_switch(portfolio_id, active=body.active, actor=principal)
         )
+    except PaperTradingError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/portfolios/{portfolio_id}/pause-new-entries",
+    response_model=PortfolioRead,
+)
+def pause_new_entries(
+    portfolio_id: uuid.UUID,
+    body: PauseNewEntriesRequest,
+    principal: AuthenticatedPrincipal = Depends(RequireFounder),
+    service: PaperTradingService = Depends(get_service),
+) -> PortfolioRead:
+    try:
+        return PortfolioRead.model_validate(
+            service.set_pause_new_entries(
+                portfolio_id, active=body.active, actor=principal
+            )
+        )
+    except PaperTradingError as exc:
+        raise _http(exc) from exc
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/summary",
+    response_model=PortfolioSummaryRead,
+)
+def portfolio_summary(
+    portfolio_id: uuid.UUID,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: PaperTradingService = Depends(get_service),
+) -> PortfolioSummaryRead:
+    try:
+        return PortfolioSummaryRead.model_validate(service.portfolio_summary(portfolio_id))
+    except PaperTradingError as exc:
+        raise _http(exc) from exc
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/position-summaries",
+    response_model=list[PositionSummaryRead],
+)
+def list_position_summaries(
+    portfolio_id: uuid.UUID,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: PaperTradingService = Depends(get_service),
+) -> list[PositionSummaryRead]:
+    try:
+        return [
+            PositionSummaryRead.model_validate(row)
+            for row in service.list_position_summaries(portfolio_id)
+        ]
     except PaperTradingError as exc:
         raise _http(exc) from exc
 

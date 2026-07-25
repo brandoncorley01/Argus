@@ -1,12 +1,14 @@
 # Argus
 
-## Daily use (browser only)
+## Daily use (browser)
 
 1. Open http://127.0.0.1:3000
 2. Sign in
-3. On **Home**, press **Start Argus** or **Stop Argus**
-4. If Start says an update was applied, refresh the browser page
+3. On **Home** (Command Center):
+   - **Start Argus** / **Stop Argus** for the system
+   - **Pause New Trades** to block new paper entries while open positions can still be managed
+4. Use the account summary, active trades, and activity feed to confirm Argus is working
 
-That is the whole Founder cadence. No PowerShell. No desktop installer.
+Paper funds are never real money. Live unlock is not available from Home.
 
-Live trading stays locked. Paper data is kept when you stop.
+See `docs/operations/FOUNDER_COMMAND_CENTER.md` for data sources and unavailable metrics.

@@ -1,23 +1,19 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { ControlBar } from "@/components/founder/ControlBar";
+import { ActiveTrades, type PositionSummary } from "@/components/founder/ActiveTrades";
+import { ActivityFeed } from "@/components/founder/ActivityFeed";
+import { CommandStatusBar } from "@/components/founder/CommandStatusBar";
 import { EndDayButton } from "@/components/founder/EndDayButton";
-import { EmptyState, Panel, StatusBadge } from "@/components/ui";
+import { EmptyState, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
-import { deriveActivity, isSameUtcDay } from "@/lib/founder/activity";
-import {
-  deriveStatus,
-  direction,
-  firstName,
-  greeting,
-  money,
-  pnlClass,
-} from "@/lib/founder/simple";
+import { ARGUS_UI_BUILD } from "@/lib/build";
+import { buildFounderActivity } from "@/lib/founder/activityFeed";
+import { money, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
 import { apiFetch } from "@/lib/server/api";
-import { ARGUS_UI_BUILD } from "@/lib/build";
 import {
+  getAuditEvents,
   getMicroLiveStatus,
   getProcessReady,
   soft,
@@ -29,27 +25,57 @@ type Portfolio = {
   id: string;
   name: string;
   cash_balance: string;
+  reserved_cash?: string;
   kill_switch_active: boolean;
-};
-
-type Position = {
-  symbol: string;
-  quantity: string;
-  unrealized_pnl?: string | null;
-  realized_pnl?: string | null;
-  average_cost?: string;
-};
-
-type Order = {
-  id: string;
-  symbol: string;
-  side: string;
+  pause_new_entries_active?: boolean;
   status: string;
-  quantity: string;
-  created_at: string;
+};
+
+type PortfolioSummary = {
+  portfolio_id: string;
+  currency: string;
+  cash_balance: string;
+  reserved_cash: string;
+  buying_power: string;
+  committed_capital: string;
+  total_account_value: string;
+  open_position_count: number;
+  kill_switch_active: boolean;
+  pause_new_entries_active: boolean;
+  status: string;
+};
+
+type ProviderRow = {
+  provider: { provider_key: string; display_name: string; is_default: boolean };
+  health: {
+    status: string;
+    last_success_at: string | null;
+    last_error: string | null;
+  } | null;
+};
+
+type SystemHealth = {
+  overall_status: string;
+  generated_at?: string;
+  paper?: { last_paper_order_at?: string | null };
+  runtime_monitor?: Record<string, { status: string; detail: string }>;
+};
+
+type DailyReport = {
+  report_date: string;
+  content?: {
+    daily_pnl?: string | null;
+    trade_count?: number;
+    win_rate?: string | null;
+    largest_winner?: string | null;
+    largest_loser?: string | null;
+    exposure?: string | null;
+    risk_events_count?: number;
+  };
 };
 
 type Fill = {
+  id: string;
   symbol: string;
   side: string;
   quantity: string;
@@ -57,186 +83,291 @@ type Fill = {
   filled_at: string;
 };
 
-type DailyReport = {
-  report_date: string;
-  content?: { daily_pnl?: string | null; trade_count?: number };
+type OpsEvent = {
+  id: string;
+  occurred_at: string;
+  component: string;
+  severity: string;
+  description: string;
 };
 
-function activityTone(
-  kind: ReturnType<typeof deriveActivity>["kind"],
-): "healthy" | "degraded" | "unhealthy" | null {
-  if (kind === "trading_today" || kind === "holding") return "healthy";
-  if (kind === "waiting") return "degraded";
-  if (kind === "paused") return "degraded";
-  return "unhealthy";
+function Tip({ text }: { text: string }) {
+  return (
+    <span className="info-tip" title={text} aria-label={text}>
+      ?
+    </span>
+  );
+}
+
+function deriveArgusStatus(opts: {
+  apiReady: boolean;
+  pauseNewEntries: boolean;
+  killSwitch: boolean;
+  healthWarning: boolean;
+}): "Running" | "Paused" | "Stopped" | "Warning" {
+  if (!opts.apiReady) return "Stopped";
+  if (opts.killSwitch) return "Warning";
+  if (opts.pauseNewEntries) return "Paused";
+  if (opts.healthWarning) return "Warning";
+  return "Running";
 }
 
 export default async function TodayPage() {
-  const user = await requireUser();
-  const name = firstName(user.username);
+  await requireUser();
 
-  const [ready, microLive, portfolios, reports] = await Promise.all([
-    soft(getProcessReady),
-    soft(getMicroLiveStatus),
-    soft(() => apiFetch<Portfolio[]>("/api/v1/paper/portfolios")),
-    soft(() =>
-      apiFetch<DailyReport[]>("/api/v1/operations/daily-reports", {
-        searchParams: { limit: 1 },
-      }),
-    ),
-  ]);
+  const [ready, microLive, portfolios, reports, providers, health, audits, ops] =
+    await Promise.all([
+      soft(getProcessReady),
+      soft(getMicroLiveStatus),
+      soft(() => apiFetch<Portfolio[]>("/api/v1/paper/portfolios")),
+      soft(() =>
+        apiFetch<DailyReport[]>("/api/v1/operations/daily-reports", {
+          searchParams: { limit: 1 },
+        }),
+      ),
+      soft(() => apiFetch<ProviderRow[]>("/api/v1/paper/providers")),
+      soft(() => apiFetch<SystemHealth>("/api/v1/operations/system-health")),
+      soft(() => getAuditEvents({ limit: 30 })),
+      soft(() =>
+        apiFetch<OpsEvent[]>("/api/v1/operations/events", {
+          searchParams: { limit: 30 },
+        }),
+      ),
+    ]);
 
   const portfolio = portfolios?.[0] ?? null;
-  let positions: Position[] = [];
-  let orders: Order[] = [];
+  let summary: PortfolioSummary | null = null;
+  let positions: PositionSummary[] = [];
   let fills: Fill[] = [];
   if (portfolio) {
-    const [p, o, f] = await Promise.all([
+    const [s, p, f] = await Promise.all([
       soft(() =>
-        apiFetch<Position[]>(`/api/v1/paper/portfolios/${portfolio.id}/positions`),
+        apiFetch<PortfolioSummary>(`/api/v1/paper/portfolios/${portfolio.id}/summary`),
       ),
       soft(() =>
-        apiFetch<Order[]>(`/api/v1/paper/portfolios/${portfolio.id}/orders`),
+        apiFetch<PositionSummary[]>(
+          `/api/v1/paper/portfolios/${portfolio.id}/position-summaries`,
+        ),
       ),
       soft(() =>
         apiFetch<Fill[]>(`/api/v1/paper/portfolios/${portfolio.id}/fills`),
       ),
     ]);
+    summary = s;
     positions = p ?? [];
-    orders = o ?? [];
     fills = f ?? [];
   }
 
-  const open = positions.filter((p) => Number(p.quantity) !== 0);
-  const openOrders = orders.filter((o) => {
-    const s = o.status.toLowerCase();
-    return s === "open" || s === "submitted" || s === "partially_filled" || s === "new";
-  });
-  const fillsToday = fills.filter((f) => isSameUtcDay(f.filled_at));
-  const lastFill = fills[0] ?? null;
-  const unrealized = open.reduce((s, p) => s + (Number(p.unrealized_pnl) || 0), 0);
+  const defaultProvider =
+    providers?.find((p) => p.provider.is_default) ?? providers?.[0] ?? null;
+  const connectionOk =
+    (defaultProvider?.health?.status ?? "").toLowerCase() === "healthy" ||
+    (defaultProvider?.provider.provider_key ?? "").includes("paper");
+  const connectionLabel = defaultProvider
+    ? `${defaultProvider.provider.display_name}: ${defaultProvider.health?.status ?? "unknown"}`
+    : ready
+      ? "Internal paper ready"
+      : "Disconnected";
 
-  const status = deriveStatus({
+  const pauseNewEntries = Boolean(
+    summary?.pause_new_entries_active ?? portfolio?.pause_new_entries_active,
+  );
+  const killSwitch = Boolean(
+    summary?.kill_switch_active ?? portfolio?.kill_switch_active,
+  );
+  const healthWarning =
+    (health?.overall_status ?? "").toLowerCase() === "degraded" ||
+    (health?.overall_status ?? "").toLowerCase() === "unhealthy";
+
+  const argusStatus = deriveArgusStatus({
     apiReady: ready != null,
-    paperPaused: Boolean(portfolio?.kill_switch_active),
-  });
-  const running = status === "Running";
-  const activity = deriveActivity({
-    running,
-    paperPaused: Boolean(portfolio?.kill_switch_active),
-    openPositions: open.length,
-    fillsToday: fillsToday.length,
-    openOrders: openOrders.length,
+    pauseNewEntries,
+    killSwitch,
+    healthWarning,
   });
 
   const liveLocked =
     microLive?.live_execution_active === false ||
     microLive?.activation_state === "PAPER_ONLY" ||
     microLive == null;
+  const tradingMode: "Paper" | "Live" = liveLocked ? "Paper" : "Live";
 
-  const pnl = reports?.[0]?.content?.daily_pnl ?? null;
-  const reportTrades = reports?.[0]?.content?.trade_count ?? null;
+  const lastHeartbeat =
+    formatTimestamp(
+      defaultProvider?.health?.last_success_at ??
+        health?.generated_at ??
+        health?.paper?.last_paper_order_at ??
+        null,
+    ) || "Unavailable";
+
+  const report = reports?.[0]?.content;
+  const realizedToday = report?.daily_pnl ?? null;
+  const unrealizedToday = positions.reduce(
+    (s, p) => s + (Number(p.unrealized_pnl) || 0),
+    0,
+  );
+
+  const activity = buildFounderActivity({
+    audits: audits?.items ?? [],
+    ops: ops ?? [],
+    fills: fills.slice(0, 12),
+    limit: 20,
+  });
+
+  const closedSells = fills.filter((f) => f.side === "sell").slice(0, 5);
+
+  const exposure = report?.exposure ?? summary?.committed_capital ?? null;
+  const riskEvents = report?.risk_events_count;
 
   return (
-    <div className="founder-home">
+    <div className="founder-home command-center">
       <header className="page-header rise">
         <div>
-          <h1>{greeting(name)}</h1>
-          <p>Start, stop, and see whether Argus is actually trading.</p>
+          <h1>Command Center</h1>
+          <p>
+            Operating picture for paper trading. Live unlock still requires the
+            existing authorization path — not from this page.
+          </p>
         </div>
       </header>
 
-      <ControlBar status={status} buildId={ARGUS_UI_BUILD} />
+      <CommandStatusBar
+        argusStatus={argusStatus}
+        tradingMode={tradingMode}
+        connectionLabel={connectionLabel}
+        connectionOk={Boolean(connectionOk && ready)}
+        lastHeartbeat={lastHeartbeat}
+        portfolioId={portfolio?.id ?? null}
+        pauseNewEntries={pauseNewEntries}
+        buildId={ARGUS_UI_BUILD}
+      />
 
-      <section className="panel rise" aria-label="Is Argus working">
-        <h2 style={{ marginTop: 0 }}>Is Argus working?</h2>
-        <div className="simple-row">
-          <div className="simple-chip">
-            <span className="metric-label">System</span>
-            <StatusBadge
-              status={
-                status === "Running"
-                  ? "healthy"
-                  : status === "Stopped"
-                    ? "unhealthy"
-                    : "degraded"
-              }
-              label={
-                status === "Running"
-                  ? "Running"
-                  : status === "Stopped"
-                    ? "Stopped"
-                    : "Paused"
-              }
-            />
+      <section className="panel rise" aria-label="Account summary">
+        <h2 style={{ marginTop: 0 }}>
+          Account summary{" "}
+          <span className="mode-tag mode-tag-paper">PAPER</span>
+        </h2>
+        {!summary ? (
+          <EmptyState>
+            {ready
+              ? "No paper portfolio available yet."
+              : "Argus is stopped. Start Argus to load paper account figures."}
+          </EmptyState>
+        ) : (
+          <div className="summary-grid">
+            <div className="summary-card">
+              <span className="metric-label">
+                Total account value <Tip text="Paper cash plus capital committed to open positions (cost basis)." />
+              </span>
+              <strong>{money(summary.total_account_value)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Available cash</span>
+              <strong>{money(summary.cash_balance)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">
+                In open trades <Tip text="Sum of |qty| × average cost for open paper positions." />
+              </span>
+              <strong>{money(summary.committed_capital)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">
+                Buying power <Tip text="Cash balance minus reserved cash." />
+              </span>
+              <strong>{money(summary.buying_power)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Today realized P&amp;L</span>
+              <strong className={pnlClass(realizedToday)}>{money(realizedToday)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">
+                Open unrealized P&amp;L{" "}
+                <Tip text="From paper position books. Stays near zero until marks are maintained." />
+              </span>
+              <strong className={pnlClass(unrealizedToday)}>{money(unrealizedToday)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Open positions</span>
+              <strong>{summary.open_position_count}</strong>
+            </div>
           </div>
-          <div className="simple-chip">
-            <span className="metric-label">Paper trading</span>
-            <StatusBadge
-              status={
-                portfolio?.kill_switch_active
-                  ? "degraded"
-                  : ready
-                    ? "healthy"
-                    : "unhealthy"
-              }
-              label={
-                portfolio?.kill_switch_active
-                  ? "Paused"
-                  : ready
-                    ? "Active"
-                    : "Offline"
-              }
-            />
-          </div>
-          <div className="simple-chip">
-            <span className="metric-label">Live trading</span>
-            <StatusBadge status={null} label={liveLocked ? "Locked" : "Check Advanced"} />
-          </div>
-          <div className="simple-chip">
-            <span className="metric-label">Right now</span>
-            <StatusBadge
-              status={activityTone(activity.kind)}
-              label={activity.title}
-            />
-          </div>
-        </div>
-        <p style={{ marginBottom: 0, color: "var(--ink-soft)" }}>{activity.detail}</p>
+        )}
       </section>
 
-      <div className="simple-row" style={{ marginTop: "1rem" }}>
-        <div className="simple-chip">
-          <span className="metric-label">Today&apos;s P&amp;L</span>
-          <strong className={pnlClass(pnl)}>{money(pnl)}</strong>
-        </div>
-        <div className="simple-chip">
-          <span className="metric-label">Open P&amp;L</span>
-          <strong className={pnlClass(unrealized)}>{money(unrealized)}</strong>
-        </div>
-        <div className="simple-chip">
-          <span className="metric-label">Fills today</span>
-          <strong>{fillsToday.length}</strong>
-        </div>
-        <div className="simple-chip">
-          <span className="metric-label">Last fill</span>
-          <strong>
-            {lastFill
-              ? `${lastFill.side === "buy" ? "Buy" : "Sell"} ${lastFill.symbol}`
-              : "None yet"}
-          </strong>
-          <div className="muted-note" style={{ marginTop: "0.25rem" }}>
-            {lastFill ? formatTimestamp(lastFill.filled_at) : "No paper fills on file"}
-          </div>
-        </div>
+      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
+        <Panel title="Active trades">
+          <ActiveTrades positions={positions} />
+        </Panel>
+        <Panel title="Live Argus activity">
+          <ActivityFeed initialItems={activity} />
+        </Panel>
       </div>
 
       <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Open positions">
-          {open.length === 0 ? (
+        <Panel title="Performance & risk">
+          <div className="summary-grid summary-grid-compact">
+            <div className="summary-card">
+              <span className="metric-label">Trades completed today</span>
+              <strong>{report?.trade_count ?? "Unavailable"}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Win rate</span>
+              <strong>
+                {report?.win_rate == null ? "Unavailable" : `${report.win_rate}`}
+              </strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">
+                Largest winner{" "}
+                <Tip text="Average win is not stored yet; showing largest winner from today’s report when present." />
+              </span>
+              <strong className={pnlClass(report?.largest_winner)}>
+                {report?.largest_winner == null
+                  ? "Unavailable"
+                  : money(report.largest_winner)}
+              </strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">
+                Largest loser{" "}
+                <Tip text="Average loss is not stored yet; showing largest loser from today’s report when present." />
+              </span>
+              <strong className={pnlClass(report?.largest_loser)}>
+                {report?.largest_loser == null
+                  ? "Unavailable"
+                  : money(report.largest_loser)}
+              </strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Portfolio exposure</span>
+              <strong>{exposure == null ? "Unavailable" : money(exposure)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Risk events today</span>
+              <strong>{riskEvents ?? "Unavailable"}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Daily risk allowance remaining</span>
+              <strong>Unavailable</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Consecutive losses / drawdown</span>
+              <strong>Unavailable</strong>
+            </div>
+          </div>
+          <p className="muted-note" style={{ marginBottom: 0 }}>
+            Charting is omitted until a verified equity series exists. Metrics stay
+            Unavailable instead of inventing values.
+          </p>
+        </Panel>
+
+        <Panel title="Recent completed trades">
+          {closedSells.length === 0 ? (
             <EmptyState>
-              {running
-                ? "No open positions. Argus is waiting for the next paper trade."
-                : "No open positions. Start Argus to resume paper trading."}
+              No recent sell fills. Closed-trade entry/exit pairing is limited to
+              real fill history.
             </EmptyState>
           ) : (
             <div className="table-wrap">
@@ -244,18 +375,20 @@ export default async function TodayPage() {
                 <thead>
                   <tr>
                     <th>Symbol</th>
-                    <th>Side</th>
-                    <th>P&amp;L</th>
+                    <th>Exit price</th>
+                    <th>Qty</th>
+                    <th>When</th>
+                    <th>Entry / P&amp;L / reason</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {open.slice(0, 5).map((p) => (
-                    <tr key={p.symbol}>
-                      <td>{p.symbol}</td>
-                      <td>{direction(p.quantity)}</td>
-                      <td className={pnlClass(p.unrealized_pnl ?? p.realized_pnl)}>
-                        {money(p.unrealized_pnl ?? p.realized_pnl)}
-                      </td>
+                  {closedSells.map((f) => (
+                    <tr key={f.id}>
+                      <td>{f.symbol}</td>
+                      <td>{money(f.price)}</td>
+                      <td>{f.quantity}</td>
+                      <td>{formatTimestamp(f.filled_at)}</td>
+                      <td>Unavailable</td>
                     </tr>
                   ))}
                 </tbody>
@@ -264,48 +397,12 @@ export default async function TodayPage() {
           )}
           <div className="form-actions" style={{ marginTop: "0.75rem" }}>
             <Link className="btn secondary" href="/trading">
-              Trading detail
+              Trading history
             </Link>
-            <Link className="btn secondary" href="/portfolio">
-              Portfolio
+            <Link className="btn secondary" href="/reports">
+              Full reports
             </Link>
           </div>
-        </Panel>
-
-        <Panel title="Recent paper fills">
-          {fills.length === 0 ? (
-            <EmptyState>
-              No fills yet. If Right now says Waiting or Holding, Argus is up but has
-              not executed a new paper trade.
-            </EmptyState>
-          ) : (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Symbol</th>
-                    <th>Side</th>
-                    <th>Price</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fills.slice(0, 6).map((f, i) => (
-                    <tr key={`${f.symbol}-${f.filled_at}-${i}`}>
-                      <td>{formatTimestamp(f.filled_at)}</td>
-                      <td>{f.symbol}</td>
-                      <td>{f.side === "buy" ? "Buy" : "Sell"}</td>
-                      <td>{money(f.price)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <p className="muted-note" style={{ marginBottom: 0 }}>
-            Report trades today: {reportTrades ?? "Unavailable"}
-            {openOrders.length > 0 ? ` · Open orders: ${openOrders.length}` : ""}
-          </p>
         </Panel>
       </div>
 
@@ -317,10 +414,6 @@ export default async function TodayPage() {
           <EndDayButton />
         </Panel>
       </div>
-
-      <p className="muted-note" style={{ marginTop: "1.5rem" }}>
-        UI build: {ARGUS_UI_BUILD}
-      </p>
     </div>
   );
 }

@@ -164,6 +164,83 @@ def test_idempotent_order_submit(client: TestClient, db_session: Session) -> Non
     assert a.json()["id"] == b.json()["id"]
 
 
+def test_pause_new_entries_blocks_buys_allows_sells(
+    client: TestClient, db_session: Session
+) -> None:
+    u, p = _unique("ppe"), "paper-pass-1234"
+    _bootstrap(db_session, u, p)
+    cookies, csrf = _login(client, u, p)
+    headers = {"X-CSRF-Token": csrf}
+    port = client.post(
+        "/api/v1/paper/portfolios",
+        cookies=cookies,
+        headers=headers,
+        json={"name": "PauseBook", "initial_cash": "100000"},
+    )
+    pid = port.json()["id"]
+    opened = client.post(
+        f"/api/v1/paper/portfolios/{pid}/orders",
+        cookies=cookies,
+        headers={**headers, "Idempotency-Key": _unique("ppe-open")},
+        json={
+            "symbol": "BTC-USD",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "1",
+        },
+    )
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["status"] in {"filled", "partially_filled", "submitted"}
+
+    paused = client.post(
+        f"/api/v1/paper/portfolios/{pid}/pause-new-entries",
+        cookies=cookies,
+        headers=headers,
+        json={"active": True},
+    )
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["pause_new_entries_active"] is True
+
+    blocked = client.post(
+        f"/api/v1/paper/portfolios/{pid}/orders",
+        cookies=cookies,
+        headers={**headers, "Idempotency-Key": _unique("ppe-block")},
+        json={
+            "symbol": "ETH-USD",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "1",
+        },
+    )
+    assert blocked.status_code == 403, blocked.text
+
+    exit_order = client.post(
+        f"/api/v1/paper/portfolios/{pid}/orders",
+        cookies=cookies,
+        headers={**headers, "Idempotency-Key": _unique("ppe-exit")},
+        json={
+            "symbol": "BTC-USD",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": "1",
+        },
+    )
+    assert exit_order.status_code == 200, exit_order.text
+    assert exit_order.json()["status"] != "rejected" or exit_order.json()[
+        "reject_reason"
+    ] != "New paper entries are paused; exits and risk-reducing sells remain allowed"
+
+    summary = client.get(
+        f"/api/v1/paper/portfolios/{pid}/summary",
+        cookies=cookies,
+    )
+    assert summary.status_code == 200, summary.text
+    body = summary.json()
+    assert "buying_power" in body
+    assert "committed_capital" in body
+    assert body["pause_new_entries_active"] is True
+
+
 def test_risk_limit_and_kill_switch(client: TestClient, db_session: Session) -> None:
     u, p = _unique("pr"), "paper-pass-1234"
     _bootstrap(db_session, u, p)

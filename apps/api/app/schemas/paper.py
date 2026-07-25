@@ -55,6 +55,7 @@ class PortfolioRead(BaseModel):
     reserved_cash: Decimal
     status: str
     kill_switch_active: bool
+    pause_new_entries_active: bool = False
     default_provider_id: uuid.UUID
     owner_user_id: uuid.UUID
     created_at: datetime
@@ -62,6 +63,46 @@ class PortfolioRead(BaseModel):
 
 class KillSwitchRequest(BaseModel):
     active: bool
+
+
+class PauseNewEntriesRequest(BaseModel):
+    active: bool
+
+
+class PortfolioSummaryRead(BaseModel):
+    """Computed Founder-facing paper account snapshot. No fabricated marks."""
+
+    portfolio_id: uuid.UUID
+    currency: str
+    cash_balance: Decimal
+    reserved_cash: Decimal
+    buying_power: Decimal
+    committed_capital: Decimal
+    total_account_value: Decimal
+    open_position_count: int
+    kill_switch_active: bool
+    pause_new_entries_active: bool
+    status: str
+
+
+class PositionSummaryRead(BaseModel):
+    """Position row for Command Center. Unavailable marks stay null."""
+
+    id: uuid.UUID
+    symbol: str
+    quantity: Decimal
+    side: str
+    average_cost: Decimal
+    committed_capital: Decimal
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    mark_price: Decimal | None = None
+    pnl_percent: Decimal | None = None
+    opened_at: datetime | None = None
+    strategy_version_id: uuid.UUID | None = None
+    stop_loss: Decimal | None = None
+    take_profit: Decimal | None = None
+    state: str
 
 
 class SessionCreate(BaseModel):

@@ -109,6 +109,7 @@ class PaperTradingService:
             reserved_cash=Decimal("0"),
             status=PortfolioStatus.ACTIVE.value,
             kill_switch_active=False,
+            pause_new_entries_active=False,
             default_provider_id=provider.id,
             owner_user_id=actor.user.id,
         )
@@ -164,6 +165,116 @@ class PaperTradingService:
         self.db.commit()
         self.db.refresh(portfolio)
         return portfolio
+
+    def set_pause_new_entries(
+        self, portfolio_id: uuid.UUID, *, active: bool, actor: AuthenticatedPrincipal
+    ) -> PaperPortfolio:
+        """Pause new entries; portfolio stays active so exits can still submit."""
+        portfolio = self.get_portfolio(portfolio_id)
+        portfolio.pause_new_entries_active = active
+        self.audit.append(
+            action="paper.pause_new_entries",
+            resource_type="paper_portfolio",
+            resource_id=str(portfolio.id),
+            actor_user_id=actor.user.id,
+            payload={"active": active},
+        )
+        self.db.commit()
+        self.db.refresh(portfolio)
+        return portfolio
+
+    def portfolio_summary(self, portfolio_id: uuid.UUID) -> dict[str, Any]:
+        portfolio = self.get_portfolio(portfolio_id)
+        positions = [p for p in self.list_positions(portfolio_id) if p.quantity != 0]
+        committed = sum(
+            (abs(p.quantity) * (p.average_cost or Decimal("0")) for p in positions),
+            Decimal("0"),
+        )
+        buying_power = portfolio.cash_balance - portfolio.reserved_cash
+        total_value = portfolio.cash_balance + committed
+        return {
+            "portfolio_id": portfolio.id,
+            "currency": portfolio.currency,
+            "cash_balance": portfolio.cash_balance,
+            "reserved_cash": portfolio.reserved_cash,
+            "buying_power": buying_power,
+            "committed_capital": committed,
+            "total_account_value": total_value,
+            "open_position_count": len(positions),
+            "kill_switch_active": portfolio.kill_switch_active,
+            "pause_new_entries_active": portfolio.pause_new_entries_active,
+            "status": portfolio.status,
+        }
+
+    def list_position_summaries(self, portfolio_id: uuid.UUID) -> list[dict[str, Any]]:
+        """Founder position rows. Mark/stop/target stay null when not persisted."""
+        _ = self.get_portfolio(portfolio_id)
+        rows: list[dict[str, Any]] = []
+        for pos in self.list_positions(portfolio_id):
+            if pos.quantity == 0:
+                continue
+            committed = abs(pos.quantity) * (pos.average_cost or Decimal("0"))
+            side = "long" if pos.quantity > 0 else "short"
+            first_fill = self.db.scalar(
+                select(PaperFill)
+                .join(PaperOrder, PaperOrder.id == PaperFill.order_id)
+                .where(
+                    PaperOrder.portfolio_id == portfolio_id,
+                    PaperFill.symbol == pos.symbol,
+                )
+                .order_by(PaperFill.filled_at.asc())
+                .limit(1)
+            )
+            last_order = self.db.scalar(
+                select(PaperOrder)
+                .where(
+                    PaperOrder.portfolio_id == portfolio_id,
+                    PaperOrder.symbol == pos.symbol,
+                )
+                .order_by(PaperOrder.created_at.desc())
+                .limit(1)
+            )
+            mark: Decimal | None = None
+            pnl_pct: Decimal | None = None
+            if pos.quantity != 0 and pos.unrealized_pnl is not None and pos.unrealized_pnl != 0:
+                mark = pos.average_cost + (pos.unrealized_pnl / pos.quantity)
+                if committed > 0:
+                    pnl_pct = (pos.unrealized_pnl / committed) * Decimal("100")
+            rows.append(
+                {
+                    "id": pos.id,
+                    "symbol": pos.symbol,
+                    "quantity": pos.quantity,
+                    "side": side,
+                    "average_cost": pos.average_cost,
+                    "committed_capital": committed,
+                    "realized_pnl": pos.realized_pnl,
+                    "unrealized_pnl": pos.unrealized_pnl,
+                    "mark_price": mark,
+                    "pnl_percent": pnl_pct,
+                    "opened_at": first_fill.filled_at if first_fill else None,
+                    "strategy_version_id": (
+                        last_order.strategy_version_id if last_order else None
+                    ),
+                    "stop_loss": None,
+                    "take_profit": None,
+                    "state": "Holding",
+                }
+            )
+        return rows
+
+    def _is_new_entry_order(
+        self, portfolio_id: uuid.UUID, *, symbol: str, side: str, quantity: Decimal
+    ) -> bool:
+        """True when the order opens/increases exposure (not a reducing exit)."""
+        pos = self.db.scalar(
+            select(PaperPosition).where(
+                PaperPosition.portfolio_id == portfolio_id,
+                PaperPosition.symbol == symbol.upper(),
+            )
+        )
+        qty = pos.quantity if pos else Decimal("0")
+        return is_new_entry_order(position_qty=qty, side=side, order_qty=quantity)
 
     # --- sessions ---
 
@@ -378,6 +489,13 @@ class PaperTradingService:
         self._check_pretrade(
             portfolio, symbol=symbol.upper(), side=side, quantity=quantity, ref_price=ref_price
         )
+        if portfolio.pause_new_entries_active and self._is_new_entry_order(
+            portfolio_id, symbol=symbol, side=side, quantity=quantity
+        ):
+            raise PaperTradingError(
+                "pause_new_entries",
+                "New paper entries are paused; exits and risk-reducing sells remain allowed",
+            )
 
         client_id = client_order_id or str(uuid.uuid4())
         try:
@@ -815,3 +933,14 @@ class PaperTradingService:
                 .order_by(PaperReport.created_at.desc())
             )
         )
+
+def is_new_entry_order(
+    *, position_qty: Decimal, side: str, order_qty: Decimal
+) -> bool:
+    """Pure helper: True when the order opens/increases exposure."""
+    if side == "buy":
+        return position_qty >= 0  # open/increase long; cover short when qty < 0
+    if position_qty <= 0:
+        return True  # open/increase short or flat sell
+    return order_qty > position_qty
+

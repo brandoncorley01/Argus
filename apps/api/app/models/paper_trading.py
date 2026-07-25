@@ -158,6 +158,9 @@ class PaperPortfolio(Base):
     kill_switch_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    pause_new_entries_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     default_provider_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("execution_providers.id"), nullable=False
     )
