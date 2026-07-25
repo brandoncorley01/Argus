@@ -130,3 +130,33 @@ class TeachSignalResponse(BaseModel):
 
 class ScanRunResponse(BaseModel):
     cycle: ScanCycleRead
+
+
+class CockpitSnapshotRead(BaseModel):
+    """Live Trading Cockpit aggregate — genuine scan/market/paper fields only."""
+
+    generated_at: datetime
+    headline: str | None = None
+    scanner_state: str
+    current_market: str | None = None
+    markets_monitored: int
+    scan_progress: dict[str, Any]
+    next_scan_at: datetime | None = None
+    possible_trades_found: int
+    watching_count: int
+    awaiting_confirmation: int
+    risk_check_count: int
+    open_trades: int
+    market_data_at: datetime | None = None
+    market_data_stale: bool
+    market_data_age_seconds: int | None = None
+    trading_allowed: bool
+    pause_new_entries_active: bool
+    kill_switch_active: bool
+    next_step: str | None = None
+    wall: list[dict[str, Any]]
+    watches: list[dict[str, Any]]
+    doing: list[dict[str, Any]]
+    decided: list[dict[str, Any]]
+    scan_interval_seconds: int
+    watch_ttl_seconds: int

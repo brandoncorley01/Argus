@@ -303,7 +303,8 @@ class WorkerSettings:
         cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
         cron(run_market_price_refresh, minute={1, 16, 31, 46}),
-        cron(run_market_scan_cycle, minute={0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58}),
+        # Continuous opportunity scan — every minute (genuine cycles only).
+        cron(run_market_scan_cycle, minute=set(range(60))),
     ]
     on_startup = startup
     on_shutdown = shutdown

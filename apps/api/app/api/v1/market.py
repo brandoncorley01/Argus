@@ -25,6 +25,7 @@ from app.schemas.market import (
     ResearchItemRead,
 )
 from app.schemas.market_scan import (
+    CockpitSnapshotRead,
     ScanBarsResponse,
     ScanCandidateRead,
     ScanCycleRead,
@@ -323,6 +324,35 @@ def scan_candidates(
     return [
         ScanCandidateRead.model_validate(row) for row in service.list_candidates(limit=limit)
     ]
+
+
+@router.get("/scan/cockpit", response_model=CockpitSnapshotRead)
+def scan_cockpit(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: MarketScanService = Depends(get_scan_service),
+    db: Session = Depends(get_db),
+) -> CockpitSnapshotRead:
+    """Trading Cockpit snapshot for Home — real markets, watches, and activity."""
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.models.paper_trading import PaperPortfolio
+    from app.services.paper_training_service import PaperTrainingService
+
+    notional = Decimal("100")
+    portfolio = db.scalars(select(PaperPortfolio).limit(1)).first()
+    if portfolio is not None:
+        settings = PaperTrainingService(db).get_or_create_settings(portfolio.id)
+        notional = settings.default_notional
+    try:
+        snap = service.cockpit_snapshot(default_notional=notional)
+        return CockpitSnapshotRead.model_validate(snap)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "cockpit_error", "message": str(exc)[:240]},
+        ) from exc
 
 
 @router.get("/scan/events", response_model=list[ScanEventRead])

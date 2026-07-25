@@ -3,17 +3,13 @@ import Link from "next/link";
 
 import { ActiveTrades, type PositionSummary } from "@/components/founder/ActiveTrades";
 import { CommandStatusBar } from "@/components/founder/CommandStatusBar";
-import {
-  ConsideringTrades,
-  type ScanCandidate,
-} from "@/components/founder/ConsideringTrades";
 import { EndDayButton } from "@/components/founder/EndDayButton";
-import { WhatArgusJustDid } from "@/components/founder/WhatArgusJustDid";
+import { TradingCockpit } from "@/components/founder/TradingCockpit";
 import { WhatArgusIsDoing } from "@/components/founder/WhatArgusIsDoing";
-import { EmptyState, Panel } from "@/components/ui";
+import { EmptyState } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
-import { buildJustDidTimeline } from "@/lib/founder/justDidTimeline";
+import type { CockpitSnapshot } from "@/lib/founder/cockpitTypes";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
 import { apiFetch } from "@/lib/server/api";
@@ -77,15 +73,6 @@ type DailyReport = {
   };
 };
 
-type Fill = {
-  id: string;
-  symbol: string;
-  side: string;
-  quantity: string;
-  price: string;
-  filled_at: string;
-};
-
 type ClosedTrade = {
   fill_id: string;
   symbol: string;
@@ -126,19 +113,6 @@ type ScanStatus = {
   scan_progress?: { scanned: number; total: number } | null;
   possible_trades_found?: number | null;
   next_step?: string | null;
-};
-
-type ScanEvent = {
-  id: string;
-  occurred_at: string;
-  symbol: string | null;
-  title: string;
-  detail: string;
-  outcome: string;
-  reason_code: string | null;
-  strategy_key: string | null;
-  correlation_id: string;
-  component: string;
 };
 
 function Tip({ text }: { text: string }) {
@@ -235,7 +209,7 @@ export default async function TodayPage() {
       scanStatus?.cycle?.completed_at != null
         ? (Date.now() - Date.parse(scanStatus.cycle.completed_at)) / 60000
         : null;
-    if (!scanStatus?.cycle || (ageMin != null && ageMin >= 2)) {
+    if (!scanStatus?.cycle || (ageMin != null && ageMin >= 1)) {
       await soft(() =>
         apiFetch("/api/v1/market/scan/run", {
           method: "POST",
@@ -249,27 +223,17 @@ export default async function TodayPage() {
     }
   }
 
-  const [candidates, scanEvents] = await Promise.all([
-    soft(() =>
-      apiFetch<ScanCandidate[]>("/api/v1/market/scan/candidates", {
-        searchParams: { limit: 8 },
-      }),
-    ),
-    soft(() =>
-      apiFetch<ScanEvent[]>("/api/v1/market/scan/events", {
-        searchParams: { limit: 40 },
-      }),
-    ),
-  ]);
+  const cockpitInitial = await soft(() =>
+    apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit"),
+  );
 
   const portfolio = portfolios?.[0] ?? null;
   let summary: PortfolioSummary | null = null;
   let positions: PositionSummary[] = [];
-  let fills: Fill[] = [];
   let closedTrades: ClosedTrade[] = [];
-  let trainingNotional = "100";
+  let trainingMode: "automatic" | "coaching" = "coaching";
   if (portfolio) {
-    const [s, p, f, c, settings] = await Promise.all([
+    const [s, p, c, settings] = await Promise.all([
       soft(() =>
         apiFetch<PortfolioSummary>(`/api/v1/paper/portfolios/${portfolio.id}/summary`),
       ),
@@ -279,25 +243,21 @@ export default async function TodayPage() {
         ),
       ),
       soft(() =>
-        apiFetch<Fill[]>(`/api/v1/paper/portfolios/${portfolio.id}/fills`),
-      ),
-      soft(() =>
         apiFetch<ClosedTrade[]>(
           `/api/v1/paper/portfolios/${portfolio.id}/closed-trades`,
           { searchParams: { limit: 5 } },
         ),
       ),
       soft(() =>
-        apiFetch<{ default_notional: string }>(
+        apiFetch<{ default_notional: string; mode: "automatic" | "coaching" }>(
           `/api/v1/paper/training/${portfolio.id}/settings`,
         ),
       ),
     ]);
     summary = s;
     positions = p ?? [];
-    fills = f ?? [];
     closedTrades = c ?? [];
-    if (settings?.default_notional) trainingNotional = settings.default_notional;
+    if (settings?.mode) trainingMode = settings.mode;
   }
 
   const defaultProvider =
@@ -354,29 +314,30 @@ export default async function TodayPage() {
     0,
   );
 
-  const timeline = buildJustDidTimeline({
-    scanEvents: scanEvents ?? [],
-    fills: fills.slice(0, 8),
-    limit: 12,
-  });
-
-  const scanned = scanStatus?.scan_progress?.scanned ?? scanStatus?.cycle?.symbols_scanned ?? 0;
-  const total = scanStatus?.scan_progress?.total ?? scanStatus?.cycle?.symbols_total ?? 0;
+  const scanned =
+    cockpitInitial?.scan_progress.scanned ??
+    scanStatus?.scan_progress?.scanned ??
+    scanStatus?.cycle?.symbols_scanned ??
+    0;
+  const total =
+    cockpitInitial?.scan_progress.total ??
+    scanStatus?.scan_progress?.total ??
+    scanStatus?.cycle?.symbols_total ??
+    0;
   const possible =
+    cockpitInitial?.possible_trades_found ??
     scanStatus?.possible_trades_found ??
-    (candidates ?? []).filter((c) =>
-      ["Watching", "Evaluating", "Risk Review"].includes(c.stage),
-    ).length;
+    0;
 
   return (
-    <div className="founder-home training-lab-home">
+    <div className="founder-home training-lab-home cockpit-home">
       <header className="page-header rise">
         <div>
           <h1>Home</h1>
           <p>
-            Daily command center — plain language only. Simulated paper money,
-            not real funds.{" "}
-            <Link href="/paper-training">Open Paper Training</Link>
+            Live Trading Cockpit — Argus watches markets continuously with
+            verified data only. Simulated paper money.{" "}
+            <Link href="/paper-training">Paper Training</Link>
           </p>
         </div>
       </header>
@@ -388,11 +349,17 @@ export default async function TodayPage() {
         connectionLabel={connectionLabel}
         connectionOk={Boolean(connectionOk && ready)}
         lastHeartbeat={lastHeartbeat}
-        scannerState={scanStatus?.scanner_state ?? "Unavailable"}
+        scannerState={
+          cockpitInitial?.scanner_state ?? scanStatus?.scanner_state ?? "Unavailable"
+        }
         marketDataLabel={
-          scanStatus?.market_data_at
-            ? `${formatTimestamp(scanStatus.market_data_at)}${
-                scanStatus.market_data_stale ? " (outdated)" : ""
+          (cockpitInitial?.market_data_at ?? scanStatus?.market_data_at)
+            ? `${formatTimestamp(
+                cockpitInitial?.market_data_at ?? scanStatus?.market_data_at ?? null,
+              )}${
+                (cockpitInitial?.market_data_stale ?? scanStatus?.market_data_stale)
+                  ? " (outdated)"
+                  : ""
               }`
             : "Unavailable"
         }
@@ -409,9 +376,10 @@ export default async function TodayPage() {
         buildId={ARGUS_UI_BUILD}
       />
 
-      {/* A */}
+      {/* 1. Argus is… */}
       <WhatArgusIsDoing
         headline={
+          cockpitInitial?.headline ||
           scanStatus?.headline ||
           scanStatus?.worker_note ||
           (ready
@@ -419,6 +387,7 @@ export default async function TodayPage() {
             : "Start Argus to begin scanning and paper trading.")
         }
         currentMarket={
+          cockpitInitial?.current_market ??
           scanStatus?.current_market ??
           scanStatus?.cycle?.current_symbol ??
           null
@@ -431,21 +400,27 @@ export default async function TodayPage() {
         }
         nextScanLabel={
           formatTimestamp(
-            scanStatus?.next_scheduled_at ?? scanStatus?.cycle?.next_scheduled_at,
+            cockpitInitial?.next_scan_at ??
+              scanStatus?.next_scheduled_at ??
+              scanStatus?.cycle?.next_scheduled_at,
           ) || "Scheduled market scan"
         }
         latestPriceLabel={
-          scanStatus?.market_data_at
-            ? `${formatTimestamp(scanStatus.market_data_at)}${
-                scanStatus.market_data_stale ? " — outdated" : ""
+          (cockpitInitial?.market_data_at ?? scanStatus?.market_data_at)
+            ? `${formatTimestamp(
+                cockpitInitial?.market_data_at ?? scanStatus?.market_data_at ?? null,
+              )}${
+                (cockpitInitial?.market_data_stale ?? scanStatus?.market_data_stale)
+                  ? " — outdated"
+                  : ""
               }`
             : "No recent price history yet"
         }
-        nextStep={scanStatus?.next_step ?? null}
+        nextStep={cockpitInitial?.next_step ?? scanStatus?.next_step ?? null}
         openPositions={summary?.open_position_count ?? 0}
       />
 
-      {/* B */}
+      {/* 2. Paper account + risk */}
       <section className="panel rise" aria-label="Your paper account">
         <h2 style={{ marginTop: 0 }}>
           Your paper account{" "}
@@ -475,10 +450,7 @@ export default async function TodayPage() {
               <strong>{money(summary.committed_capital)}</strong>
             </div>
             <div className="summary-card">
-              <span className="metric-label">
-                Profit or Loss Today{" "}
-                <Tip text="From the latest saved daily report when available." />
-              </span>
+              <span className="metric-label">Profit or Loss Today</span>
               <strong className={pnlClass(realizedToday)}>
                 {realizedToday != null ? moneyPnl(realizedToday) : "Not reported yet"}
               </strong>
@@ -495,30 +467,29 @@ export default async function TodayPage() {
             </div>
           </div>
         )}
-        <p className="muted-note">
-          All figures are simulated paper money. Live trading stays locked until
-          formally authorized.
-        </p>
       </section>
 
-      {/* C */}
-      <Panel title="Trades Argus is considering">
-        <ConsideringTrades
-          candidates={candidates ?? []}
-          portfolioId={portfolio?.id ?? null}
-          defaultNotional={trainingNotional}
-        />
-      </Panel>
+      {/* 3–10 Cockpit, wall, chart, checklist, plan, activity, tech */}
+      <TradingCockpit
+        initial={cockpitInitial}
+        portfolioId={portfolio?.id ?? null}
+        trainingMode={trainingMode}
+        account={{
+          balance: summary?.total_account_value ?? null,
+          cash: summary?.buying_power ?? null,
+          inTrades: summary?.committed_capital ?? null,
+          openCount: summary?.open_position_count ?? 0,
+        }}
+        positionsOpen={summary?.open_position_count ?? 0}
+        realizedToday={realizedToday}
+        totalPnl={closedTrades.length ? totalPnl : null}
+      />
 
-      {/* D */}
-      <Panel title="Open paper trades">
+      {/* Open paper trades */}
+      <section className="panel rise" aria-label="Open paper trades">
+        <h2 style={{ marginTop: 0 }}>Open paper trades</h2>
         <ActiveTrades positions={positions} />
-      </Panel>
-
-      {/* E */}
-      <Panel title="What Argus just did">
-        <WhatArgusJustDid items={timeline} />
-      </Panel>
+      </section>
 
       <section className="panel rise" aria-label="End of day">
         <h2 style={{ marginTop: 0 }}>End of day</h2>

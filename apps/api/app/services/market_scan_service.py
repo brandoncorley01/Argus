@@ -17,16 +17,20 @@ from sqlalchemy.orm import Session
 
 from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
 from app.models.market_scan import MarketScanCandidate, MarketScanCycle, MarketScanEvent
-from app.models.paper_trading import PaperPortfolio
+from app.models.paper_trading import PaperPortfolio, PaperPosition
 from app.services.strategy_engine import Bar, SmaCrossoverStrategy
 
-SCAN_INTERVAL = timedelta(minutes=2)
+SCAN_INTERVAL = timedelta(minutes=1)
 STALE_BAR = timedelta(hours=6)
 MIN_BARS = 25
 EVENT_RETENTION = timedelta(days=7)
-MAX_EVENTS_PER_CYCLE = 80
+MAX_EVENTS_PER_CYCLE = 120
 STRATEGY_KEY = "sma_crossover"
 TIMEFRAME_PREF = ("15m", "1h", "1d", "5m")
+# Server-side watch window — opportunities expire if not confirmed.
+CANDIDATE_WATCH_TTL = timedelta(minutes=45)
+# 15m candle length for "next candle close" countdowns.
+CANDLE_LENGTH = timedelta(minutes=15)
 
 
 class MarketScanError(Exception):
@@ -445,7 +449,10 @@ class MarketScanService:
                         stage = "Watching"
                         risk_status = "clear"
                         reason_code = None
-                        reason_text = "SMA fast above slow — watching for confirmation."
+                        reason_text = (
+                            "Price is rising with a stronger short-term trend. "
+                            "Argus is watching for one more confirming candle."
+                        )
 
                     # Simple structural levels from recent range (not invented targets).
                     window = bars[-20:]
@@ -453,6 +460,45 @@ class MarketScanService:
                     high = max(b.high for b in window)
                     stop = Decimal(str(low))
                     target = Decimal(str(high))
+                    stop_d = stop if stop < price else None
+                    target_d = target if target > price else None
+                    # Expire watch if prior watch for this symbol already timed out.
+                    prior = self._prior_watch_meta(inst.symbol)
+                    watching_since = prior.get("watching_since") or _utcnow()
+                    expires_at = watching_since + CANDIDATE_WATCH_TTL
+                    if stage == "Watching" and _utcnow() >= expires_at:
+                        stage = "Expired"
+                        risk_status = "blocked"
+                        reason_code = "confirmation_incomplete"
+                        reason_text = (
+                            f"Watching expired after "
+                            f"{int(CANDIDATE_WATCH_TTL.total_seconds() // 60)} minutes "
+                            "because price never confirmed the planned entry. "
+                            "No trade was opened."
+                        )
+                        rejection_counts["confirmation_incomplete"] = (
+                            rejection_counts.get("confirmation_incomplete", 0) + 1
+                        )
+                        pipeline["rejected"] += 1
+                        pipeline["watching"] = max(0, pipeline["watching"] - 1)
+                        pipeline["qualified"] = max(0, pipeline["qualified"] - 1)
+                        candidates_found = max(0, candidates_found - 1)
+                    detail = self._watch_detail(
+                        stage=stage,
+                        price=price,
+                        entry=price,
+                        stop=stop_d,
+                        target=target_d,
+                        market_data_at=bar_close_time,
+                        watching_since=watching_since if stage in {
+                            "Watching", "Risk Review", "Expired"
+                        } else None,
+                        expires_at=expires_at if stage in {
+                            "Watching", "Risk Review", "Expired"
+                        } else None,
+                        risk_status=risk_status,
+                        bars=bars,
+                    )
                     cand = self._add_candidate(
                         cycle,
                         symbol=inst.symbol,
@@ -466,8 +512,9 @@ class MarketScanService:
                         price=price,
                         market_data_at=bar_close_time,
                         entry_zone=price,
-                        stop_loss=stop if stop < price else None,
-                        take_profit=target if target > price else None,
+                        stop_loss=stop_d,
+                        take_profit=target_d,
+                        detail=detail,
                     )
                     if events_emitted < MAX_EVENTS_PER_CYCLE:
                         outcome = (
@@ -523,8 +570,6 @@ class MarketScanService:
                         events_emitted += 1
 
             # Open paper positions count toward pipeline Positions.
-            from app.models.paper_trading import PaperPosition
-
             open_count = len(
                 list(
                     self.db.scalars(
@@ -798,6 +843,467 @@ class MarketScanService:
         rows = rows[-limit:]
         return rows, rows[-1].timeframe, rows[-1].close_time
 
+    def _prior_watch_meta(self, symbol: str) -> dict[str, Any]:
+        """Reuse watching_since across cycles for the same symbol when still active."""
+        row = self.db.scalar(
+            select(MarketScanCandidate)
+            .where(
+                MarketScanCandidate.symbol == symbol.upper(),
+                MarketScanCandidate.stage.in_(("Watching", "Risk Review", "Evaluating")),
+            )
+            .order_by(desc(MarketScanCandidate.evaluated_at))
+            .limit(1)
+        )
+        if row is None:
+            return {}
+        detail = row.detail or {}
+        since = detail.get("watching_since") or row.evaluated_at
+        if isinstance(since, str):
+            try:
+                since = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except ValueError:
+                since = row.evaluated_at
+        return {"watching_since": since}
+
+    def _watch_detail(
+        self,
+        *,
+        stage: str,
+        price: Decimal,
+        entry: Decimal,
+        stop: Decimal | None,
+        target: Decimal | None,
+        market_data_at: datetime | None,
+        watching_since: datetime | None,
+        expires_at: datetime | None,
+        risk_status: str,
+        bars: list[Bar],
+    ) -> dict[str, Any]:
+        now = _utcnow()
+        next_candle = None
+        if market_data_at is not None:
+            # Next evaluation aligns with next 15m close after latest bar.
+            next_candle = market_data_at + CANDLE_LENGTH
+            while next_candle <= now:
+                next_candle = next_candle + CANDLE_LENGTH
+        rr = None
+        if stop is not None and target is not None and price > 0:
+            risk = abs(price - stop)
+            reward = abs(target - price)
+            if risk > 0:
+                rr = float(reward / risk)
+        vols = [b.volume for b in bars[-5:] if b.volume is not None]
+        vol_ok = bool(vols) and sum(vols) / len(vols) > 0
+        data_fresh = (
+            market_data_at is not None
+            and (now - market_data_at) <= STALE_BAR
+        )
+        checklist = [
+            {
+                "key": "trend",
+                "label": "Trend direction agrees",
+                "status": "passed" if stage in {"Watching", "Risk Review", "Entered"} else (
+                    "failed" if stage == "Rejected" else "waiting"
+                ),
+            },
+            {
+                "key": "entry_range",
+                "label": "Price entered planned range",
+                "status": (
+                    "waiting"
+                    if stage == "Watching"
+                    else ("passed" if stage in {"Risk Review", "Entered"} else "failed")
+                ),
+            },
+            {
+                "key": "volume",
+                "label": "Buying volume is strong enough",
+                "status": "passed" if vol_ok else "waiting",
+            },
+            {
+                "key": "confirmation",
+                "label": "Confirmation candle closed",
+                "status": (
+                    "waiting"
+                    if stage == "Watching"
+                    else ("passed" if stage in {"Risk Review", "Entered"} else "failed")
+                ),
+            },
+            {
+                "key": "risk_reward",
+                "label": "Risk/reward meets minimum",
+                "status": "passed" if rr is not None and rr >= 1.0 else "waiting",
+            },
+            {
+                "key": "exposure",
+                "label": "Account exposure is acceptable",
+                "status": "passed" if risk_status == "clear" else (
+                    "waiting" if risk_status == "paused" else "failed"
+                ),
+            },
+            {
+                "key": "data",
+                "label": "Market data is current",
+                "status": "passed" if data_fresh else "failed",
+            },
+        ]
+        waiting_n = sum(1 for c in checklist if c["status"] == "waiting")
+        return {
+            "watching_since": watching_since.isoformat() if watching_since else None,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "next_eval_at": (
+                next_candle.isoformat()
+                if next_candle is not None
+                else None
+            ),
+            "next_candle_close_at": next_candle.isoformat() if next_candle else None,
+            "risk_reward": rr,
+            "checklist": checklist,
+            "checklist_waiting": waiting_n,
+            "support": float(stop) if stop is not None else None,
+            "resistance": float(target) if target is not None else None,
+        }
+
+    def cockpit_snapshot(self, *, default_notional: Decimal = Decimal("100")) -> dict[str, Any]:
+        """Aggregated Founder cockpit: wall, watches, gauges — genuine data only."""
+        status = self.plain_status_summary()
+        now = _utcnow()
+        instruments = list(
+            self.db.scalars(
+                select(MarketInstrument)
+                .where(MarketInstrument.is_active.is_(True))
+                .order_by(MarketInstrument.symbol.asc())
+            )
+        )
+        candidates = self.list_candidates(limit=50)
+        by_symbol = {c.symbol: c for c in candidates}
+        open_syms = {
+            p.symbol
+            for p in self.db.scalars(
+                select(PaperPosition).where(PaperPosition.quantity != 0)
+            )
+        }
+        wall: list[dict[str, Any]] = []
+        for inst in instruments:
+            rows, timeframe, close_time = self._load_bar_rows(inst.id, limit=30)
+            closes = [float(r.close) for r in rows]
+            price = closes[-1] if closes else None
+            pct = None
+            if len(closes) >= 2 and closes[-2] != 0:
+                pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100.0
+            cand = by_symbol.get(inst.symbol)
+            status_label = self._wall_status(cand, inst.symbol in open_syms, len(rows))
+            outlook = "Unclear"
+            if cand is not None:
+                if cand.bias == "Bullish":
+                    outlook = "Rising"
+                elif cand.bias == "Bearish":
+                    outlook = "Falling"
+            wall.append(
+                {
+                    "symbol": inst.symbol,
+                    "current_price": price,
+                    "pct_change": pct,
+                    "sparkline": closes[-24:],
+                    "outlook": outlook,
+                    "signal_strength": float(cand.score) if cand else 0.0,
+                    "status": status_label,
+                    "last_analyzed_at": cand.evaluated_at if cand else None,
+                    "candidate_id": str(cand.id) if cand else None,
+                    "timeframe": timeframe,
+                    "market_data_at": close_time,
+                    "stale": (
+                        close_time is None
+                        or (now - close_time) > STALE_BAR
+                    ),
+                }
+            )
+
+        watches = []
+        for cand in candidates:
+            if cand.stage not in {"Watching", "Risk Review", "Evaluating", "Expired"}:
+                continue
+            watches.append(self._founder_watch_plan(cand, default_notional=default_notional))
+
+        awaiting = [w for w in watches if w["stage_raw"] == "Watching"]
+        risk_check = [w for w in watches if w["stage_raw"] == "Risk Review"]
+
+        doing = self._doing_lines(status, candidates)
+        decided = self._decided_lines(limit=12)
+
+        scanned = int((status.get("scan_progress") or {}).get("scanned") or 0)
+        total = int((status.get("scan_progress") or {}).get("total") or 0)
+        next_at = status.get("next_scheduled_at")
+        return {
+            "generated_at": now,
+            "headline": status.get("headline"),
+            "scanner_state": status.get("scanner_state"),
+            "current_market": status.get("current_market"),
+            "markets_monitored": len(instruments),
+            "scan_progress": {"scanned": scanned, "total": total},
+            "next_scan_at": next_at,
+            "possible_trades_found": status.get("possible_trades_found") or 0,
+            "watching_count": len(awaiting),
+            "awaiting_confirmation": len(awaiting),
+            "risk_check_count": len(risk_check),
+            "open_trades": int((status.get("pipeline_counts") or {}).get("positions") or 0),
+            "market_data_at": status.get("market_data_at"),
+            "market_data_stale": status.get("market_data_stale"),
+            "market_data_age_seconds": status.get("market_data_age_seconds"),
+            "trading_allowed": status.get("trading_allowed"),
+            "pause_new_entries_active": status.get("pause_new_entries_active"),
+            "kill_switch_active": status.get("kill_switch_active"),
+            "next_step": status.get("next_step"),
+            "wall": wall,
+            "watches": watches,
+            "doing": doing,
+            "decided": decided,
+            "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
+            "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
+        }
+
+    def _founder_watch_plan(
+        self, cand: MarketScanCandidate, *, default_notional: Decimal
+    ) -> dict[str, Any]:
+        from app.services.plain_language import (
+            BIAS_PLAIN,
+            confidence_from_score,
+            plain_rejection,
+        )
+
+        detail = cand.detail or {}
+        now = _utcnow()
+        watching_since = detail.get("watching_since") or cand.evaluated_at.isoformat()
+        expires_at = detail.get("expires_at")
+        if not expires_at:
+            expires_at = (cand.evaluated_at + CANDIDATE_WATCH_TTL).isoformat()
+        since_dt = cand.evaluated_at
+        if isinstance(watching_since, str):
+            try:
+                since_dt = datetime.fromisoformat(watching_since.replace("Z", "+00:00"))
+            except ValueError:
+                since_dt = cand.evaluated_at
+        watched_seconds = max(0, int((now - since_dt).total_seconds()))
+        exp_dt = since_dt + CANDIDATE_WATCH_TTL
+        if isinstance(expires_at, str):
+            try:
+                exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                exp_dt = since_dt + CANDIDATE_WATCH_TTL
+        expire_in = max(0, int((exp_dt - now).total_seconds()))
+        next_eval = detail.get("next_eval_at") or detail.get("next_candle_close_at")
+        next_eval_in = None
+        if isinstance(next_eval, str):
+            try:
+                ne = datetime.fromisoformat(next_eval.replace("Z", "+00:00"))
+                next_eval_in = max(0, int((ne - now).total_seconds()))
+            except ValueError:
+                next_eval_in = None
+        checklist = detail.get("checklist") or []
+        waiting_n = int(detail.get("checklist_waiting") or sum(
+            1 for c in checklist if c.get("status") == "waiting"
+        ))
+        price = cand.current_price
+        stop = cand.stop_loss
+        target = cand.take_profit
+        max_loss = None
+        pot_profit = None
+        if price and stop and price > 0:
+            units = default_notional / price
+            max_loss = abs(price - stop) * units
+        if price and target and price > 0:
+            units = default_notional / price
+            pot_profit = abs(target - price) * units
+        entry = cand.entry_zone or price
+        narrative = self._watch_narrative(
+            cand=cand,
+            watched_seconds=watched_seconds,
+            next_eval_in=next_eval_in,
+            expire_in=expire_in,
+        )
+        return {
+            "id": str(cand.id),
+            "symbol": cand.symbol,
+            "stage_raw": cand.stage,
+            "outlook": BIAS_PLAIN.get(cand.bias, cand.bias),
+            "confidence": confidence_from_score(float(cand.score)),
+            "score": float(cand.score),
+            "why": plain_rejection(cand.reason_code, cand.reason_text),
+            "waiting_for": narrative["waiting_for"],
+            "narrative": narrative["statement"],
+            "watching_since": since_dt,
+            "watched_seconds": watched_seconds,
+            "expires_at": exp_dt,
+            "expire_in_seconds": expire_in,
+            "next_eval_at": next_eval,
+            "next_eval_in_seconds": next_eval_in,
+            "current_price": price,
+            "entry_zone": entry,
+            "stop_loss": stop,
+            "take_profit": target,
+            "risk_reward": detail.get("risk_reward"),
+            "paper_capital_planned": default_notional,
+            "max_dollar_loss": max_loss,
+            "potential_dollar_profit": pot_profit,
+            "checklist": checklist,
+            "checklist_waiting": waiting_n,
+            "checklist_summary": (
+                f"Argus is waiting for {waiting_n} remaining condition"
+                f"{'' if waiting_n == 1 else 's'} before this paper trade can be considered."
+                if waiting_n
+                else "All listed conditions currently look ready for paper consideration."
+            ),
+            "support": detail.get("support"),
+            "resistance": detail.get("resistance"),
+            "timeframe": cand.timeframe,
+            "strategy_key": cand.strategy_key,
+            "risk_status": cand.risk_status,
+            "reason_code": cand.reason_code,
+            "market_data_at": cand.market_data_at,
+            "evaluated_at": cand.evaluated_at,
+        }
+
+    def _watch_narrative(
+        self,
+        *,
+        cand: MarketScanCandidate,
+        watched_seconds: int,
+        next_eval_in: int | None,
+        expire_in: int,
+    ) -> dict[str, str]:
+        mins = watched_seconds // 60
+        if cand.stage == "Expired":
+            return {
+                "statement": (
+                    f"Watching expired after {mins} minutes because confirmation never "
+                    f"arrived for {cand.symbol}. No trade was opened."
+                ),
+                "waiting_for": "Nothing — this opportunity expired.",
+            }
+        entry = cand.entry_zone or cand.current_price
+        entry_txt = f"${entry:,.2f}" if entry is not None else "the planned level"
+        countdown = (
+            f"{next_eval_in // 60}:{next_eval_in % 60:02d}"
+            if next_eval_in is not None
+            else "the next scan"
+        )
+        return {
+            "statement": (
+                f"Watching for {mins} minute{'s' if mins != 1 else ''}. "
+                f"Argus wants {cand.symbol} to hold above {entry_txt} with stronger "
+                f"buying volume. It will evaluate again when the current "
+                f"{cand.timeframe} candle closes in {countdown}."
+            ),
+            "waiting_for": (
+                f"A confirming {cand.timeframe} candle close above {entry_txt}, "
+                f"or expiration in {expire_in // 60}:{expire_in % 60:02d}."
+            ),
+        }
+
+    @staticmethod
+    def _wall_status(
+        cand: MarketScanCandidate | None, trade_open: bool, bar_count: int
+    ) -> str:
+        if trade_open:
+            return "Trade Open"
+        if bar_count < MIN_BARS:
+            return "Waiting for Data"
+        if cand is None:
+            return "Scanning"
+        if cand.stage == "Watching":
+            return "Watching"
+        if cand.stage == "Risk Review":
+            return "Risk Check"
+        if cand.stage == "Evaluating":
+            return "Almost Ready"
+        if cand.stage == "Expired":
+            return "Rejected"
+        if cand.stage == "Rejected":
+            return "Rejected"
+        if cand.stage == "Entered":
+            return "Trade Open"
+        return "Scanning"
+
+    def _doing_lines(
+        self, status: dict[str, Any], candidates: list[MarketScanCandidate]
+    ) -> list[dict[str, str]]:
+        lines: list[dict[str, str]] = []
+        cur = status.get("current_market")
+        if status.get("scanner_state") == "Scanning" and cur:
+            lines.append({"text": f"Scanning {cur}", "tone": "info"})
+        for c in candidates:
+            if c.stage == "Watching":
+                lines.append(
+                    {
+                        "text": f"Waiting for a candle to close on {c.symbol}",
+                        "tone": "wait",
+                    }
+                )
+            elif c.stage == "Risk Review":
+                lines.append({"text": f"Checking risk for {c.symbol}", "tone": "wait"})
+        open_n = int((status.get("pipeline_counts") or {}).get("positions") or 0)
+        if open_n:
+            lines.append(
+                {
+                    "text": f"Monitoring the stop on {open_n} open paper trade"
+                    f"{'' if open_n == 1 else 's'}",
+                    "tone": "ok",
+                }
+            )
+        if not lines:
+            if status.get("market_data_stale"):
+                lines.append(
+                    {
+                        "text": "Waiting because market prices need a refresh",
+                        "tone": "warn",
+                    }
+                )
+            else:
+                lines.append(
+                    {
+                        "text": "Waiting because no setup currently qualifies",
+                        "tone": "wait",
+                    }
+                )
+        return lines[:8]
+
+    def _decided_lines(self, *, limit: int = 12) -> list[dict[str, Any]]:
+        from app.services.plain_language import plain_rejection
+
+        events = self.list_events(limit=40)
+        out: list[dict[str, Any]] = []
+        for e in events:
+            if e.component not in {"strategy_evaluator", "market_scanner", "paper_training"}:
+                # Keep teaching / evaluator decisions; skip pure health noise.
+                if e.outcome not in {"watching", "rejected", "interested", "not_interested"}:
+                    continue
+            why = plain_rejection(e.reason_code, e.detail)
+            if e.outcome == "watching":
+                text = (
+                    f"Watched {e.symbol} because upward momentum strengthened"
+                    if e.symbol
+                    else why
+                )
+            elif e.outcome == "rejected":
+                text = f"Rejected {e.symbol}: {why}" if e.symbol else why
+            else:
+                text = e.title
+            out.append(
+                {
+                    "id": str(e.id),
+                    "at": e.occurred_at,
+                    "text": text,
+                    "tone": (
+                        "bad"
+                        if e.outcome == "rejected"
+                        else ("ok" if e.outcome == "watching" else "info")
+                    ),
+                }
+            )
+            if len(out) >= limit:
+                break
+        return out
+
     def _add_candidate(
         self,
         cycle: MarketScanCycle,
@@ -815,6 +1321,7 @@ class MarketScanService:
         entry_zone: Decimal | None = None,
         stop_loss: Decimal | None = None,
         take_profit: Decimal | None = None,
+        detail: dict[str, Any] | None = None,
     ) -> MarketScanCandidate:
         cand = MarketScanCandidate(
             cycle_id=cycle.id,
@@ -833,7 +1340,7 @@ class MarketScanService:
             take_profit=take_profit,
             market_data_at=market_data_at,
             evaluated_at=_utcnow(),
-            detail={},
+            detail=detail or {},
         )
         self.db.add(cand)
         self.db.flush()
