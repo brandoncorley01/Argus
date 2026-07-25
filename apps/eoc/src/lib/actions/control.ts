@@ -14,13 +14,65 @@ export type ActionResult =
   | { ok: false; message: string; detail?: string };
 
 function repoRoot(): string {
-  // Prefer explicit override when EOC cwd is not apps/eoc
   if (process.env.ARGUS_REPO_ROOT) return process.env.ARGUS_REPO_ROOT;
   return path.resolve(process.cwd(), "..", "..");
 }
 
 function controlScript(name: string): string {
   return path.join(repoRoot(), "scripts", "control-center", name);
+}
+
+function runCommand(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  env?: Record<string, string>,
+): Promise<ActionResult> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd: repoRoot(),
+      windowsHide: true,
+      env: { ...process.env, ...env },
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve({
+        ok: false,
+        message: "Command timed out",
+        detail: "Try Start again from Home.",
+      });
+    }, timeoutMs);
+
+    child.stdout.on("data", (c: Buffer) => {
+      stdout += c.toString();
+    });
+    child.stderr.on("data", (c: Buffer) => {
+      stderr += c.toString();
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({
+        ok: false,
+        message: err.message,
+        detail: "Try Start again from Home.",
+      });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const detail = (stdout || stderr).trim().slice(-4000);
+      if (code === 0) {
+        resolve({ ok: true, message: "ok", detail });
+      } else {
+        resolve({
+          ok: false,
+          message: `Command failed (exit ${code ?? "?"}).`,
+          detail,
+        });
+      }
+    });
+  });
 }
 
 function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> {
@@ -39,66 +91,50 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
     ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script]
     : ["-NoProfile", "-File", script];
 
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      cwd: repoRoot(),
-      windowsHide: true,
-      env: {
-        ...process.env,
-        // Keep the Founder dashboard alive while Start/Stop run from the browser.
-        ARGUS_KEEP_DASHBOARD: "1",
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({
-        ok: false,
-        message: "Command timed out",
-        detail: "Try Start or Stop again from Home.",
-      });
-    }, timeoutMs);
+  return runCommand(cmd, args, timeoutMs, { ARGUS_KEEP_DASHBOARD: "1" });
+}
 
-    child.stdout.on("data", (c: Buffer) => {
-      stdout += c.toString();
-    });
-    child.stderr.on("data", (c: Buffer) => {
-      stderr += c.toString();
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({
-        ok: false,
-        message: err.message,
-        detail: "Try Start or Stop again from Home.",
-      });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      const detail = (stdout || stderr).trim().slice(-2000);
-      if (code === 0) {
-        resolve({ ok: true, message: `${scriptLeaf} completed.`, detail });
-      } else {
-        resolve({
-          ok: false,
-          message: `${scriptLeaf} failed (exit ${code ?? "?"}).`,
-          detail,
-        });
-      }
-    });
-  });
+/** Force this PC onto GitHub main before Start, so Home fixes cannot stay stuck. */
+async function forceSyncMain(): Promise<ActionResult> {
+  const root = repoRoot().replace(/'/g, "''");
+  const isWin = process.platform === "win32";
+  const cmd = isWin ? "powershell.exe" : "pwsh";
+  const ps = `
+$ErrorActionPreference = 'Continue'
+Set-Location '${root}'
+git fetch origin
+git checkout -f -B main origin/main
+git reset --hard origin/main
+$sha = (git rev-parse --short HEAD).Trim()
+Write-Host "SYNC_SHA=$sha"
+if (Test-Path '.\\apps\\eoc\\.next') {
+  Remove-Item -Recurse -Force '.\\apps\\eoc\\.next' -ErrorAction SilentlyContinue
+}
+exit 0
+`;
+  return runCommand(
+    cmd,
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+    120_000,
+  );
 }
 
 export async function startArgusAction(): Promise<ActionResult> {
+  const sync = await forceSyncMain();
   const res = await runPs1("start-argus.ps1", 240_000);
   revalidatePath("/today");
   revalidatePath("/control");
-  if (!res.ok) return res;
+  if (!res.ok) {
+    return {
+      ok: false,
+      message: res.message,
+      detail: [sync.detail, res.detail].filter(Boolean).join("\n"),
+    };
+  }
   return {
     ok: true,
     message: "Argus started. This page will reload in a few seconds.",
-    detail: res.detail,
+    detail: [sync.detail, res.detail].filter(Boolean).join("\n"),
   };
 }
 
@@ -107,7 +143,11 @@ export async function stopArgusAction(): Promise<ActionResult> {
   revalidatePath("/today");
   revalidatePath("/control");
   return res.ok
-    ? { ok: true, message: "Argus stopped. Paper data is preserved. You can Start again here.", detail: res.detail }
+    ? {
+        ok: true,
+        message: "Argus stopped. Paper data is preserved. You can Start again here.",
+        detail: res.detail,
+      }
     : res;
 }
 

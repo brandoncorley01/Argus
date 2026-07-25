@@ -1,4 +1,23 @@
-﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Today.
+﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Home.
+$ErrorActionPreference = "Continue"
+
+# Self-update from GitHub first so browser Start cannot stay stuck on a stale script.
+if (-not $env:ARGUS_START_SELF_UPDATED) {
+  $env:ARGUS_START_SELF_UPDATED = "1"
+  $self = $MyInvocation.MyCommand.Path
+  if (-not $self) { $self = Join-Path $PSScriptRoot "start-argus.ps1" }
+  $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/start-argus.ps1"
+  try {
+    Write-Host "Downloading latest Start script from GitHub..."
+    Invoke-WebRequest -Uri "$url?$(Get-Random)" -OutFile $self -UseBasicParsing
+    Write-Host "Re-running updated Start script..."
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self @args
+    exit $LASTEXITCODE
+  } catch {
+    Write-Host "WARN: could not self-update Start script: $($_.Exception.Message)"
+  }
+}
+
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
@@ -17,12 +36,30 @@ try {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
   }
 
-  # You should not need to run git yourself - Start keeps the Founder UI current.
+  # Force GitHub main onto this PC (Founder browser cadence).
   $updated = Sync-ArgusCode $Root
+
+  # Also force-reset even if Sync helper returned false on a dirty tree.
+  try {
+    git fetch origin 2>&1 | Out-Host
+    git checkout -f -B main origin/main 2>&1 | Out-Host
+    git reset --hard origin/main 2>&1 | Out-Host
+    $updated = $true
+  } catch {
+    Write-Host "WARN: extra force-sync skipped: $($_.Exception.Message)"
+  }
+
+  $sha = (git rev-parse --short HEAD).Trim()
+  $buildMarker = Join-Path $Root "apps\eoc\public\argus-build.txt"
+  $publicDir = Split-Path $buildMarker -Parent
+  if (-not (Test-Path $publicDir)) {
+    New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
+  }
+  Set-Content -Path $buildMarker -Value "home-start-stop-v4 $sha" -Encoding ascii
 
   # Drop stale Next.js cache so Home Start/Stop cannot be masked by old builds.
   $nextCache = Join-Path $Root "apps\eoc\.next"
-  if (($updated -or $KeepDashboard) -and (Test-Path $nextCache)) {
+  if (Test-Path $nextCache) {
     Write-Host "Clearing stale dashboard cache..."
     Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
   }
@@ -35,24 +72,19 @@ try {
   $eocPid = $pids.eoc
   $workerPid = $pids.worker
 
-  # After a code update, recycle API. From browser Start, always reload dashboard
-  # so Home status/UI fixes are never stuck on an old Next.js process.
+  # After a code update, recycle API. From browser Start, always reload dashboard.
   $reloadDashboard = $KeepDashboard
-  if ($updated) {
-    Write-Host "Code changed - refreshing services..."
-    Stop-PidIfRunning $pids.api "API launcher"
-    if (-not $KeepDashboard) {
-      Stop-PidIfRunning $pids.eoc "EOC launcher"
-      Stop-ArgusPortListeners @(8000, 3000)
-      $eocPid = $null
-    } else {
-      Stop-ArgusPortListeners @(8000)
-      Write-Host "Dashboard will reload after Start finishes so Home picks up the update."
-    }
-    $apiPid = $null
-  } elseif ($KeepDashboard) {
-    Write-Host "Dashboard will reload after Start finishes so Home stays current."
+  Write-Host "Code refresh - recycling services..."
+  Stop-PidIfRunning $pids.api "API launcher"
+  if (-not $KeepDashboard) {
+    Stop-PidIfRunning $pids.eoc "EOC launcher"
+    Stop-ArgusPortListeners @(8000, 3000)
+    $eocPid = $null
+  } else {
+    Stop-ArgusPortListeners @(8000)
+    Write-Host "Dashboard will reload after Start finishes so Home picks up the update."
   }
+  $apiPid = $null
 
   if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
     Write-Host "Starting API on 127.0.0.1:8000..."
@@ -72,10 +104,9 @@ try {
     Write-Host "Worker already running"
   }
 
-  # Dashboard: keep as-is from browser Start; otherwise start/recycle as needed.
   $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl) 2)
   if ($KeepDashboard) {
-    Write-Host "Dashboard left running for browser control"
+    Write-Host "Dashboard left running until end-of-Start reload"
   } elseif ($updated -or -not $eocUp) {
     if ($eocUp -and -not $updated) {
       Write-Host "EOC already responding"
@@ -85,7 +116,7 @@ try {
       }
       Write-Host "Starting dashboard on 127.0.0.1:3000..."
       $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
-      $envBlock = "`$env:ARGUS_API_BASE_URL='http://127.0.0.1:8000'"
+      $envBlock = "`$env:ARGUS_API_BASE_URL='http://127.0.0.1:8000'; `$env:ARGUS_REPO_ROOT='$Root'"
       $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
         "Set-Location '$Root'; $envBlock; pnpm eoc:dev *> '$eocLog'"
@@ -126,7 +157,6 @@ try {
     Write-Host "Opening Home: $dash"
     Start-Process $dash
   } elseif ($reloadDashboard) {
-    # Delay so the browser Start request can finish, then bring Home back on new code.
     Write-Host "Reloading dashboard for updated Home..."
     $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
     $restart = @"
@@ -138,6 +168,7 @@ try {
 Start-Sleep -Seconds 2
 Set-Location '$Root'
 `$env:ARGUS_API_BASE_URL = 'http://127.0.0.1:8000'
+`$env:ARGUS_REPO_ROOT = '$Root'
 pnpm eoc:dev *> '$eocLog'
 "@
     $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
