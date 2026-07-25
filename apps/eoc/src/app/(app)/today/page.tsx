@@ -3,24 +3,20 @@ import Link from "next/link";
 
 import { ActiveTrades, type PositionSummary } from "@/components/founder/ActiveTrades";
 import { CommandStatusBar } from "@/components/founder/CommandStatusBar";
-import { DecisionPipeline } from "@/components/founder/DecisionPipeline";
-import { DecisionStream } from "@/components/founder/DecisionStream";
+import {
+  ConsideringTrades,
+  type ScanCandidate,
+} from "@/components/founder/ConsideringTrades";
 import { EndDayButton } from "@/components/founder/EndDayButton";
-import { MarketScannerPanel } from "@/components/founder/MarketScannerPanel";
-import { OpportunityWorkspace } from "@/components/founder/OpportunityWorkspace";
-import type { ScanCandidate } from "@/components/founder/OpportunityRadar";
+import {
+  buildJustDidTimeline,
+  WhatArgusJustDid,
+} from "@/components/founder/WhatArgusJustDid";
 import { WhatArgusIsDoing } from "@/components/founder/WhatArgusIsDoing";
 import { EmptyState, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
-import { buildDecisionStream } from "@/lib/founder/decisionStream";
-import {
-  formatWinRate,
-  holdingLabel,
-  money,
-  moneyPnl,
-  pnlClass,
-} from "@/lib/founder/simple";
+import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
 import { apiFetch } from "@/lib/server/api";
 import {
@@ -70,7 +66,6 @@ type SystemHealth = {
   overall_status: string;
   generated_at?: string;
   paper?: { last_paper_order_at?: string | null };
-  runtime_monitor?: Record<string, { status: string; detail: string }>;
 };
 
 type DailyReport = {
@@ -80,10 +75,7 @@ type DailyReport = {
     trade_count?: number;
     order_count?: number;
     win_rate?: string | null;
-    largest_winner?: string | null;
-    largest_loser?: string | null;
     exposure?: string | null;
-    risk_events_count?: number;
   };
 };
 
@@ -99,13 +91,8 @@ type Fill = {
 type ClosedTrade = {
   fill_id: string;
   symbol: string;
-  quantity: string;
-  entry_price: string;
-  exit_price: string;
   realized_pnl: string;
   filled_at: string;
-  holding_seconds: number | null;
-  exit_reason: string | null;
 };
 
 type ScanStatus = {
@@ -113,8 +100,6 @@ type ScanStatus = {
   cycle: {
     id: string;
     status: string;
-    timeframe: string;
-    strategy_key: string;
     symbols_total: number;
     symbols_scanned: number;
     candidates_found: number;
@@ -125,7 +110,6 @@ type ScanStatus = {
   } | null;
   symbols_monitored: number;
   market_data_at: string | null;
-  market_data_age_seconds: number | null;
   market_data_stale: boolean;
   pause_new_entries_active: boolean;
   kill_switch_active: boolean;
@@ -136,9 +120,14 @@ type ScanStatus = {
     symbol: string | null;
   } | null;
   pipeline_counts: Record<string, number>;
-  rejection_counts: Record<string, number>;
   next_scheduled_at: string | null;
   worker_note?: string;
+  headline?: string | null;
+  watching_count?: number | null;
+  current_market?: string | null;
+  scan_progress?: { scanned: number; total: number } | null;
+  possible_trades_found?: number | null;
+  next_step?: string | null;
 };
 
 type ScanEvent = {
@@ -174,53 +163,53 @@ function deriveOperationalPicture(opts: {
   if (!opts.apiReady) {
     return {
       status: "Stopped",
-      explanation: "Argus API is not ready. Web UI may still load; trading services are down.",
+      explanation:
+        "Argus is not ready. Start Argus, then refresh this page.",
     };
   }
   if (opts.killSwitch) {
     return {
       status: "Warning",
-      explanation: "Paper kill switch is active — all new paper submits are blocked.",
+      explanation: "Emergency stop is on — Argus will not open new paper trades.",
     };
   }
   if (opts.pauseNewEntries) {
     return {
       status: "Paused",
       explanation:
-        "New entries are paused. Argus can still monitor open positions and run market scans.",
+        "Argus is paused and will not open new trades. Open trades can still be monitored.",
     };
   }
   if (opts.scannerFailed) {
     return {
       status: "Warning",
       explanation:
-        "Market scanner failed (often: no instruments registered). Heartbeat alone is not full operation.",
+        "No markets are registered yet. Press Refresh recent prices to restore scanning.",
     };
   }
   if (opts.marketDataStale) {
     return {
       status: "Warning",
       explanation:
-        "Market data is missing or stale. Positions may lack current prices; Argus is not fully market-ready.",
+        "Market prices are outdated. Profit/loss may be unsafe to trust until prices refresh.",
     };
   }
   if (opts.marksIncomplete) {
     return {
       status: "Warning",
       explanation:
-        "Open positions lack verified market marks. Unrealized P&L is incomplete — not treated as zero.",
+        "Open trades are missing current prices. Profit/loss is not shown as zero.",
     };
   }
   if (opts.healthWarning) {
     return {
       status: "Warning",
-      explanation: "System health reports degraded or unhealthy services.",
+      explanation: "A system service needs attention. Trading rules still apply.",
     };
   }
   return {
     status: "Running",
-    explanation:
-      "API is up, trading is not paused, and no active data/scanner warnings were detected.",
+    explanation: "Argus is running correctly for paper practice.",
   };
 }
 
@@ -242,7 +231,6 @@ export default async function TodayPage() {
       soft(() => apiFetch<ScanStatus>("/api/v1/market/scan/status")),
     ]);
 
-  // Kick an observation-only scan when none exists yet (does not place trades).
   let scanStatus = scanStatusInitial;
   if (ready && (!scanStatus?.cycle || scanStatus.scanner_state === "Between Cycles")) {
     const ageMin =
@@ -266,7 +254,7 @@ export default async function TodayPage() {
   const [candidates, scanEvents] = await Promise.all([
     soft(() =>
       apiFetch<ScanCandidate[]>("/api/v1/market/scan/candidates", {
-        searchParams: { limit: 5 },
+        searchParams: { limit: 8 },
       }),
     ),
     soft(() =>
@@ -281,8 +269,9 @@ export default async function TodayPage() {
   let positions: PositionSummary[] = [];
   let fills: Fill[] = [];
   let closedTrades: ClosedTrade[] = [];
+  let trainingNotional = "100";
   if (portfolio) {
-    const [s, p, f, c] = await Promise.all([
+    const [s, p, f, c, settings] = await Promise.all([
       soft(() =>
         apiFetch<PortfolioSummary>(`/api/v1/paper/portfolios/${portfolio.id}/summary`),
       ),
@@ -300,11 +289,17 @@ export default async function TodayPage() {
           { searchParams: { limit: 5 } },
         ),
       ),
+      soft(() =>
+        apiFetch<{ default_notional: string }>(
+          `/api/v1/paper/training/${portfolio.id}/settings`,
+        ),
+      ),
     ]);
     summary = s;
     positions = p ?? [];
     fills = f ?? [];
     closedTrades = c ?? [];
+    if (settings?.default_notional) trainingNotional = settings.default_notional;
   }
 
   const defaultProvider =
@@ -315,7 +310,7 @@ export default async function TodayPage() {
   const connectionLabel = defaultProvider
     ? `${defaultProvider.provider.display_name}: ${defaultProvider.health?.status ?? "unknown"}`
     : ready
-      ? "Internal paper ready"
+      ? "Paper ready"
       : "Disconnected";
 
   const pauseNewEntries = Boolean(
@@ -338,7 +333,7 @@ export default async function TodayPage() {
     pauseNewEntries,
     killSwitch,
     healthWarning,
-    marketDataStale: marketDataStale && positions.length > 0,
+    marketDataStale: marketDataStale && (positions.length > 0 || (scanStatus?.symbols_monitored ?? 0) > 0),
     marksIncomplete: marksIncomplete && positions.length > 0,
     scannerFailed: Boolean(scannerFailed && (scanStatus?.symbols_monitored ?? 0) === 0),
   });
@@ -351,52 +346,39 @@ export default async function TodayPage() {
 
   const lastHeartbeat =
     formatTimestamp(
-      defaultProvider?.health?.last_success_at ??
-        health?.generated_at ??
-        health?.paper?.last_paper_order_at ??
-        null,
+      defaultProvider?.health?.last_success_at ?? health?.generated_at ?? null,
     ) || "Unavailable";
 
   const report = reports?.[0];
-  const reportContent = report?.content;
-  const realizedToday = reportContent?.daily_pnl ?? null;
-  const unrealizedValues = positions
-    .map((pos) => (pos.unrealized_pnl == null ? null : Number(pos.unrealized_pnl)))
-    .filter((n): n is number => n != null && Number.isFinite(n));
-  const unrealizedComplete =
-    positions.length > 0 && unrealizedValues.length === positions.length;
-  const unrealizedToday = unrealizedComplete
-    ? unrealizedValues.reduce((a, b) => a + b, 0)
-    : null;
+  const realizedToday = report?.content?.daily_pnl ?? null;
+  const totalPnl = closedTrades.reduce(
+    (sum, t) => sum + (Number(t.realized_pnl) || 0),
+    0,
+  );
 
-  const decisions = buildDecisionStream({
+  const timeline = buildJustDidTimeline({
     scanEvents: scanEvents ?? [],
-    fills: fills.slice(0, 12),
-    limit: 25,
-  });
-  const scannerFeed = buildDecisionStream({
-    scanEvents: (scanEvents ?? []).filter((e) =>
-      ["market_scanner", "strategy_evaluator"].includes(e.component),
-    ),
+    fills: fills.slice(0, 8),
     limit: 12,
   });
 
-  const liveExposure = summary?.committed_capital ?? null;
-  const reportExposure = reportContent?.exposure ?? null;
-  const closedTodayCount = closedTrades.filter((t) => {
-    const day = t.filled_at.slice(0, 10);
-    const today = new Date().toISOString().slice(0, 10);
-    return day === today;
-  }).length;
+  const scanned = scanStatus?.scan_progress?.scanned ?? scanStatus?.cycle?.symbols_scanned ?? 0;
+  const total = scanStatus?.scan_progress?.total ?? scanStatus?.cycle?.symbols_total ?? 0;
+  const possible =
+    scanStatus?.possible_trades_found ??
+    (candidates ?? []).filter((c) =>
+      ["Watching", "Evaluating", "Risk Review"].includes(c.stage),
+    ).length;
 
   return (
-    <div className="founder-home command-center market-command-center">
+    <div className="founder-home training-lab-home">
       <header className="page-header rise">
         <div>
           <h1>Home</h1>
           <p>
-            Paper practice desk — see what Argus is scanning, why it skips or watches
-            a setup, and teach it with your notes. Not real money.
+            Daily command center — plain language only. Simulated paper money,
+            not real funds.{" "}
+            <Link href="/paper-training">Open Paper Training</Link>
           </p>
         </div>
       </header>
@@ -412,7 +394,7 @@ export default async function TodayPage() {
         marketDataLabel={
           scanStatus?.market_data_at
             ? `${formatTimestamp(scanStatus.market_data_at)}${
-                scanStatus.market_data_stale ? " (stale)" : ""
+                scanStatus.market_data_stale ? " (outdated)" : ""
               }`
             : "Unavailable"
         }
@@ -429,28 +411,47 @@ export default async function TodayPage() {
         buildId={ARGUS_UI_BUILD}
       />
 
+      {/* A */}
       <WhatArgusIsDoing
         headline={
+          scanStatus?.headline ||
           scanStatus?.worker_note ||
           (ready
             ? "Waiting for scanner status…"
             : "Start Argus to begin scanning and paper trading.")
         }
-        scannerState={scanStatus?.scanner_state ?? "Unavailable"}
-        scanned={scanStatus?.cycle?.symbols_scanned ?? 0}
-        watching={
-          (candidates ?? []).filter((c) =>
-            ["Watching", "Evaluating", "Risk Review"].includes(c.stage),
-          ).length
+        currentMarket={
+          scanStatus?.current_market ??
+          scanStatus?.cycle?.current_symbol ??
+          null
         }
+        scanned={scanned}
+        total={total}
+        possibleTrades={possible}
+        lastScanLabel={
+          formatTimestamp(scanStatus?.cycle?.completed_at) || "Not yet"
+        }
+        nextScanLabel={
+          formatTimestamp(
+            scanStatus?.next_scheduled_at ?? scanStatus?.cycle?.next_scheduled_at,
+          ) || "Scheduled market scan"
+        }
+        latestPriceLabel={
+          scanStatus?.market_data_at
+            ? `${formatTimestamp(scanStatus.market_data_at)}${
+                scanStatus.market_data_stale ? " — outdated" : ""
+              }`
+            : "No recent price history yet"
+        }
+        nextStep={scanStatus?.next_step ?? null}
         openPositions={summary?.open_position_count ?? 0}
-        tradingAllowed={!killSwitch && !pauseNewEntries}
       />
 
-      <section className="panel rise" aria-label="Account summary">
+      {/* B */}
+      <section className="panel rise" aria-label="Your paper account">
         <h2 style={{ marginTop: 0 }}>
-          Account summary{" "}
-          <span className="mode-tag mode-tag-paper">PAPER</span>
+          Your paper account{" "}
+          <span className="mode-tag mode-tag-paper">SIMULATED</span>
         </h2>
         {!summary ? (
           <EmptyState>
@@ -459,218 +460,75 @@ export default async function TodayPage() {
               : "Argus is stopped. Start Argus to load paper account figures."}
           </EmptyState>
         ) : (
-          <>
-            <div className="summary-grid summary-grid-primary">
-              <div className="summary-card">
-                <span className="metric-label">
-                  Total account value{" "}
-                  <Tip
-                    text={
-                      summary.total_account_value_basis === "mark"
-                        ? "Cash plus marked market value of open positions."
-                        : "Cash plus capital committed at cost basis (marks incomplete)."
-                    }
-                  />
-                </span>
-                <strong>{money(summary.total_account_value)}</strong>
-              </div>
-              <div className="summary-card">
-                <span className="metric-label">Available cash</span>
-                <strong>{money(summary.cash_balance)}</strong>
-              </div>
-              <div className="summary-card">
-                <span className="metric-label">
-                  Capital in open trades{" "}
-                  <Tip text="Live Σ |qty| × average entry price (cost basis)." />
-                </span>
-                <strong>{money(summary.committed_capital)}</strong>
-              </div>
-              <div className="summary-card">
-                <span className="metric-label">
-                  Today&apos;s realized P&amp;L{" "}
-                  <Tip text="From the latest daily report (UTC calendar day of that report)." />
-                </span>
-                <strong className={pnlClass(realizedToday)}>
-                  {moneyPnl(realizedToday)}
-                </strong>
-              </div>
-              <div className="summary-card">
-                <span className="metric-label">
-                  Today&apos;s unrealized P&amp;L{" "}
-                  <Tip text="Sum of marked unrealized P&L. Unavailable unless every open position has a mark." />
-                </span>
-                <strong className={pnlClass(unrealizedToday)}>
-                  {unrealizedToday == null ? "Unavailable" : moneyPnl(unrealizedToday)}
-                </strong>
-              </div>
-              <div className="summary-card">
-                <span className="metric-label">Open positions</span>
-                <strong>{summary.open_position_count}</strong>
-              </div>
+          <div className="summary-grid summary-grid-primary">
+            <div className="summary-card">
+              <span className="metric-label">
+                Paper Account Balance{" "}
+                <Tip text="Total simulated account value. Not real money." />
+              </span>
+              <strong>{money(summary.total_account_value)}</strong>
             </div>
-            <details className="secondary-metrics">
-              <summary>Secondary account metrics</summary>
-              <div className="summary-grid summary-grid-compact">
-                <div className="summary-card">
-                  <span className="metric-label">
-                    Buying power <Tip text="Cash balance minus reserved cash." />
-                  </span>
-                  <strong>{money(summary.buying_power)}</strong>
-                </div>
-                <div className="summary-card">
-                  <span className="metric-label">Reserved cash</span>
-                  <strong>{money(summary.reserved_cash)}</strong>
-                </div>
-              </div>
-            </details>
-          </>
+            <div className="summary-card">
+              <span className="metric-label">Available Paper Cash</span>
+              <strong>{money(summary.buying_power)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Money Currently in Trades</span>
+              <strong>{money(summary.committed_capital)}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">
+                Profit or Loss Today{" "}
+                <Tip text="From the latest saved daily report when available." />
+              </span>
+              <strong className={pnlClass(realizedToday)}>
+                {realizedToday != null ? moneyPnl(realizedToday) : "Not reported yet"}
+              </strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Total Paper Profit or Loss</span>
+              <strong className={pnlClass(String(totalPnl))}>
+                {closedTrades.length ? moneyPnl(String(totalPnl)) : "No closed trades yet"}
+              </strong>
+            </div>
+            <div className="summary-card">
+              <span className="metric-label">Open Trades</span>
+              <strong>{summary.open_position_count}</strong>
+            </div>
+          </div>
         )}
+        <p className="muted-note">
+          All figures are simulated paper money. Live trading stays locked until
+          formally authorized.
+        </p>
       </section>
 
-      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Active Market Scanner">
-          <MarketScannerPanel status={scanStatus} feed={scannerFeed} />
-        </Panel>
-        <Panel title="How the last scan sorted markets">
-          <DecisionPipeline
-            counts={scanStatus?.pipeline_counts ?? {}}
-            rejections={scanStatus?.rejection_counts ?? {}}
-          />
-        </Panel>
-      </div>
-
-      <div style={{ marginTop: "1rem" }}>
-        <OpportunityWorkspace
+      {/* C */}
+      <Panel title="Trades Argus is considering">
+        <ConsideringTrades
           candidates={candidates ?? []}
-          scannedCount={scanStatus?.cycle?.symbols_scanned ?? 0}
+          portfolioId={portfolio?.id ?? null}
+          defaultNotional={trainingNotional}
         />
-      </div>
+      </Panel>
 
-      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Open paper trades">
-          <p className="muted-note" style={{ marginTop: 0 }}>
-            Entry price is the fill price per coin. Capital is qty × entry (so with
-            qty 1 they match). Current uses the latest stored market bar when one
-            exists.
-          </p>
-          <ActiveTrades positions={positions} />
-        </Panel>
-        <Panel title="What Argus decided (latest)">
-          <DecisionStream initialItems={decisions} />
-        </Panel>
-      </div>
+      {/* D */}
+      <Panel title="Open paper trades">
+        <ActiveTrades positions={positions} />
+      </Panel>
 
-      <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Paper results">
-          <div className="summary-grid summary-grid-compact">
-            <div className="summary-card">
-              <span className="metric-label">
-                Closed paper trades{" "}
-                <Tip text="Sell fills with entry/exit replayed from your paper book." />
-              </span>
-              <strong>{closedTrades.length}</strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Closed today (UTC){" "}
-                <Tip text="Closed trades whose exit time is today." />
-              </span>
-              <strong>{closedTodayCount}</strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Money in open trades{" "}
-                <Tip text="Live cost basis — same as Capital in open trades above." />
-              </span>
-              <strong>{liveExposure == null ? "—" : money(liveExposure)}</strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Report win rate{" "}
-                <Tip text="Only when a daily report has closing sells for that UTC day." />
-              </span>
-              <strong>{formatWinRate(reportContent?.win_rate)}</strong>
-            </div>
-            {reportContent?.largest_winner != null ? (
-              <div className="summary-card">
-                <span className="metric-label">Largest winner (report)</span>
-                <strong className={pnlClass(reportContent.largest_winner)}>
-                  {moneyPnl(reportContent.largest_winner)}
-                </strong>
-              </div>
-            ) : null}
-            {reportContent?.largest_loser != null ? (
-              <div className="summary-card">
-                <span className="metric-label">Largest loser (report)</span>
-                <strong className={pnlClass(reportContent.largest_loser)}>
-                  {moneyPnl(reportContent.largest_loser)}
-                </strong>
-              </div>
-            ) : null}
-          </div>
-          <p className="muted-note" style={{ marginBottom: 0 }}>
-            We hide empty risk metrics instead of filling the page with
-            “Unavailable”. Daily risk remaining and drawdown still need more history.
-            {report ? ` Latest report day: ${report.report_date} (UTC).` : ""}
-            {reportExposure != null && liveExposure != null && reportExposure !== liveExposure
-              ? ` Report exposure snapshot was ${money(reportExposure)} when that report was saved.`
-              : ""}
-          </p>
-        </Panel>
+      {/* E */}
+      <Panel title="What Argus just did">
+        <WhatArgusJustDid items={timeline} />
+      </Panel>
 
-        <Panel title="Recent closed paper trades">
-          {closedTrades.length === 0 ? (
-            <EmptyState>
-              No closed paper trades yet. Buys alone are not completed trades — a sell
-              that finishes (or reduces) a position will show here.
-            </EmptyState>
-          ) : (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Entry</th>
-                    <th>Exit</th>
-                    <th>P&amp;L</th>
-                    <th>Held</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {closedTrades.map((t) => (
-                    <tr key={t.fill_id}>
-                      <td>{t.symbol}</td>
-                      <td>{money(t.entry_price)}</td>
-                      <td>{money(t.exit_price)}</td>
-                      <td className={pnlClass(t.realized_pnl)}>
-                        {moneyPnl(t.realized_pnl)}
-                      </td>
-                      <td>{holdingLabel(t.holding_seconds)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <div className="form-actions" style={{ marginTop: "0.75rem" }}>
-            <Link className="btn secondary" href="/trading">
-              Trading history
-            </Link>
-            <Link className="btn secondary" href="/reports">
-              Full reports
-            </Link>
-          </div>
-        </Panel>
-      </div>
-
-      <div style={{ marginTop: "1rem" }}>
-        <Panel title="End of day">
-          <p style={{ color: "var(--ink-soft)", marginTop: 0 }}>
-            Saves today&apos;s report and backup. Does not stop Argus.
-          </p>
-          <EndDayButton />
-        </Panel>
-      </div>
+      <section className="panel rise" aria-label="End of day">
+        <h2 style={{ marginTop: 0 }}>End of day</h2>
+        <p className="muted-note">
+          Save today&apos;s paper session summary. This does not unlock live trading.
+        </p>
+        {portfolio ? <EndDayButton /> : null}
+      </section>
     </div>
   );
 }

@@ -48,6 +48,8 @@ export async function runMarketScanAction(
       requireCsrf: true,
     });
     revalidatePath("/today");
+    revalidatePath("/paper-training");
+    revalidatePath("/trades");
     return { ok: true, message: "Scan finished. Home will refresh with the latest look." };
   } catch (err) {
     const message =
@@ -56,6 +58,165 @@ export async function runMarketScanAction(
         : err instanceof Error
           ? err.message
           : "Could not run market scan.";
+    return { ok: false, message };
+  }
+}
+
+export async function refreshRecentPricesAction(): Promise<PaperActionResult> {
+  try {
+    const result = await apiFetch<{
+      ok: boolean;
+      next_step: string;
+      records_accepted: number;
+    }>("/api/v1/market/prices/refresh", {
+      method: "POST",
+      requireCsrf: true,
+    });
+    revalidatePath("/today");
+    revalidatePath("/paper-training");
+    revalidatePath("/market");
+    return {
+      ok: result.ok,
+      message:
+        result.next_step ||
+        `Saved ${result.records_accepted} recent price updates.`,
+    };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not refresh recent prices.";
+    return { ok: false, message };
+  }
+}
+
+export async function setTrainingModeAction(input: {
+  portfolioId: string;
+  mode: "automatic" | "coaching";
+  defaultNotional?: string;
+}): Promise<PaperActionResult> {
+  try {
+    await apiFetch(`/api/v1/paper/training/${input.portfolioId}/settings`, {
+      method: "PUT",
+      body: {
+        mode: input.mode,
+        default_notional: input.defaultNotional ?? null,
+      },
+      requireCsrf: true,
+    });
+    revalidatePath("/paper-training");
+    revalidatePath("/today");
+    return {
+      ok: true,
+      message:
+        input.mode === "automatic"
+          ? "Automatic Practice is on. Argus may open simulated trades on its own."
+          : "Coaching Mode is on. Argus will wait for your Take or Skip before entering.",
+    };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not update training mode.";
+    return { ok: false, message };
+  }
+}
+
+export async function coachingTakeAction(input: {
+  portfolioId: string;
+  candidateId: string;
+  note?: string;
+}): Promise<PaperActionResult> {
+  try {
+    const result = await apiFetch<{ message: string }>(
+      `/api/v1/paper/training/${input.portfolioId}/coaching/take`,
+      {
+        method: "POST",
+        body: { candidate_id: input.candidateId, note: input.note ?? null },
+        requireCsrf: true,
+      },
+    );
+    revalidatePath("/paper-training");
+    revalidatePath("/today");
+    revalidatePath("/trades");
+    return { ok: true, message: result.message };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not take this paper trade.";
+    return { ok: false, message };
+  }
+}
+
+export async function coachingSkipAction(input: {
+  portfolioId: string;
+  candidateId: string;
+  note?: string;
+}): Promise<PaperActionResult> {
+  try {
+    const result = await apiFetch<{ message: string }>(
+      `/api/v1/paper/training/${input.portfolioId}/coaching/skip`,
+      {
+        method: "POST",
+        body: { candidate_id: input.candidateId, note: input.note ?? null },
+        requireCsrf: true,
+      },
+    );
+    revalidatePath("/paper-training");
+    revalidatePath("/today");
+    return { ok: true, message: result.message };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not skip this idea.";
+    return { ok: false, message };
+  }
+}
+
+export async function recordTrainingFeedbackAction(input: {
+  portfolioId: string;
+  feedbackCode: string;
+  symbol: string;
+  fillId?: string;
+  candidateId?: string;
+  note?: string;
+}): Promise<PaperActionResult> {
+  try {
+    await apiFetch(`/api/v1/paper/training/${input.portfolioId}/feedback`, {
+      method: "POST",
+      body: {
+        feedback_code: input.feedbackCode,
+        symbol: input.symbol,
+        fill_id: input.fillId ?? null,
+        candidate_id: input.candidateId ?? null,
+        note: input.note ?? null,
+      },
+      requireCsrf: true,
+    });
+    revalidatePath("/paper-training");
+    revalidatePath("/today");
+    return {
+      ok: true,
+      message:
+        "Feedback saved for paper review only. It does not change live trading rules.",
+    };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not save feedback.";
     return { ok: false, message };
   }
 }
@@ -78,6 +239,7 @@ export async function teachScanAction(input: {
       requireCsrf: true,
     });
     revalidatePath("/today");
+    revalidatePath("/paper-training");
     return {
       ok: true,
       message: "Teaching note saved. No paper order was placed.",

@@ -84,6 +84,14 @@ class ScanStatusRead(BaseModel):
     rejection_counts: dict[str, Any]
     next_scheduled_at: datetime | None
     worker_note: str
+    headline: str | None = None
+    watching_count: int | None = None
+    rejected_count: int | None = None
+    current_market: str | None = None
+    scan_progress: dict[str, Any] | None = None
+    possible_trades_found: int | None = None
+    next_step: str | None = None
+    top_watching: list[dict[str, Any]] | None = None
 
 
 class ScanBarRead(BaseModel):

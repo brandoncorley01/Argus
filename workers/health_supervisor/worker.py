@@ -218,11 +218,27 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
             service = MarketScanService(session)
             try:
                 cycle = service.run_scan_cycle(force=False)
+                auto_opened = 0
+                try:
+                    from sqlalchemy import select
+
+                    from app.models.paper_trading import PaperPortfolio
+                    from app.services.paper_training_service import PaperTrainingService
+
+                    training = PaperTrainingService(session)
+                    for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
+                        opened = training.maybe_auto_enter_from_scan(
+                            portfolio_id=portfolio.id, actor=None
+                        )
+                        auto_opened += len(opened)
+                except Exception:  # noqa: BLE001
+                    auto_opened = 0
                 return {
                     "cycle_id": str(cycle.id),
                     "status": cycle.status,
                     "symbols_scanned": cycle.symbols_scanned,
                     "candidates_found": cycle.candidates_found,
+                    "auto_paper_entries": auto_opened,
                 }
             except Exception as exc:  # noqa: BLE001
                 # Never let scanner errors affect trading engine health cycles.
@@ -238,6 +254,40 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Refresh Recent Price History from the public feed. Never invents prices."""
+
+    def _cycle() -> dict[str, Any]:
+        factory = get_session_factory(ctx["settings"])
+        session = factory()
+        try:
+            from app.services.market_price_refresh_service import (
+                MarketPriceRefreshError,
+                MarketPriceRefreshService,
+            )
+
+            try:
+                result = MarketPriceRefreshService(session).refresh_recent_prices(actor=None)
+                return {
+                    "ok": result.get("ok"),
+                    "records_accepted": result.get("records_accepted"),
+                    "failed_count": len(result.get("failed") or []),
+                }
+            except MarketPriceRefreshError as exc:
+                return {"ok": False, "code": exc.code, "error": exc.message[:240]}
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": str(exc)[:240]}
+        finally:
+            session.close()
+
+    return _run_logged(
+        ctx,
+        component=OperationalComponent.MARKET_DATA,
+        label="market price refresh",
+        fn=_cycle,
+    )
+
+
 class WorkerSettings:
     """ARQ worker settings for `arq workers.health_supervisor.worker.WorkerSettings`."""
 
@@ -246,11 +296,13 @@ class WorkerSettings:
         capture_host_metrics_cycle,
         generate_daily_report_cycle,
         run_market_scan_cycle,
+        run_market_price_refresh,
     ]
     cron_jobs = [
         cron(run_health_supervisor_cycle, second={0, 30}),
         cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
+        cron(run_market_price_refresh, minute={1, 16, 31, 46}),
         cron(run_market_scan_cycle, minute={0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58}),
     ]
     on_startup = startup

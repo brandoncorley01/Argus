@@ -9,8 +9,8 @@ import type { CurrentUser } from "@/lib/types";
 
 const PRIMARY = [
   { href: "/today", label: "Home" },
-  { href: "/trading", label: "Trading" },
-  { href: "/portfolio", label: "Portfolio" },
+  { href: "/paper-training", label: "Paper Training" },
+  { href: "/trades", label: "Trades" },
   { href: "/reports", label: "Reports" },
   { href: "/settings", label: "Settings" },
 ] as const;
@@ -22,14 +22,16 @@ const ADVANCED = [
   { href: "/workers", label: "Workers" },
   { href: "/operations", label: "Operating mode" },
   { href: "/incidents", label: "Issues" },
-  { href: "/audit", label: "Audit" },
+  { href: "/audit", label: "Audit records" },
   { href: "/paper", label: "Paper details" },
+  { href: "/trading", label: "Trading desk (legacy)" },
+  { href: "/portfolio", label: "Portfolio (legacy)" },
   { href: "/micro-live", label: "Live controls" },
-  { href: "/market", label: "Market" },
+  { href: "/market", label: "Market data" },
   { href: "/strategies", label: "Strategies" },
   { href: "/treasury", label: "Treasury" },
   { href: "/configurations", label: "Config" },
-  { href: "/policies", label: "Policies" },
+  { href: "/policies", label: "Trade rules (policies)" },
   { href: "/administration", label: "Admin", founderOnly: true },
 ] as const;
 
@@ -59,7 +61,7 @@ export function SideNav({
     <aside className="side-nav" aria-label="Primary">
       <div className="brand">
         <div className="brand-mark">Argus</div>
-        <div className="brand-sub">Home</div>
+        <div className="brand-sub">Command</div>
       </div>
 
       <button

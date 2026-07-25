@@ -1461,3 +1461,15 @@ __all__ += [
     "OperationalEvent",
     "OperationalSeverity",
 ]
+
+from app.models.paper_training import (  # noqa: E402
+    PaperCoachingDecision,
+    PaperTradeFeedback,
+    PaperTrainingSettings,
+)
+
+__all__ += [
+    "PaperCoachingDecision",
+    "PaperTradeFeedback",
+    "PaperTrainingSettings",
+]

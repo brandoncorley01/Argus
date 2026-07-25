@@ -263,7 +263,7 @@ class MarketScanService:
                 cycle.symbols_scanned = pipeline["scanned"]
 
                 if len(bars) < MIN_BARS:
-                    code = "stale_data" if not bars else "confirmation_incomplete"
+                    code = "insufficient_history" if bars else "insufficient_history"
                     rejection_counts[code] = rejection_counts.get(code, 0) + 1
                     pipeline["rejected"] += 1
                     self._add_candidate(
@@ -276,9 +276,9 @@ class MarketScanService:
                         risk_status="blocked",
                         reason_code=code,
                         reason_text=(
-                            f"Need at least {MIN_BARS} bars; found {len(bars)}."
+                            f"Need at least {MIN_BARS} recent price points; found {len(bars)}."
                             if bars
-                            else "No OHLCV bars available for this symbol."
+                            else "No recent price history is stored for this market yet."
                         ),
                         price=bars[-1].close if bars else None,
                         market_data_at=bar_close_time,
@@ -289,11 +289,15 @@ class MarketScanService:
                             component="strategy_evaluator",
                             symbol=inst.symbol,
                             outcome="rejected",
-                            title=f"Entry rejected for {inst.symbol}",
+                            title=f"Not enough price history for {inst.symbol}",
                             detail=(
-                                "Insufficient candle history for strategy evaluation."
+                                f"Argus needs {MIN_BARS} recent price points before it can "
+                                f"evaluate this strategy safely (found {len(bars)})."
                                 if bars
-                                else "No market bars persisted for this symbol."
+                                else (
+                                    "No recent price history is stored yet. "
+                                    "Refresh recent prices, then scan again."
+                                )
                             ),
                             reason_code=code,
                             stage="Rejected",
@@ -497,7 +501,9 @@ class MarketScanService:
                         score=Decimal("20"),
                         risk_status="clear",
                         reason_code="weak_signal",
-                        reason_text="SMA fast not above slow — no long setup.",
+                        reason_text=(
+                            "Price is not showing a clear upward setup that meets entry rules."
+                        ),
                         price=price,
                         market_data_at=bar_close_time,
                     )
@@ -508,7 +514,7 @@ class MarketScanService:
                             symbol=inst.symbol,
                             outcome="rejected",
                             title=f"Entry rejected for {inst.symbol}",
-                            detail="Momentum strategy check failed: weak signal.",
+                            detail="The move is not strong enough to meet Argus entry rules.",
                             reason_code="weak_signal",
                             stage="Rejected",
                             strategy_key=STRATEGY_KEY,
@@ -609,51 +615,105 @@ class MarketScanService:
 
     def plain_status_summary(self) -> dict[str, Any]:
         """Short Founder-facing sentences for the Home 'what Argus is doing' strip."""
+        from app.services.plain_language import plain_rejection, readiness_action
+
         snap = self.status_snapshot()
         cycle = snap.get("cycle")
         candidates = self.list_candidates(limit=5)
-        watching = [c for c in candidates if c.stage in {"Watching", "Evaluating", "Risk Review"}]
+        watching = [
+            c for c in candidates if c.stage in {"Watching", "Evaluating", "Risk Review"}
+        ]
         rejected = [c for c in candidates if c.stage == "Rejected"]
+        symbols_total = (
+            int(cycle.get("symbols_total") or 0)
+            if cycle
+            else snap.get("symbols_monitored") or 0
+        )
+        scanned = int(cycle.get("symbols_scanned") or 0) if cycle else 0
+        current_symbol = cycle.get("current_symbol") if cycle else None
 
         if snap["kill_switch_active"]:
-            headline = "Paper trading is blocked by the kill switch."
+            headline = "Argus is paused by the emergency stop and will not open new paper trades."
         elif snap["pause_new_entries_active"]:
-            headline = "New paper entries are paused. Argus can still scan and manage exits."
+            headline = "Argus is paused and will not open new trades."
+        elif snap["market_data_stale"] and snap.get("symbols_monitored", 0) > 0:
+            headline = "Argus needs attention because market prices are outdated."
         elif snap["scanner_state"] == "Scanning":
-            sym = cycle.get("current_symbol") if cycle else None
             headline = (
-                f"Scanning {sym} right now…"
-                if sym
-                else "Market scan in progress…"
+                f"Argus is analyzing {current_symbol} for a possible trade."
+                if current_symbol
+                else "Argus is scanning crypto markets for short-term opportunities."
             )
         elif watching:
-            names = ", ".join(c.symbol for c in watching[:3])
-            headline = f"Watching {names} — not entered yet."
+            if len(watching) == 1:
+                headline = (
+                    f"Argus is analyzing {watching[0].symbol} for a possible upward trade."
+                    if watching[0].bias == "Bullish"
+                    else f"Argus is watching {watching[0].symbol}."
+                )
+            else:
+                headline = (
+                    f"Argus found {len(watching)} possible trades and is checking their risk."
+                )
+        elif snap.get("pipeline_counts", {}).get("positions", 0):
+            n = snap["pipeline_counts"]["positions"]
+            headline = (
+                f"Argus is monitoring {n} open position{'s' if n != 1 else ''}."
+            )
         elif rejected and cycle:
             top = rejected[0]
-            why = top.reason_text or top.reason_code or "did not meet entry rules"
-            headline = f"Last look: {top.symbol} was not taken — {why}"
-        elif snap["scanner_state"] == "Failed":
-            headline = "Scanner cannot run until market instruments (and preferably bars) exist."
-        elif cycle:
-            scanned = cycle.get("symbols_scanned") or 0
+            why = plain_rejection(top.reason_code, top.reason_text)
             headline = (
-                f"Between scans. Last cycle checked {scanned} market"
-                f"{'s' if scanned != 1 else ''} and found no entry."
+                f"Argus is waiting because no trades currently meet your rules. "
+                f"({top.symbol}: {why})"
+            )
+        elif snap["scanner_state"] == "Failed":
+            headline = (
+                "Argus needs attention because no markets are registered yet. "
+                "Press Refresh recent prices to register markets and download price history."
+            )
+        elif cycle and symbols_total:
+            headline = (
+                f"Argus is scanning {symbols_total} crypto markets for short-term opportunities."
+                if scanned == 0
+                else (
+                    f"Argus checked {scanned} market{'s' if scanned != 1 else ''} "
+                    "and is waiting because no trades currently meet your rules."
+                )
             )
         else:
-            headline = "Waiting for the first market scan."
+            headline = (
+                "Argus is waiting for recent price history. "
+                "Press Refresh recent prices, then Scan markets now."
+            )
+
+        next_step = None
+        if snap.get("symbols_monitored", 0) == 0:
+            next_step = readiness_action(
+                bar_count=0, min_bars=MIN_BARS, stale=True, has_instrument=False
+            )
+        elif snap.get("market_data_stale"):
+            next_step = readiness_action(
+                bar_count=MIN_BARS, min_bars=MIN_BARS, stale=True, has_instrument=True
+            )
 
         return {
             **snap,
             "headline": headline,
             "watching_count": len(watching),
             "rejected_count": len(rejected),
+            "current_market": current_symbol or (watching[0].symbol if watching else None),
+            "scan_progress": {
+                "scanned": scanned,
+                "total": symbols_total,
+            },
+            "possible_trades_found": len(watching),
+            "next_step": next_step,
             "top_watching": [
                 {
                     "symbol": c.symbol,
                     "stage": c.stage,
-                    "reason_text": c.reason_text,
+                    "reason_text": plain_rejection(c.reason_code, c.reason_text),
                     "score": c.score,
                 }
                 for c in watching[:3]

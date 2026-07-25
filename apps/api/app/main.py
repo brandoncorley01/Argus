@@ -16,6 +16,7 @@ from app.api.v1.micro_live import router as micro_live_router
 from app.api.v1.operating_mode import router as operating_mode_router
 from app.api.v1.operations import router as operations_router
 from app.api.v1.paper import router as paper_router
+from app.api.v1.paper_training import router as paper_training_router
 from app.api.v1.policies import router as policies_router
 from app.api.v1.strategies import router as strategies_router
 from app.api.v1.treasury import router as treasury_router
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(incidents_router)
     app.include_router(market_router)
     app.include_router(strategies_router)
+    app.include_router(paper_training_router)  # before paper so /training is not captured
     app.include_router(paper_router)
     app.include_router(micro_live_router)
     app.include_router(treasury_router)

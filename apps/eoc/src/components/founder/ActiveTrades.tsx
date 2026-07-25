@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import { EmptyState } from "@/components/ui";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
@@ -26,176 +24,112 @@ export type PositionSummary = {
   state: string;
 };
 
-function Tip({ text }: { text: string }) {
-  return (
-    <span className="info-tip" title={text} aria-label={text}>
-      ?
-    </span>
-  );
+function timeInTrade(openedAt: string | null): string {
+  if (!openedAt) return "Unknown";
+  const ms = Date.now() - Date.parse(openedAt);
+  if (!Number.isFinite(ms) || ms < 0) return "Unknown";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours} hr`;
+  return `${Math.floor(hours / 24)} days`;
 }
 
 export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const current = positions.find((p) => p.id === selected) ?? null;
-
   if (positions.length === 0) {
     return (
       <EmptyState>
-        No open paper positions. When Argus enters a trade, it will show here with
-        entry, commitment, and P&amp;L.
+        No open paper trades. When Argus enters a simulated trade, it will show
+        here with entry, stop, target, and profit or loss.
       </EmptyState>
     );
   }
 
   return (
-    <div className="active-trades">
-      <div className="table-wrap active-trades-desktop">
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Side</th>
-              <th>
-                Entry price{" "}
-                <Tip text="Average fill price per unit — not committed capital." />
-              </th>
-              <th>
-                Current{" "}
-                <Tip text="Latest market OHLCV close when available; otherwise Unavailable." />
-              </th>
-              <th>Qty</th>
-              <th>
-                Capital{" "}
-                <Tip text="|Qty| × entry price (cost basis committed)." />
-              </th>
-              <th>
-                Mkt value{" "}
-                <Tip text="|Qty| × current mark when a mark exists." />
-              </th>
-              <th>P&amp;L $</th>
-              <th>P&amp;L %</th>
-              <th>Stop</th>
-              <th>Target</th>
-              <th>Opened</th>
-              <th>State</th>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => {
-              const incomplete =
-                p.price_status === "unavailable" || p.price_status === "stale";
-              return (
-                <tr
-                  key={p.id}
-                  className={selected === p.id ? "row-selected" : undefined}
-                  onClick={() => setSelected(p.id)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <td>{p.symbol}</td>
-                  <td>{p.side === "long" ? "Long" : "Short"}</td>
-                  <td>{money(p.average_cost)}</td>
-                  <td>
-                    {p.mark_price == null
-                      ? "Unavailable"
-                      : `${money(p.mark_price)}${p.price_status === "stale" ? " (stale)" : ""}`}
-                  </td>
-                  <td>{p.quantity}</td>
-                  <td>{money(p.committed_capital)}</td>
-                  <td>
-                    {p.market_value == null ? "Unavailable" : money(p.market_value)}
-                  </td>
-                  <td className={pnlClass(p.unrealized_pnl)}>
-                    {incomplete || p.unrealized_pnl == null
-                      ? "Unavailable"
-                      : moneyPnl(p.unrealized_pnl)}
-                  </td>
-                  <td className={pnlClass(p.pnl_percent)}>
-                    {p.pnl_percent == null
-                      ? "Unavailable"
-                      : `${Number(p.pnl_percent).toFixed(2)}%`}
-                  </td>
-                  <td>{p.stop_loss == null ? "Unavailable" : money(p.stop_loss)}</td>
-                  <td>
-                    {p.take_profit == null ? "Unavailable" : money(p.take_profit)}
-                  </td>
-                  <td>{formatTimestamp(p.opened_at)}</td>
-                  <td>{p.state}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="active-trades-mobile">
-        {positions.map((p) => {
-          const incomplete =
-            p.price_status === "unavailable" || p.price_status === "stale";
-          return (
-            <button
-              key={p.id}
-              type="button"
-              className={`position-card ${selected === p.id ? "row-selected" : ""}`}
-              onClick={() => setSelected(p.id)}
-            >
-              <div className="position-card-head">
-                <strong>{p.symbol}</strong>
-                <span>{p.side === "long" ? "Long" : "Short"}</span>
+    <div className="open-trade-cards">
+      {positions.map((p) => {
+        const stale =
+          p.price_status === "unavailable" ||
+          p.mark_price == null ||
+          p.unrealized_pnl == null;
+        const boughtOrSold =
+          p.side === "long" || Number(p.quantity) > 0 ? "Bought" : "Sold";
+        return (
+          <article key={p.id} className="open-trade-card">
+            <header className="open-trade-head">
+              <h3>{p.symbol}</h3>
+              <span className="muted-note">{boughtOrSold}</span>
+            </header>
+            <dl className="considering-dl">
+              <div>
+                <dt>Entry price</dt>
+                <dd>{money(p.average_cost)}</dd>
               </div>
-              <div className="position-card-grid">
-                <span>Entry {money(p.average_cost)}</span>
-                <span>
-                  Current{" "}
-                  {p.mark_price == null ? "Unavailable" : money(p.mark_price)}
-                </span>
-                <span>Capital {money(p.committed_capital)}</span>
-                <span className={pnlClass(p.unrealized_pnl)}>
-                  P&amp;L{" "}
-                  {incomplete || p.unrealized_pnl == null
-                    ? "Unavailable"
-                    : moneyPnl(p.unrealized_pnl)}
-                </span>
+              <div>
+                <dt>Current price</dt>
+                <dd>
+                  {stale
+                    ? "Outdated"
+                    : p.mark_price
+                      ? money(p.mark_price)
+                      : "Unavailable"}
+                </dd>
               </div>
-              <p className="muted-note" style={{ margin: "0.35rem 0 0" }}>
-                {p.state}
+              <div>
+                <dt>Paper money invested</dt>
+                <dd>{money(p.committed_capital)}</dd>
+              </div>
+              <div>
+                <dt>Current profit or loss</dt>
+                <dd>
+                  {stale ? (
+                    <span className="warn-text">Cannot calculate safely</span>
+                  ) : (
+                    <span className={pnlClass(p.unrealized_pnl)}>
+                      {moneyPnl(p.unrealized_pnl)}
+                      {p.pnl_percent != null
+                        ? ` (${Number(p.pnl_percent).toFixed(2)}%)`
+                        : ""}
+                    </span>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Stop-loss</dt>
+                <dd>{p.stop_loss ? money(p.stop_loss) : "Not set"}</dd>
+              </div>
+              <div>
+                <dt>Profit target</dt>
+                <dd>{p.take_profit ? money(p.take_profit) : "Not set"}</dd>
+              </div>
+              <div>
+                <dt>Time in trade</dt>
+                <dd>{timeInTrade(p.opened_at)}</dd>
+              </div>
+              <div>
+                <dt>Opened</dt>
+                <dd>{formatTimestamp(p.opened_at) || "—"}</dd>
+              </div>
+            </dl>
+            {stale ? (
+              <p className="attention-box" role="status">
+                Current market price is outdated. Profit/loss cannot be
+                calculated safely. Refresh recent prices, then return here.
               </p>
-            </button>
-          );
-        })}
-      </div>
-
-      {current ? (
-        <div className="position-detail panel" style={{ marginTop: "0.75rem" }}>
-          <h3 style={{ marginTop: 0 }}>{current.symbol} detail</h3>
-          <ul className="plain-list">
-            <li>
-              Entry price is the average fill price per unit (
-              {money(current.average_cost)}), not capital committed (
-              {money(current.committed_capital)}).
-            </li>
-            <li>
-              Price status: {current.price_status ?? "unavailable"}.
-              {current.price_status === "unavailable"
-                ? " No market OHLCV mark found for this symbol — unrealized P&L is not shown as zero."
-                : null}
-              {current.price_status === "stale"
-                ? " Latest bar is older than freshness policy."
-                : null}
-            </li>
-            <li>
-              Strategy / signal:{" "}
-              {current.strategy_version_id
-                ? `version ${current.strategy_version_id.slice(0, 8)}…`
-                : "Unavailable"}
-            </li>
-            <li>
-              Stop-loss / take-profit are not persisted on paper positions yet.
-            </li>
-          </ul>
-        </div>
-      ) : (
-        <p className="muted-note">Select a position to view detail.</p>
-      )}
+            ) : (
+              <p>
+                <strong>What Argus is doing now:</strong> Monitoring this open
+                paper position against its stop and target.
+              </p>
+            )}
+            <p className="muted-note">
+              Why Argus is continuing to hold: the exit rules have not been met
+              yet
+              {p.state ? ` (state: ${p.state})` : ""}.
+            </p>
+          </article>
+        );
+      })}
     </div>
   );
 }

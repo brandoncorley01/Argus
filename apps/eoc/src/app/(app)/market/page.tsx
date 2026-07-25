@@ -179,12 +179,16 @@ export default async function MarketPage() {
       </div>
 
       <div className="grid grid-2" style={{ marginBottom: "1rem" }}>
-        <Panel title="Historical bars (ingested only)">
+        <Panel title="Recent Price History">
           {!bars ? (
-            <ErrorState>Bars unavailable.</ErrorState>
+            <ErrorState>
+              Recent price history is unavailable. Check the market-data connection,
+              then press Refresh recent prices on Home.
+            </ErrorState>
           ) : bars.length === 0 ? (
             <EmptyState>
-              No OHLCV bars stored. Use authenticated ingest — Argus does not invent prices.
+              No recent price history stored yet. On Home, press Refresh recent
+              prices. Argus does not invent prices.
             </EmptyState>
           ) : (
             <div className="table-wrap">

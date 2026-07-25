@@ -250,6 +250,28 @@ def ingest_batch(
     return IngestBatchResponse(**result)
 
 
+@router.post("/prices/refresh")
+def refresh_recent_prices(
+    principal: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Download recent public market candles into Recent Price History (paper practice)."""
+    from app.schemas.paper_training import PriceRefreshResponse
+    from app.services.market_price_refresh_service import (
+        MarketPriceRefreshError,
+        MarketPriceRefreshService,
+    )
+
+    try:
+        result = MarketPriceRefreshService(db).refresh_recent_prices(actor=principal)
+    except MarketPriceRefreshError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return PriceRefreshResponse(**result).model_dump(mode="json")
+
+
 @router.get("/scan/status", response_model=ScanStatusRead)
 def scan_status(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
@@ -276,6 +298,14 @@ def scan_status(
             rejection_counts=snap["rejection_counts"] or {},
             next_scheduled_at=snap["next_scheduled_at"],
             worker_note=snap.get("headline") or snap["worker_note"],
+            headline=snap.get("headline"),
+            watching_count=snap.get("watching_count"),
+            rejected_count=snap.get("rejected_count"),
+            current_market=snap.get("current_market"),
+            scan_progress=snap.get("scan_progress"),
+            possible_trades_found=snap.get("possible_trades_found"),
+            next_step=snap.get("next_step"),
+            top_watching=snap.get("top_watching"),
         )
     except Exception as exc:  # noqa: BLE001 — never blank Home on status shape issues
         raise HTTPException(
@@ -316,8 +346,9 @@ def scan_bars(
 
 @router.post("/scan/run", response_model=ScanRunResponse)
 def run_scan(
-    _: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
+    principal: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
     service: MarketScanService = Depends(get_scan_service),
+    db: Session = Depends(get_db),
     force: bool = Query(default=False),
 ) -> ScanRunResponse:
     try:
@@ -327,6 +358,20 @@ def run_scan(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+    # Automatic Practice may open paper trades after a successful scan (paper only).
+    try:
+        from sqlalchemy import select
+
+        from app.models.paper_trading import PaperPortfolio
+        from app.services.paper_training_service import PaperTrainingService
+
+        training = PaperTrainingService(db)
+        for portfolio in db.scalars(select(PaperPortfolio).limit(5)):
+            training.maybe_auto_enter_from_scan(
+                portfolio_id=portfolio.id, actor=principal
+            )
+    except Exception:  # noqa: BLE001 — never fail the scan response on auto-enter
+        pass
     return ScanRunResponse(cycle=ScanCycleRead.model_validate(service._cycle_dict(cycle)))
 
 
