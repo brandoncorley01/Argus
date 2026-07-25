@@ -44,6 +44,17 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_iso(value: Any) -> str | None:
+    """JSON-safe timestamp for EOC / RSC props (never leave raw datetime in dicts)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 class MarketScanService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -1008,10 +1019,14 @@ class MarketScanService:
                     "outlook": outlook,
                     "signal_strength": float(cand.score) if cand else 0.0,
                     "status": status_label,
-                    "last_analyzed_at": cand.evaluated_at if cand else None,
+                    "last_analyzed_at": (
+                        cand.evaluated_at.isoformat() if cand else None
+                    ),
                     "candidate_id": str(cand.id) if cand else None,
                     "timeframe": timeframe,
-                    "market_data_at": close_time,
+                    "market_data_at": (
+                        close_time.isoformat() if close_time else None
+                    ),
                     "stale": (
                         close_time is None
                         or (now - close_time) > STALE_BAR
@@ -1033,31 +1048,38 @@ class MarketScanService:
 
         scanned = int((status.get("scan_progress") or {}).get("scanned") or 0)
         total = int((status.get("scan_progress") or {}).get("total") or 0)
-        next_at = status.get("next_scheduled_at")
         return {
-            "generated_at": now,
+            "generated_at": now.isoformat(),
             "headline": status.get("headline"),
-            "scanner_state": status.get("scanner_state"),
+            "scanner_state": status.get("scanner_state") or "Between Cycles",
             "current_market": status.get("current_market"),
             "markets_monitored": len(instruments),
             "scan_progress": {"scanned": scanned, "total": total},
-            "next_scan_at": next_at,
+            "next_scan_at": _as_iso(status.get("next_scheduled_at")),
             "possible_trades_found": status.get("possible_trades_found") or 0,
             "watching_count": len(awaiting),
             "awaiting_confirmation": len(awaiting),
             "risk_check_count": len(risk_check),
-            "open_trades": int((status.get("pipeline_counts") or {}).get("positions") or 0),
-            "market_data_at": status.get("market_data_at"),
-            "market_data_stale": status.get("market_data_stale"),
+            "open_trades": int(
+                (status.get("pipeline_counts") or {}).get("positions") or 0
+            ),
+            "market_data_at": _as_iso(status.get("market_data_at")),
+            "market_data_stale": bool(status.get("market_data_stale")),
             "market_data_age_seconds": status.get("market_data_age_seconds"),
-            "trading_allowed": status.get("trading_allowed"),
-            "pause_new_entries_active": status.get("pause_new_entries_active"),
-            "kill_switch_active": status.get("kill_switch_active"),
+            "trading_allowed": bool(status.get("trading_allowed")),
+            "pause_new_entries_active": bool(status.get("pause_new_entries_active")),
+            "kill_switch_active": bool(status.get("kill_switch_active")),
             "next_step": status.get("next_step"),
             "wall": wall,
             "watches": watches,
             "doing": doing,
-            "decided": decided,
+            "decided": [
+                {
+                    **d,
+                    "at": _as_iso(d.get("at")) or "",
+                }
+                for d in decided
+            ],
             "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
             "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
         }
@@ -1121,6 +1143,19 @@ class MarketScanService:
             next_eval_in=next_eval_in,
             expire_in=expire_in,
         )
+        def _dec(v: Decimal | float | int | str | None) -> str | None:
+            if v is None:
+                return None
+            return str(v)
+
+        entry_dec: Decimal | None
+        if isinstance(entry, Decimal):
+            entry_dec = entry
+        elif entry is None:
+            entry_dec = None
+        else:
+            entry_dec = Decimal(str(entry))
+
         return {
             "id": str(cand.id),
             "symbol": cand.symbol,
@@ -1131,27 +1166,31 @@ class MarketScanService:
             "why": plain_rejection(cand.reason_code, cand.reason_text),
             "waiting_for": narrative["waiting_for"],
             "narrative": narrative["statement"],
-            "watching_since": since_dt,
+            # ISO strings — JSON-safe for EOC / RSC props
+            "watching_since": since_dt.isoformat(),
             "watched_seconds": watched_seconds,
-            "expires_at": exp_dt,
+            "expires_at": exp_dt.isoformat(),
             "expire_in_seconds": expire_in,
             "next_eval_at": next_eval,
             "next_eval_in_seconds": next_eval_in,
-            "current_price": price,
-            "entry_zone": entry,
-            "stop_loss": stop,
-            "take_profit": target,
+            "current_price": _dec(price),
+            "entry_zone": _dec(entry_dec),
+            "stop_loss": _dec(stop),
+            "take_profit": _dec(target),
             "risk_reward": detail.get("risk_reward"),
-            "paper_capital_planned": default_notional,
-            "max_dollar_loss": max_loss,
-            "potential_dollar_profit": pot_profit,
+            "paper_capital_planned": str(default_notional),
+            "max_dollar_loss": _dec(max_loss),
+            "potential_dollar_profit": _dec(pot_profit),
             "checklist": checklist,
             "checklist_waiting": waiting_n,
             "checklist_summary": (
                 f"Argus is waiting for {waiting_n} remaining condition"
-                f"{'' if waiting_n == 1 else 's'} before this paper trade can be considered."
+                f"{'' if waiting_n == 1 else 's'} before this paper trade "
+                "can be considered."
                 if waiting_n
-                else "All listed conditions currently look ready for paper consideration."
+                else (
+                    "All listed conditions currently look ready for paper consideration."
+                )
             ),
             "support": detail.get("support"),
             "resistance": detail.get("resistance"),
@@ -1159,8 +1198,10 @@ class MarketScanService:
             "strategy_key": cand.strategy_key,
             "risk_status": cand.risk_status,
             "reason_code": cand.reason_code,
-            "market_data_at": cand.market_data_at,
-            "evaluated_at": cand.evaluated_at,
+            "market_data_at": (
+                cand.market_data_at.isoformat() if cand.market_data_at else None
+            ),
+            "evaluated_at": cand.evaluated_at.isoformat(),
         }
 
     def _watch_narrative(

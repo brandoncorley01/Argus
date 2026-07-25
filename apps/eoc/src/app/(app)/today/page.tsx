@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { isRedirectError } from "next/dist/client/components/redirect-error";
 import Link from "next/link";
 
 import { ActiveTrades, type PositionSummary } from "@/components/founder/ActiveTrades";
@@ -186,6 +187,39 @@ function deriveOperationalPicture(opts: {
 }
 
 export default async function TodayPage() {
+  try {
+    return await renderTodayPage();
+  } catch (err) {
+    // Must not swallow Next.js navigation (login redirect, etc.)
+    if (isRedirectError(err)) throw err;
+    const digest =
+      typeof err === "object" &&
+      err !== null &&
+      "digest" in err &&
+      typeof (err as { digest?: unknown }).digest === "string"
+        ? String((err as { digest: string }).digest)
+        : "";
+    if (digest.startsWith("NEXT_")) throw err;
+
+    const message = err instanceof Error ? err.message : "Unknown page error";
+    return (
+      <div className="panel rise">
+        <h1 style={{ marginTop: 0 }}>Home could not load</h1>
+        <p>
+          Argus hit an unexpected page error. Start Argus again so the latest
+          build and database updates apply, then reload this page.
+        </p>
+        <p className="muted-note">Detail: {message}</p>
+        <p className="muted-note">Build expected: {ARGUS_UI_BUILD}</p>
+        <Link className="btn" href="/today">
+          Reload Home
+        </Link>
+      </div>
+    );
+  }
+}
+
+async function renderTodayPage() {
   await requireUser();
 
   const [ready, microLive, portfolios, reports, providers, health, scanStatusInitial] =

@@ -1,10 +1,19 @@
 # Live Trading Cockpit
 
-Build id: `trading-cockpit-v1`.
+Build id: `trading-cockpit-v1.1`.
 
 Home presents a visual **Trading Cockpit** driven only by verified market data,
 scan cycles, candidates, and paper portfolio figures. Motion reflects real
 value changes — Argus does not invent prices or pretend to scan.
+
+## Crash recovery (v1.1)
+
+- Cockpit timestamps/prices are JSON-safe (ISO strings / decimal strings)
+- Missing Paper Training tables no longer 500 the cockpit endpoint — Home gets
+  a degraded empty cockpit and keeps rendering
+- `scripts/migrate-up.ps1` (Start Argus) verifies `paper_training_settings` and
+  re-applies the training migration if alembic was stamped without tables
+- Home shows a friendly recovery panel instead of a blank Internal Server Error
 
 ## Continuous scanning
 

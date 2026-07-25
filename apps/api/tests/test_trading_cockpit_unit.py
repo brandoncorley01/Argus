@@ -1,10 +1,17 @@
 """Unit tests for Trading Cockpit helpers (no DB)."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.market_scan_service import MarketScanService
+from app.services.market_scan_service import MarketScanService, _as_iso
+
+
+def test_as_iso_json_safe() -> None:
+    assert _as_iso(None) is None
+    assert _as_iso("2026-07-25T12:00:00+00:00") == "2026-07-25T12:00:00+00:00"
+    dt = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
+    assert _as_iso(dt) == dt.isoformat()
 
 
 def test_wall_status_labels() -> None:

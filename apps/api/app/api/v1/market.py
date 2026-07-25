@@ -332,27 +332,80 @@ def scan_cockpit(
     service: MarketScanService = Depends(get_scan_service),
     db: Session = Depends(get_db),
 ) -> CockpitSnapshotRead:
-    """Trading Cockpit snapshot for Home — real markets, watches, and activity."""
+    """Trading Cockpit snapshot for Home — real markets, watches, and activity.
+
+    Never hard-fails the dashboard: missing training tables or snapshot errors
+    return a degraded empty cockpit (HTTP 200) so Home can still render.
+    """
+    from datetime import UTC, datetime
     from decimal import Decimal
 
     from sqlalchemy import select
 
     from app.models.paper_trading import PaperPortfolio
+    from app.services.market_scan_service import (
+        CANDIDATE_WATCH_TTL,
+        SCAN_INTERVAL,
+    )
     from app.services.paper_training_service import PaperTrainingService
 
     notional = Decimal("100")
-    portfolio = db.scalars(select(PaperPortfolio).limit(1)).first()
-    if portfolio is not None:
-        settings = PaperTrainingService(db).get_or_create_settings(portfolio.id)
-        notional = settings.default_notional
     try:
+        portfolio = db.scalars(select(PaperPortfolio).limit(1)).first()
+        if portfolio is not None:
+            try:
+                settings = PaperTrainingService(db).get_or_create_settings(
+                    portfolio.id
+                )
+                notional = settings.default_notional
+            except Exception:  # noqa: BLE001 — cockpit works without training tables
+                db.rollback()
+                notional = Decimal("100")
         snap = service.cockpit_snapshot(default_notional=notional)
         return CockpitSnapshotRead.model_validate(snap)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "cockpit_error", "message": str(exc)[:240]},
-        ) from exc
+    except Exception as exc:  # noqa: BLE001 — degraded cockpit, never blank Home
+        db.rollback()
+        now = datetime.now(UTC)
+        return CockpitSnapshotRead.model_validate(
+            {
+                "generated_at": now,
+                "headline": (
+                    "Cockpit temporarily unavailable. Start Argus so database "
+                    "updates apply, then Refresh recent prices."
+                ),
+                "scanner_state": "Failed",
+                "current_market": None,
+                "markets_monitored": 0,
+                "scan_progress": {"scanned": 0, "total": 0},
+                "next_scan_at": None,
+                "possible_trades_found": 0,
+                "watching_count": 0,
+                "awaiting_confirmation": 0,
+                "risk_check_count": 0,
+                "open_trades": 0,
+                "market_data_at": None,
+                "market_data_stale": True,
+                "market_data_age_seconds": None,
+                "trading_allowed": False,
+                "pause_new_entries_active": False,
+                "kill_switch_active": False,
+                "next_step": (
+                    "Run Start Argus (migrations must succeed), then "
+                    "Refresh recent prices on Home."
+                ),
+                "wall": [],
+                "watches": [],
+                "doing": [
+                    {
+                        "text": f"Cockpit could not load: {str(exc)[:160]}",
+                        "tone": "warn",
+                    }
+                ],
+                "decided": [],
+                "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
+                "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
+            }
+        )
 
 
 @router.get("/scan/events", response_model=list[ScanEventRead])
