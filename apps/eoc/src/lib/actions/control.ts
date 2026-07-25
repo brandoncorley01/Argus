@@ -94,33 +94,10 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
   return runCommand(cmd, args, timeoutMs, { ARGUS_KEEP_DASHBOARD: "1" });
 }
 
-/** Force this PC onto GitHub main before Start, so Home fixes cannot stay stuck. */
-async function forceSyncMain(): Promise<ActionResult> {
-  const root = repoRoot().replace(/'/g, "''");
-  const isWin = process.platform === "win32";
-  const cmd = isWin ? "powershell.exe" : "pwsh";
-  const ps = `
-$ErrorActionPreference = 'Continue'
-Set-Location '${root}'
-git fetch origin
-git checkout -f -B main origin/main
-git reset --hard origin/main
-$sha = (git rev-parse --short HEAD).Trim()
-Write-Host "SYNC_SHA=$sha"
-if (Test-Path '.\\apps\\eoc\\.next') {
-  Remove-Item -Recurse -Force '.\\apps\\eoc\\.next' -ErrorAction SilentlyContinue
-}
-exit 0
-`;
-  return runCommand(
-    cmd,
-    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-    120_000,
-  );
-}
-
 export async function startArgusAction(): Promise<ActionResult> {
-  const sync = await forceSyncMain();
+  // Single sync path: start-argus.ps1 self-updates from GitHub then force-syncs
+  // main. Do not wipe apps/eoc/.next or kill :3000 here — that aborts this
+  // server action and leaves Home stuck on Starting…
   const res = await runPs1("start-argus.ps1", 240_000);
   revalidatePath("/today");
   revalidatePath("/control");
@@ -128,13 +105,13 @@ export async function startArgusAction(): Promise<ActionResult> {
     return {
       ok: false,
       message: res.message,
-      detail: [sync.detail, res.detail].filter(Boolean).join("\n"),
+      detail: res.detail,
     };
   }
   return {
     ok: true,
-    message: "Argus started. This page will reload in a few seconds.",
-    detail: [sync.detail, res.detail].filter(Boolean).join("\n"),
+    message: "Argus started. This page will refresh shortly.",
+    detail: res.detail,
   };
 }
 

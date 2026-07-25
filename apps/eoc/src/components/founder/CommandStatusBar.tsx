@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useState } from "react";
 
 import {
   startArgusAction,
@@ -18,6 +18,8 @@ function Feedback({ result }: { result: ActionResult | null }) {
     </p>
   );
 }
+
+type Busy = "start" | "stop" | "pause" | null;
 
 export function CommandStatusBar({
   argusStatus,
@@ -39,19 +41,35 @@ export function CommandStatusBar({
   buildId: string;
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const [busy, setBusy] = useState<Busy>(null);
   const [result, setResult] = useState<ActionResult | null>(null);
 
-  function run(action: () => Promise<ActionResult>, reloadHome = false) {
+  async function run(
+    kind: Busy,
+    action: () => Promise<ActionResult>,
+    reloadHome = false,
+  ) {
+    if (busy) return;
+    setBusy(kind);
     setResult(null);
-    startTransition(async () => {
+    try {
       const res = await action();
       setResult(res);
       router.refresh();
       if (reloadHome && res.ok) {
-        window.setTimeout(() => window.location.assign("/today"), 8000);
+        window.setTimeout(() => window.location.assign("/today"), 3000);
       }
-    });
+    } catch (err) {
+      setResult({
+        ok: false,
+        message:
+          err instanceof Error
+            ? err.message
+            : "Start did not finish. Refresh this page, then try again.",
+      });
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
@@ -97,32 +115,45 @@ export function CommandStatusBar({
         <button
           type="button"
           className="btn control-btn control-btn-start"
-          disabled={pending}
-          onClick={() => run(() => startArgusAction(), true)}
+          disabled={busy === "start"}
+          onClick={() => run("start", () => startArgusAction(), true)}
         >
-          {pending ? "Working…" : "Start Argus"}
+          {busy === "start" ? "Starting…" : "Start Argus"}
         </button>
         <button
           type="button"
           className="btn secondary control-btn"
-          disabled={pending || !portfolioId}
+          disabled={busy !== null || !portfolioId}
           title="Blocks new paper entries. Open positions can still be monitored and exited."
           onClick={() => {
             if (!portfolioId) return;
-            run(() => pauseNewEntriesAction(portfolioId, !pauseNewEntries));
+            void run("pause", () =>
+              pauseNewEntriesAction(portfolioId, !pauseNewEntries),
+            );
           }}
         >
-          {pauseNewEntries ? "Resume New Trades" : "Pause New Trades"}
+          {busy === "pause"
+            ? "Updating…"
+            : pauseNewEntries
+              ? "Resume New Trades"
+              : "Pause New Trades"}
         </button>
         <button
           type="button"
           className="btn control-btn control-btn-stop"
-          disabled={pending}
-          onClick={() => run(() => stopArgusAction())}
+          disabled={busy === "stop"}
+          title="Stop stays available even while Start is running."
+          onClick={() => run("stop", () => stopArgusAction())}
         >
-          Stop Argus
+          {busy === "stop" ? "Stopping…" : "Stop Argus"}
         </button>
       </div>
+      {busy === "start" ? (
+        <p className="muted-note" role="status">
+          Starting can take a few minutes. If this page never updates, press F5
+          then try Start again — Stop remains available.
+        </p>
+      ) : null}
       <Feedback result={result} />
     </section>
   );

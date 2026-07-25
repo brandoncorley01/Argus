@@ -10,14 +10,14 @@ Write-Host "=== Start dashboard only ==="
 Write-Host "Root: $Root"
 
 $today = Join-Path $Root "apps\eoc\src\app\(app)\today\page.tsx"
-$bar = Join-Path $Root "apps\eoc\src\components\founder\ControlBar.tsx"
+$bar = Join-Path $Root "apps\eoc\src\components\founder\CommandStatusBar.tsx"
 if (-not (Test-Path -LiteralPath $today)) { throw "Missing Home page: $today" }
-if (-not (Test-Path -LiteralPath $bar)) { throw "Missing ControlBar: $bar" }
+if (-not (Test-Path -LiteralPath $bar)) { throw "Missing CommandStatusBar: $bar" }
 $todayText = Get-Content -LiteralPath $today -Raw
 $barText = Get-Content -LiteralPath $bar -Raw
-if ($todayText -notmatch "ControlBar") { throw "Home page does not include ControlBar" }
-if ($barText -notmatch "Start Argus") { throw "ControlBar missing Start Argus button" }
-Write-Host "OK  Home Start/Stop files are present"
+if ($todayText -notmatch "CommandStatusBar") { throw "Home page does not include CommandStatusBar" }
+if ($barText -notmatch "Start Argus") { throw "CommandStatusBar missing Start Argus button" }
+Write-Host "OK  Home Command Center controls are present"
 
 if (-not (Test-Path (Join-Path $Root ".env"))) {
   throw "Missing .env"
@@ -89,4 +89,4 @@ if (-not ($okApi -and $okEoc)) {
 Write-Host "Opening Home..."
 Start-Process "http://127.0.0.1:3000/today"
 Write-Host "=== Dashboard started ==="
-Write-Host "Look for Start Argus / Stop Argus and UI build: home-start-stop-v1"
+Write-Host "Look for Start Argus / Stop Argus and UI build: command-center-v2"

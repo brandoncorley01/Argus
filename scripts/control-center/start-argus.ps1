@@ -9,7 +9,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
   $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/start-argus.ps1"
   try {
     Write-Host "Downloading latest Start script from GitHub..."
-    Invoke-WebRequest -Uri "$url?$(Get-Random)" -OutFile $self -UseBasicParsing
+    Invoke-WebRequest -Uri "$url?$(Get-Random)" -OutFile $self -UseBasicParsing -TimeoutSec 30
     Write-Host "Re-running updated Start script..."
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self @args
     exit $LASTEXITCODE
@@ -51,17 +51,28 @@ try {
 
   $sha = (git rev-parse --short HEAD).Trim()
   $buildMarker = Join-Path $Root "apps\eoc\public\argus-build.txt"
+  $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
+  $buildId = "command-center"
+  if (Test-Path $buildIdFile) {
+    $m = Select-String -Path $buildIdFile -Pattern 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($m) { $buildId = $m.Matches.Groups[1].Value }
+  }
   $publicDir = Split-Path $buildMarker -Parent
   if (-not (Test-Path $publicDir)) {
     New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
   }
-  Set-Content -Path $buildMarker -Value "home-start-stop-v4 $sha" -Encoding ascii
+  Set-Content -Path $buildMarker -Value "$buildId $sha" -Encoding ascii
 
-  # Drop stale Next.js cache so Home Start/Stop cannot be masked by old builds.
-  $nextCache = Join-Path $Root "apps\eoc\.next"
-  if (Test-Path $nextCache) {
-    Write-Host "Clearing stale dashboard cache..."
-    Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
+  # Never wipe .next while the browser dashboard is serving Start.
+  # Desktop Start (no keep) may clear cache after EOC is stopped below.
+  if (-not $KeepDashboard) {
+    $nextCache = Join-Path $Root "apps\eoc\.next"
+    if (Test-Path $nextCache) {
+      Write-Host "Clearing stale dashboard cache..."
+      Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  } else {
+    Write-Host "Keeping live dashboard cache (browser Start)."
   }
 
   & "$Root\scripts\infra-up.ps1"
@@ -72,8 +83,7 @@ try {
   $eocPid = $pids.eoc
   $workerPid = $pids.worker
 
-  # After a code update, recycle API. From browser Start, always reload dashboard.
-  $reloadDashboard = $KeepDashboard
+  # Recycle API after code update. Browser Start must leave the dashboard process up.
   Write-Host "Code refresh - recycling services..."
   Stop-PidIfRunning $pids.api "API launcher"
   if (-not $KeepDashboard) {
@@ -82,7 +92,7 @@ try {
     $eocPid = $null
   } else {
     Stop-ArgusPortListeners @(8000)
-    Write-Host "Dashboard will reload after Start finishes so Home picks up the update."
+    Write-Host "Dashboard left running so browser Start can finish."
   }
   $apiPid = $null
 
@@ -156,26 +166,11 @@ try {
     $dash = Get-ArgusDashboardUrl
     Write-Host "Opening Home: $dash"
     Start-Process $dash
-  } elseif ($reloadDashboard) {
-    Write-Host "Reloading dashboard for updated Home..."
-    $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
-    $restart = @"
-Start-Sleep -Seconds 5
-try {
-  Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue |
-    ForEach-Object { Stop-Process -Id `$_.OwningProcess -Force -ErrorAction SilentlyContinue }
-} catch {}
-Start-Sleep -Seconds 2
-Set-Location '$Root'
-`$env:ARGUS_API_BASE_URL = 'http://127.0.0.1:8000'
-`$env:ARGUS_REPO_ROOT = '$Root'
-pnpm eoc:dev *> '$eocLog'
-"@
-    $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $restart
-    )
-    Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $eocProc.Id -WorkerPid $workerPid
-    Write-Host "REFRESH_HOME_AFTER_UPDATE"
+  } else {
+    # Browser Start: leave :3000 alone. Killing EOC here aborts the in-flight
+    # Start action and leaves Home stuck on "Working…".
+    Write-Host "Browser Start complete — dashboard left running for soft reload."
+    Write-Host "REFRESH_HOME_SOFT"
   }
   Write-Host "=== Argus started ==="
 } catch {

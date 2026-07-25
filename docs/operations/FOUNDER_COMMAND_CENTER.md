@@ -6,8 +6,8 @@ Home (`/today`) is the Founder operating picture for **paper** trading.
 
 | Control | Behavior |
 | --- | --- |
-| **Start Argus** | Existing control-center start (syncs `main`, starts infra/API/worker/dashboard). |
-| **Stop Argus** | Existing control-center stop (keeps dashboard available for browser control). |
+| **Start Argus** | Control-center start (self-updates script from GitHub `main`, syncs code, starts infra/API/worker). Browser Start keeps the dashboard process up and soft-refreshes Home. |
+| **Stop Argus** | Existing control-center stop (keeps dashboard available for browser control). Remains clickable while Start is busy. |
 | **Pause New Trades** | Sets `paper_portfolios.pause_new_entries_active`. Blocks **new entries**; risk-reducing **sells** on open longs remain allowed. Audited as `paper.pause_new_entries`. |
 
 Live unlock is **not** offered on Home. Live remains behind existing micro-live authorization.

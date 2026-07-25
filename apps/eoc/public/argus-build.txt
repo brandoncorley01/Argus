@@ -1,1 +1,1 @@
-command-center-v1
+command-center-v2
