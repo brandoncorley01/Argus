@@ -7,9 +7,14 @@ if ($LASTEXITCODE -ne 0) {
   throw "Database migrate failed. Home/Paper Training cannot load until this succeeds."
 }
 
-# Repair stamped-but-missing training tables (no embedded Python in this .ps1).
+# Use the API venv (same as Start Argus), not system Python.
 Write-Host "Verifying Paper Training schema..."
-python "$Root\scripts\repair_training_schema.py"
+$ApiPython = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
+if (Test-Path -LiteralPath $ApiPython) {
+  & $ApiPython "$Root\scripts\repair_training_schema.py"
+} else {
+  python -m uv run python "$Root\scripts\repair_training_schema.py"
+}
 if ($LASTEXITCODE -ne 0) {
   throw "Paper Training schema verify/repair failed."
 }
