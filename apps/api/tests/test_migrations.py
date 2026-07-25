@@ -113,7 +113,7 @@ def test_migration_upgrade_downgrade_reupgrade_cycle() -> None:
 
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "b4c5d6e7f8a9"
+    assert version == "c5d6e7f8a9b0"
 
     command.downgrade(cfg, "base")
     insp_after_down = inspect(engine)
