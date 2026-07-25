@@ -1313,6 +1313,13 @@ from app.models.market_intelligence import (  # noqa: E402
     QualityFindingKind,
 )
 
+# Market scan / Command Center instrumentation (observation only)
+from app.models.market_scan import (  # noqa: E402
+    MarketScanCandidate,
+    MarketScanCycle,
+    MarketScanEvent,
+)
+
 # Phase 13 Micro-Live Institution models (deny-by-default; re-exported for
 # Alembic metadata)
 from app.models.micro_live import (  # noqa: E402

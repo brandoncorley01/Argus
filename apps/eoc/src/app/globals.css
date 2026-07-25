@@ -465,6 +465,115 @@ table.data th {
   margin-bottom: 1rem;
 }
 
+.command-status-grid-secondary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.summary-grid-primary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.secondary-metrics {
+  margin-top: 0.75rem;
+}
+
+.secondary-metrics summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  margin-bottom: 0.5rem;
+}
+
+.section-subhead {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.pipeline-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: stretch;
+}
+
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pipeline-chip {
+  min-width: 4.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  text-align: center;
+}
+
+.pipeline-arrow {
+  color: var(--muted);
+}
+
+.rejection-list {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.watched-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.price-sparkline {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 0.75rem;
+}
+
+.active-trades-mobile {
+  display: none;
+}
+
+.position-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+
+.position-card-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+
+.position-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.scanner-feed {
+  max-height: 16rem;
+}
+
 .command-pill {
   display: inline-block;
   margin-top: 0.25rem;
@@ -603,18 +712,31 @@ table.data th {
 
 @media (max-width: 960px) {
   .command-status-grid,
+  .command-status-grid-secondary,
   .command-actions,
   .summary-grid,
+  .summary-grid-primary,
   .summary-grid-compact {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .active-trades-desktop {
+    display: none;
+  }
+
+  .active-trades-mobile {
+    display: block;
   }
 }
 
 @media (max-width: 640px) {
   .command-status-grid,
+  .command-status-grid-secondary,
   .command-actions,
   .summary-grid,
-  .summary-grid-compact {
+  .summary-grid-primary,
+  .summary-grid-compact,
+  .position-card-grid {
     grid-template-columns: 1fr;
   }
 }

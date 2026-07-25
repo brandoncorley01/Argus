@@ -11,6 +11,7 @@ from app.api.deps import RequireAnyAuthenticatedRead, RequireFounder, RequireFou
 from app.db.session import get_db
 from app.schemas.paper import (
     CheckpointRead,
+    ClosedTradeRead,
     FillRead,
     KillSwitchRequest,
     OrderRead,
@@ -184,6 +185,25 @@ def list_position_summaries(
         return [
             PositionSummaryRead.model_validate(row)
             for row in service.list_position_summaries(portfolio_id)
+        ]
+    except PaperTradingError as exc:
+        raise _http(exc) from exc
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/closed-trades",
+    response_model=list[ClosedTradeRead],
+)
+def list_closed_trades(
+    portfolio_id: uuid.UUID,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: PaperTradingService = Depends(get_service),
+    limit: int = 5,
+) -> list[ClosedTradeRead]:
+    try:
+        return [
+            ClosedTradeRead.model_validate(row)
+            for row in service.list_closed_trades(portfolio_id, limit=limit)
         ]
     except PaperTradingError as exc:
         raise _http(exc) from exc

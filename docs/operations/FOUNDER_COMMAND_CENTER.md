@@ -1,6 +1,10 @@
 # Founder Command Center (Home)
 
-Home (`/today`) is the Founder operating picture for **paper** trading.
+Home (`/today`) is the Founder **Market Command Center** for **paper** trading
+plus observation-only market scanning.
+
+See also [`MARKET_COMMAND_CENTER.md`](./MARKET_COMMAND_CENTER.md) for scanner
+APIs, metric corrections, and unavailable capabilities.
 
 ## Controls
 

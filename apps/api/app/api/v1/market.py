@@ -24,11 +24,20 @@ from app.schemas.market import (
     QualityFindingRead,
     ResearchItemRead,
 )
+from app.schemas.market_scan import (
+    ScanBarsResponse,
+    ScanCandidateRead,
+    ScanCycleRead,
+    ScanEventRead,
+    ScanRunResponse,
+    ScanStatusRead,
+)
 from app.services.auth_service import AuthenticatedPrincipal, AuthError
 from app.services.market_intelligence_service import (
     MarketIntelligenceError,
     MarketIntelligenceService,
 )
+from app.services.market_scan_service import MarketScanError, MarketScanService
 
 router = APIRouter(prefix="/api/v1/market", tags=["market-intelligence"])
 
@@ -44,6 +53,10 @@ _ERROR_STATUS: dict[str, int] = {
 
 def get_market_service(db: Session = Depends(get_db)) -> MarketIntelligenceService:
     return MarketIntelligenceService(db)
+
+
+def get_scan_service(db: Session = Depends(get_db)) -> MarketScanService:
+    return MarketScanService(db)
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -232,3 +245,77 @@ def ingest_batch(
     except (AuthError, MarketIntelligenceError) as exc:
         raise _http_error(exc) from exc
     return IngestBatchResponse(**result)
+
+
+@router.get("/scan/status", response_model=ScanStatusRead)
+def scan_status(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: MarketScanService = Depends(get_scan_service),
+) -> ScanStatusRead:
+    snap = service.status_snapshot()
+    return ScanStatusRead(
+        scanner_state=snap["scanner_state"],
+        cycle=ScanCycleRead.model_validate(snap["cycle"]) if snap["cycle"] else None,
+        symbols_monitored=snap["symbols_monitored"],
+        market_data_at=snap["market_data_at"],
+        market_data_age_seconds=snap["market_data_age_seconds"],
+        market_data_stale=snap["market_data_stale"],
+        pause_new_entries_active=snap["pause_new_entries_active"],
+        kill_switch_active=snap["kill_switch_active"],
+        trading_allowed=snap["trading_allowed"],
+        last_decision=(
+            ScanEventRead.model_validate(snap["last_decision"])
+            if snap["last_decision"]
+            else None
+        ),
+        pipeline_counts=snap["pipeline_counts"],
+        rejection_counts=snap["rejection_counts"],
+        next_scheduled_at=snap["next_scheduled_at"],
+        worker_note=snap["worker_note"],
+    )
+
+
+@router.get("/scan/candidates", response_model=list[ScanCandidateRead])
+def scan_candidates(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: MarketScanService = Depends(get_scan_service),
+    limit: int = Query(default=5, ge=1, le=50),
+) -> list[ScanCandidateRead]:
+    return [
+        ScanCandidateRead.model_validate(row) for row in service.list_candidates(limit=limit)
+    ]
+
+
+@router.get("/scan/events", response_model=list[ScanEventRead])
+def scan_events(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: MarketScanService = Depends(get_scan_service),
+    limit: int = Query(default=40, ge=1, le=200),
+) -> list[ScanEventRead]:
+    return [ScanEventRead.model_validate(row) for row in service.list_events(limit=limit)]
+
+
+@router.get("/scan/bars/{symbol}", response_model=ScanBarsResponse)
+def scan_bars(
+    symbol: str,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: MarketScanService = Depends(get_scan_service),
+    limit: int = Query(default=60, ge=1, le=200),
+) -> ScanBarsResponse:
+    return ScanBarsResponse.model_validate(service.bars_for_symbol(symbol, limit=limit))
+
+
+@router.post("/scan/run", response_model=ScanRunResponse)
+def run_scan(
+    _: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
+    service: MarketScanService = Depends(get_scan_service),
+    force: bool = Query(default=False),
+) -> ScanRunResponse:
+    try:
+        cycle = service.run_scan_cycle(force=force)
+    except MarketScanError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return ScanRunResponse(cycle=ScanCycleRead.model_validate(service._cycle_dict(cycle)))

@@ -23,19 +23,29 @@ type Busy = "start" | "stop" | "pause" | null;
 
 export function CommandStatusBar({
   argusStatus,
+  statusExplanation,
   tradingMode,
   connectionLabel,
   connectionOk,
   lastHeartbeat,
+  scannerState,
+  marketDataLabel,
+  lastScanLabel,
+  lastDecisionLabel,
   portfolioId,
   pauseNewEntries,
   buildId,
 }: {
   argusStatus: "Running" | "Paused" | "Stopped" | "Warning";
+  statusExplanation: string;
   tradingMode: "Paper" | "Live";
   connectionLabel: string;
   connectionOk: boolean;
   lastHeartbeat: string;
+  scannerState: string;
+  marketDataLabel: string;
+  lastScanLabel: string;
+  lastDecisionLabel: string;
   portfolioId: string | null;
   pauseNewEntries: boolean;
   buildId: string;
@@ -80,6 +90,9 @@ export function CommandStatusBar({
           <div className={`command-pill command-pill-${argusStatus.toLowerCase()}`}>
             {argusStatus}
           </div>
+          <p className="muted-note" style={{ margin: "0.35rem 0 0" }}>
+            {statusExplanation}
+          </p>
         </div>
         <div>
           <div className="metric-label">Trading mode</div>
@@ -101,6 +114,9 @@ export function CommandStatusBar({
           >
             {connectionLabel}
           </div>
+          <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
+            Market data: {marketDataLabel}
+          </p>
         </div>
         <div>
           <div className="metric-label">Last heartbeat</div>
@@ -108,6 +124,21 @@ export function CommandStatusBar({
           <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
             Build {buildId}
           </p>
+        </div>
+      </div>
+
+      <div className="command-status-grid command-status-grid-secondary">
+        <div>
+          <div className="metric-label">Market scanner</div>
+          <strong>{scannerState}</strong>
+        </div>
+        <div>
+          <div className="metric-label">Last completed scan</div>
+          <strong>{lastScanLabel}</strong>
+        </div>
+        <div>
+          <div className="metric-label">Last trading decision</div>
+          <strong>{lastDecisionLabel}</strong>
         </div>
       </div>
 

@@ -18,7 +18,7 @@ from app.db.session import reset_engine
 API_ROOT = Path(__file__).resolve().parents[1]
 PHASE6_REVISION = "c6a1f0e9d2b8"
 PHASE7_REVISION = "a7b8c9d0e1f2"
-HEAD_REVISION = "c5d6e7f8a9b0"
+HEAD_REVISION = "d6e7f8a9b0c1"
 
 
 def _alembic_config() -> Config:

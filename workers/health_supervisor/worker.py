@@ -42,6 +42,7 @@ from app.services.daily_trading_report_service import (  # noqa: E402
 )
 from app.services.health_supervisor_service import HealthSupervisorService  # noqa: E402
 from app.services.host_metrics_service import HostMetricsService  # noqa: E402
+from app.services.market_scan_service import MarketScanService  # noqa: E402
 from app.services.operational_log_service import OperationalLogService  # noqa: E402
 
 T = TypeVar("T")
@@ -207,6 +208,36 @@ async def generate_daily_report_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Observation-only market scan. Failures are logged; trading is not blocked."""
+
+    def _cycle() -> dict[str, Any]:
+        factory = get_session_factory(ctx["settings"])
+        session = factory()
+        try:
+            service = MarketScanService(session)
+            try:
+                cycle = service.run_scan_cycle(force=False)
+                return {
+                    "cycle_id": str(cycle.id),
+                    "status": cycle.status,
+                    "symbols_scanned": cycle.symbols_scanned,
+                    "candidates_found": cycle.candidates_found,
+                }
+            except Exception as exc:  # noqa: BLE001
+                # Never let scanner errors affect trading engine health cycles.
+                return {"ok": False, "error": str(exc)[:240]}
+        finally:
+            session.close()
+
+    return _run_logged(
+        ctx,
+        component=OperationalComponent.MARKET_DATA,
+        label="market scan cycle",
+        fn=_cycle,
+    )
+
+
 class WorkerSettings:
     """ARQ worker settings for `arq workers.health_supervisor.worker.WorkerSettings`."""
 
@@ -214,11 +245,13 @@ class WorkerSettings:
         run_health_supervisor_cycle,
         capture_host_metrics_cycle,
         generate_daily_report_cycle,
+        run_market_scan_cycle,
     ]
     cron_jobs = [
         cron(run_health_supervisor_cycle, second={0, 30}),
         cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
+        cron(run_market_scan_cycle, minute={0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58}),
     ]
     on_startup = startup
     on_shutdown = shutdown

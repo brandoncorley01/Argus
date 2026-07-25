@@ -7,8 +7,8 @@
 3. On **Home** (Command Center):
    - **Start Argus** / **Stop Argus** for the system
    - **Pause New Trades** to block new paper entries while open positions can still be managed
-4. Confirm build shows **command-center-v2** (or newer)
-5. Use the account summary, active trades, and activity feed to confirm Argus is working
+4. Confirm build shows **market-command-v1** (or newer)
+5. Use account summary, scanner, opportunity radar, active trades, and decision stream to confirm Argus is working
 
 Paper funds are never real money. Live unlock is not available from Home.
 
@@ -19,7 +19,7 @@ The dashboard is not running. Do **not** keep refreshing `127.0.0.1` alone.
 1. In your Argus folder, double-click **`Start-Argus.cmd`**
 2. Wait until the black window finishes (can take a few minutes; Docker must be running)
 3. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
-4. Sign in and confirm build **command-center-v2**
+4. Sign in and confirm build **market-command-v1**
 
 Faster option if Start already failed once: double-click **`Recover-Dashboard.cmd`**.
 

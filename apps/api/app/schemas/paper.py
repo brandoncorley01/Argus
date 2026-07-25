@@ -79,6 +79,8 @@ class PortfolioSummaryRead(BaseModel):
     buying_power: Decimal
     committed_capital: Decimal
     total_account_value: Decimal
+    total_account_value_basis: str = "cost"
+    marks_complete: bool = False
     open_position_count: int
     kill_switch_active: bool
     pause_new_entries_active: bool
@@ -94,15 +96,31 @@ class PositionSummaryRead(BaseModel):
     side: str
     average_cost: Decimal
     committed_capital: Decimal
+    market_value: Decimal | None = None
     realized_pnl: Decimal
-    unrealized_pnl: Decimal
+    unrealized_pnl: Decimal | None = None
     mark_price: Decimal | None = None
     pnl_percent: Decimal | None = None
+    price_status: str = "unavailable"
     opened_at: datetime | None = None
     strategy_version_id: uuid.UUID | None = None
     stop_loss: Decimal | None = None
     take_profit: Decimal | None = None
     state: str
+
+
+class ClosedTradeRead(BaseModel):
+    """Sell fill with realized P&L from chronological fill replay."""
+
+    fill_id: uuid.UUID
+    symbol: str
+    quantity: Decimal
+    entry_price: Decimal
+    exit_price: Decimal
+    realized_pnl: Decimal
+    filled_at: datetime
+    holding_seconds: int | None = None
+    exit_reason: str | None = None
 
 
 class SessionCreate(BaseModel):

@@ -89,4 +89,4 @@ if (-not ($okApi -and $okEoc)) {
 Write-Host "Opening Home..."
 Start-Process "http://127.0.0.1:3000/today"
 Write-Host "=== Dashboard started ==="
-Write-Host "Look for Start Argus / Stop Argus and UI build: command-center-v2"
+Write-Host "Look for Start Argus / Stop Argus and UI build: market-command-v1"

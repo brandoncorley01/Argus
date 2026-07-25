@@ -19,6 +19,7 @@ from app.execution.contracts import (
     OrderType,
 )
 from app.execution.gateway import ExecutionGateway, ExecutionGatewayError
+from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
 from app.models.paper_trading import (
     ExecutionProvider,
     ExecutionProviderHealth,
@@ -185,13 +186,23 @@ class PaperTradingService:
 
     def portfolio_summary(self, portfolio_id: uuid.UUID) -> dict[str, Any]:
         portfolio = self.get_portfolio(portfolio_id)
-        positions = [p for p in self.list_positions(portfolio_id) if p.quantity != 0]
+        position_rows = self.list_position_summaries(portfolio_id)
         committed = sum(
-            (abs(p.quantity) * (p.average_cost or Decimal("0")) for p in positions),
+            (Decimal(str(r["committed_capital"])) for r in position_rows),
             Decimal("0"),
         )
         buying_power = portfolio.cash_balance - portfolio.reserved_cash
-        total_value = portfolio.cash_balance + committed
+        marks_complete = all(r.get("mark_price") is not None for r in position_rows) or not position_rows
+        if marks_complete and position_rows:
+            mtm = sum(
+                (Decimal(str(r["market_value"])) for r in position_rows if r.get("market_value") is not None),
+                Decimal("0"),
+            )
+            total_value = portfolio.cash_balance + mtm
+            basis = "mark"
+        else:
+            total_value = portfolio.cash_balance + committed
+            basis = "cost"
         return {
             "portfolio_id": portfolio.id,
             "currency": portfolio.currency,
@@ -200,14 +211,33 @@ class PaperTradingService:
             "buying_power": buying_power,
             "committed_capital": committed,
             "total_account_value": total_value,
-            "open_position_count": len(positions),
+            "total_account_value_basis": basis,
+            "marks_complete": marks_complete,
+            "open_position_count": len(position_rows),
             "kill_switch_active": portfolio.kill_switch_active,
             "pause_new_entries_active": portfolio.pause_new_entries_active,
             "status": portfolio.status,
         }
 
+    def _latest_mark(self, symbol: str) -> tuple[Decimal | None, datetime | None]:
+        """Latest OHLCV close for symbol, if market intelligence has bars."""
+        inst = self.db.scalar(
+            select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
+        )
+        if inst is None:
+            return None, None
+        bar = self.db.scalar(
+            select(MarketOhlcvBar)
+            .where(MarketOhlcvBar.instrument_id == inst.id)
+            .order_by(MarketOhlcvBar.close_time.desc())
+            .limit(1)
+        )
+        if bar is None:
+            return None, None
+        return bar.close, bar.close_time
+
     def list_position_summaries(self, portfolio_id: uuid.UUID) -> list[dict[str, Any]]:
-        """Founder position rows. Mark/stop/target stay null when not persisted."""
+        """Founder position rows. Marks come from market bars when present."""
         _ = self.get_portfolio(portfolio_id)
         rows: list[dict[str, Any]] = []
         for pos in self.list_positions(portfolio_id):
@@ -234,12 +264,22 @@ class PaperTradingService:
                 .order_by(PaperOrder.created_at.desc())
                 .limit(1)
             )
-            mark: Decimal | None = None
+            mark, mark_at = self._latest_mark(pos.symbol)
+            market_value: Decimal | None = None
+            unrealized: Decimal | None = None
             pnl_pct: Decimal | None = None
-            if pos.quantity != 0 and pos.unrealized_pnl is not None and pos.unrealized_pnl != 0:
-                mark = pos.average_cost + (pos.unrealized_pnl / pos.quantity)
+            price_status = "unavailable"
+            if mark is not None:
+                price_status = "live"
+                market_value = abs(pos.quantity) * mark
+                unrealized = (mark - pos.average_cost) * pos.quantity
                 if committed > 0:
-                    pnl_pct = (pos.unrealized_pnl / committed) * Decimal("100")
+                    pnl_pct = (unrealized / committed) * Decimal("100")
+                # Stale if older than 6h
+                if mark_at is not None:
+                    age = datetime.now(UTC) - mark_at
+                    if age.total_seconds() > 6 * 3600:
+                        price_status = "stale"
             rows.append(
                 {
                     "id": pos.id,
@@ -248,20 +288,83 @@ class PaperTradingService:
                     "side": side,
                     "average_cost": pos.average_cost,
                     "committed_capital": committed,
+                    "market_value": market_value,
                     "realized_pnl": pos.realized_pnl,
-                    "unrealized_pnl": pos.unrealized_pnl,
+                    "unrealized_pnl": unrealized,
                     "mark_price": mark,
                     "pnl_percent": pnl_pct,
+                    "price_status": price_status,
                     "opened_at": first_fill.filled_at if first_fill else None,
                     "strategy_version_id": (
                         last_order.strategy_version_id if last_order else None
                     ),
                     "stop_loss": None,
                     "take_profit": None,
-                    "state": "Holding",
+                    "state": (
+                        "Holding"
+                        if price_status == "live"
+                        else "Holding — price incomplete"
+                    ),
                 }
             )
         return rows
+
+    def list_closed_trades(
+        self, portfolio_id: uuid.UUID, *, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """Recent sell fills with realized P&L from chronological replay."""
+        _ = self.get_portfolio(portfolio_id)
+        safe = min(max(limit, 1), 50)
+        all_fills = list(
+            self.db.scalars(
+                select(PaperFill)
+                .join(PaperOrder, PaperOrder.id == PaperFill.order_id)
+                .where(PaperOrder.portfolio_id == portfolio_id)
+                .order_by(PaperFill.filled_at.asc())
+            )
+        )
+        closed: list[dict[str, Any]] = []
+        # Per-symbol running position for entry attribution.
+        state: dict[str, dict[str, Any]] = {}
+        for fill in all_fills:
+            st = state.setdefault(
+                fill.symbol,
+                {"qty": Decimal("0"), "avg": Decimal("0"), "opened_at": None},
+            )
+            if fill.side == "buy":
+                new_qty = st["qty"] + fill.quantity
+                if new_qty > 0:
+                    st["avg"] = ((st["qty"] * st["avg"]) + (fill.quantity * fill.price)) / new_qty
+                st["qty"] = new_qty
+                if st["opened_at"] is None:
+                    st["opened_at"] = fill.filled_at
+            else:
+                entry = st["avg"]
+                realized = (fill.price - entry) * fill.quantity
+                opened_at = st["opened_at"]
+                holding = None
+                if opened_at is not None:
+                    holding = int((fill.filled_at - opened_at).total_seconds())
+                closed.append(
+                    {
+                        "fill_id": fill.id,
+                        "symbol": fill.symbol,
+                        "quantity": fill.quantity,
+                        "entry_price": entry,
+                        "exit_price": fill.price,
+                        "realized_pnl": realized,
+                        "filled_at": fill.filled_at,
+                        "holding_seconds": holding,
+                        "exit_reason": None,
+                    }
+                )
+                st["qty"] = st["qty"] - fill.quantity
+                if st["qty"] <= 0:
+                    st["qty"] = Decimal("0")
+                    st["avg"] = Decimal("0")
+                    st["opened_at"] = None
+        closed.reverse()
+        return closed[:safe]
 
     def _is_new_entry_order(
         self, portfolio_id: uuid.UUID, *, symbol: str, side: str, quantity: Decimal
