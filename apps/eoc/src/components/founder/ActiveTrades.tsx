@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { EmptyState } from "@/components/ui";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
@@ -24,15 +26,26 @@ export type PositionSummary = {
   state: string;
 };
 
-function timeInTrade(openedAt: string | null): string {
+function timeInTrade(openedAt: string | null, nowMs: number): string {
   if (!openedAt) return "Unknown";
-  const ms = Date.now() - Date.parse(openedAt);
+  const ms = nowMs - Date.parse(openedAt);
   if (!Number.isFinite(ms) || ms < 0) return "Unknown";
   const mins = Math.floor(ms / 60000);
   if (mins < 60) return `${mins} min`;
   const hours = Math.floor(mins / 60);
   if (hours < 48) return `${hours} hr`;
   return `${Math.floor(hours / 24)} days`;
+}
+
+function TimeInTradeLabel({ openedAt }: { openedAt: string | null }) {
+  const [label, setLabel] = useState("—");
+  useEffect(() => {
+    const tick = () => setLabel(timeInTrade(openedAt, Date.now()));
+    tick();
+    const id = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(id);
+  }, [openedAt]);
+  return <>{label}</>;
 }
 
 export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
@@ -104,7 +117,9 @@ export function ActiveTrades({ positions }: { positions: PositionSummary[] }) {
               </div>
               <div>
                 <dt>Time in trade</dt>
-                <dd>{timeInTrade(p.opened_at)}</dd>
+                <dd>
+                  <TimeInTradeLabel openedAt={p.opened_at} />
+                </dd>
               </div>
               <div>
                 <dt>Opened</dt>

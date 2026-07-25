@@ -1,12 +1,12 @@
 # Live Trading Cockpit
 
-Build id: `trading-cockpit-v1.1`.
+Build id: `trading-cockpit-v1.2`.
 
 Home presents a visual **Trading Cockpit** driven only by verified market data,
 scan cycles, candidates, and paper portfolio figures. Motion reflects real
 value changes — Argus does not invent prices or pretend to scan.
 
-## Crash recovery (v1.1)
+## Crash recovery (v1.1+)
 
 - Cockpit timestamps/prices are JSON-safe (ISO strings / decimal strings)
 - Missing Paper Training tables no longer 500 the cockpit endpoint — Home gets
@@ -15,6 +15,12 @@ value changes — Argus does not invent prices or pretend to scan.
   verify `paper_training_settings` and re-apply the training migration if
   alembic was stamped without tables
 - Home shows a friendly recovery panel instead of a blank Internal Server Error
+
+## Hydration (v1.2)
+
+- Live countdowns start from server snapshot seconds, then tick after mount
+  (no `Date.now()` during SSR)
+- Timestamps render as deterministic UTC strings to avoid locale SSR/client mismatch
 
 ## Continuous scanning
 

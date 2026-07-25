@@ -270,9 +270,11 @@ export function TradingCockpit({
   const [message, setMessage] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [pending, startTransition] = useTransition();
-  const [now, setNow] = useState(() => Date.now());
+  // null until mount — Date.now() in useState breaks hydration vs SSR HTML
+  const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
+    setNow(Date.now());
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
@@ -359,8 +361,14 @@ export function TradingCockpit({
 
   const nextScanSec = useMemo(() => {
     if (!cockpit?.next_scan_at) return null;
+    if (now == null) {
+      // SSR / first paint: use snapshot age, not live clock
+      const generated = Date.parse(cockpit.generated_at);
+      if (!Number.isFinite(generated)) return null;
+      return Math.max(0, (Date.parse(cockpit.next_scan_at) - generated) / 1000);
+    }
     return Math.max(0, (Date.parse(cockpit.next_scan_at) - now) / 1000);
-  }, [cockpit?.next_scan_at, now]);
+  }, [cockpit?.next_scan_at, cockpit?.generated_at, now]);
 
   const watch: CockpitWatch | null =
     cockpit?.watches.find((w) => w.symbol === selected) ??
@@ -408,16 +416,25 @@ export function TradingCockpit({
       : tile?.current_price ?? null;
 
   const expireLeft =
-    watch != null
-      ? Math.max(
-          0,
-          (Date.parse(watch.expires_at) - now) / 1000,
-        )
-      : null;
+    watch == null
+      ? null
+      : now == null
+        ? watch.expire_in_seconds
+        : Math.max(0, (Date.parse(watch.expires_at) - now) / 1000);
   const nextEvalLeft =
-    watch?.next_eval_at != null
-      ? Math.max(0, (Date.parse(watch.next_eval_at) - now) / 1000)
-      : watch?.next_eval_in_seconds ?? null;
+    watch == null
+      ? null
+      : now == null
+        ? (watch.next_eval_in_seconds ?? null)
+        : watch.next_eval_at != null
+          ? Math.max(0, (Date.parse(watch.next_eval_at) - now) / 1000)
+          : (watch.next_eval_in_seconds ?? null);
+  const watchedSec =
+    watch == null
+      ? null
+      : now == null
+        ? watch.watched_seconds
+        : Math.max(0, Math.floor((now - Date.parse(watch.watching_since)) / 1000));
 
   return (
     <div className="trading-cockpit">
@@ -678,7 +695,7 @@ export function TradingCockpit({
                 </div>
                 <div>
                   <dt>Time watched</dt>
-                  <dd>{fmtCountdown(watch.watched_seconds)}</dd>
+                  <dd>{fmtCountdown(watchedSec)}</dd>
                 </div>
                 <div>
                   <dt>Next evaluation</dt>
