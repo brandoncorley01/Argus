@@ -24,6 +24,15 @@ export type ScanStatus = {
   market_data_age_seconds: number | null;
   market_data_stale: boolean;
   next_scheduled_at: string | null;
+  worker_note?: string;
+};
+
+const STATE_PLAIN: Record<string, string> = {
+  Scanning: "Looking at markets right now",
+  "Between Cycles": "Resting until the next scan",
+  Paused: "Trading paused — scans may still run",
+  Delayed: "Scan is late — worker may be behind",
+  Failed: "Scanner cannot run yet",
 };
 
 export function MarketScannerPanel({
@@ -36,8 +45,8 @@ export function MarketScannerPanel({
   if (!status) {
     return (
       <EmptyState>
-        Scanner status unavailable. Start Argus and wait for the worker scan cron,
-        or ensure market scan APIs are reachable. No activity is fabricated.
+        Could not load scanner status. If Opportunity Radar still shows symbols, a scan
+        already ran — press “Scan markets now” to refresh.
       </EmptyState>
     );
   }
@@ -47,67 +56,66 @@ export function MarketScannerPanel({
     cycle && cycle.symbols_total > 0
       ? Math.round((cycle.symbols_scanned / cycle.symbols_total) * 100)
       : null;
+  const plain = STATE_PLAIN[status.scanner_state] ?? status.scanner_state;
 
   return (
     <div className="scanner-panel">
+      <p className="scanner-plain">{plain}</p>
       <div className="summary-grid summary-grid-compact">
         <div className="summary-card">
-          <span className="metric-label">Scanner state</span>
-          <strong>{status.scanner_state}</strong>
+          <span className="metric-label">Checking now</span>
+          <strong>{cycle?.current_symbol ?? "Nothing right now"}</strong>
         </div>
         <div className="summary-card">
-          <span className="metric-label">Current cycle</span>
+          <span className="metric-label">Markets in last scan</span>
           <strong>
-            {cycle ? `${cycle.symbols_scanned}/${cycle.symbols_total}` : "None yet"}
+            {cycle
+              ? `${cycle.symbols_scanned} of ${cycle.symbols_total}`
+              : "None yet"}
           </strong>
         </div>
         <div className="summary-card">
-          <span className="metric-label">Evaluating</span>
-          <strong>{cycle?.current_symbol ?? "—"}</strong>
-        </div>
-        <div className="summary-card">
-          <span className="metric-label">Symbols monitored</span>
-          <strong>{status.symbols_monitored}</strong>
-        </div>
-        <div className="summary-card">
-          <span className="metric-label">Scan progress</span>
+          <span className="metric-label">Progress</span>
           <strong>{progress == null ? "—" : `${progress}%`}</strong>
         </div>
         <div className="summary-card">
-          <span className="metric-label">Last scan completion</span>
-          <strong>{formatTimestamp(cycle?.completed_at) || "Unavailable"}</strong>
+          <span className="metric-label">Markets on watchlist</span>
+          <strong>{status.symbols_monitored}</strong>
         </div>
         <div className="summary-card">
-          <span className="metric-label">Next scheduled scan</span>
+          <span className="metric-label">Last finished</span>
+          <strong>{formatTimestamp(cycle?.completed_at) || "Not yet"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Next scan</span>
           <strong>
             {formatTimestamp(status.next_scheduled_at ?? cycle?.next_scheduled_at) ||
-              "Unavailable"}
+              "When you press Scan or the worker runs"}
           </strong>
         </div>
         <div className="summary-card">
-          <span className="metric-label">Market-data age</span>
+          <span className="metric-label">Price data age</span>
           <strong>
             {status.market_data_age_seconds == null
-              ? "Unavailable"
-              : `${Math.round(status.market_data_age_seconds / 60)} min`}
-            {status.market_data_stale ? " (stale)" : ""}
+              ? "No bars loaded yet"
+              : `${Math.round(status.market_data_age_seconds / 60)} min old`}
+            {status.market_data_stale ? " — too old for entries" : ""}
           </strong>
         </div>
       </div>
 
-      <h3 className="section-subhead">Live scanner feed</h3>
+      <h3 className="section-subhead">Latest scan steps</h3>
       {feed.length === 0 ? (
         <EmptyState>
-          No scan events yet. The worker runs an observation-only scan about every
-          two minutes once instruments and bars exist.
+          No scan steps yet. Press “Scan markets now”.
         </EmptyState>
       ) : (
         <ul className="activity-feed scanner-feed">
-          {feed.slice(0, 8).map((item) => (
+          {feed.slice(0, 6).map((item) => (
             <li key={item.id} className={`activity-item activity-${item.tone}`}>
               <div className="activity-when">{formatTimestamp(item.at)}</div>
               <div className="activity-title">
-                {item.symbol ? `${item.symbol} · ` : ""}
+                {item.symbol ? `${item.symbol}: ` : ""}
                 {item.event}
               </div>
               <div className="activity-detail">{item.reason}</div>

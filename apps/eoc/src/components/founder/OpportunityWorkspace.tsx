@@ -63,7 +63,7 @@ export function OpportunityWorkspace({
   return (
     <div className="grid grid-2 opportunity-workspace">
       <section className="panel" aria-label="Opportunity radar">
-        <h2 style={{ marginTop: 0 }}>Opportunity Radar</h2>
+        <h2 style={{ marginTop: 0 }}>Markets Argus looked at</h2>
         <OpportunityRadar
           candidates={candidates}
           scannedCount={scannedCount}
@@ -72,7 +72,7 @@ export function OpportunityWorkspace({
         />
       </section>
       <section className="panel" aria-label="Watched candidate">
-        <h2 style={{ marginTop: 0 }}>Watched candidate</h2>
+        <h2 style={{ marginTop: 0 }}>Selected setup</h2>
         <WatchedCandidateChart
           candidate={selected}
           bars={bars}

@@ -3,7 +3,19 @@
 Home (`/today`) is the Founder **Market Command Center**: paper account ops plus
 an **observation-only** market scan / decision picture.
 
-Build id: `market-command-v1`.
+Build id: `market-command-v2`.
+
+## Founder readability (v2)
+
+- **What Argus is doing now** strip with a plain-language headline
+- **Scan markets now** button (observation-only)
+- Opportunity cards show **Why** plus teaching buttons (Looks good / Skip / Need more data / Looks wrong) — audited, never places orders
+- Performance section hides empty “Unavailable” clutter
+- Status API includes `cycle_id`/`candidate_id` on last decision so Home no longer blanks the scanner while candidates still render
+
+## Paper teaching
+
+`POST /api/v1/market/scan/teach` records Founder preference events (`market.scan.teach` audit). Does not bypass risk or submit orders.
 
 ## Data inconsistencies found and corrected
 

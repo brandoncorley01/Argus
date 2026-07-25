@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
 
 import { EmptyState } from "@/components/ui";
+import { teachScanAction } from "@/lib/actions/paper";
+import { REJECTION_LABELS } from "@/lib/founder/decisionStream";
 import { money } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
 
@@ -26,6 +29,15 @@ export type ScanCandidate = {
   evaluated_at: string;
 };
 
+function whyText(c: ScanCandidate): string {
+  if (c.reason_text) return c.reason_text;
+  if (c.reason_code && REJECTION_LABELS[c.reason_code]) {
+    return REJECTION_LABELS[c.reason_code];
+  }
+  if (c.stage === "Watching") return "Setup looks interesting — waiting for confirmation.";
+  return "No extra reason stored.";
+}
+
 export function OpportunityRadar({
   candidates,
   scannedCount,
@@ -37,22 +49,42 @@ export function OpportunityRadar({
   onSelect: (id: string) => void;
   selectedId: string | null;
 }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [note, setNote] = useState<string | null>(null);
+
   const top = candidates
     .filter((c) => c.stage !== "Rejected")
     .concat(candidates.filter((c) => c.stage === "Rejected"))
     .slice(0, 5);
+
+  function teach(
+    c: ScanCandidate,
+    signal: "interested" | "not_interested" | "needs_more_data" | "looks_wrong",
+  ) {
+    setNote(null);
+    startTransition(async () => {
+      const res = await teachScanAction({
+        symbol: c.symbol,
+        signal,
+        candidateId: c.id,
+      });
+      setNote(res.message);
+      router.refresh();
+    });
+  }
 
   if (top.length === 0) {
     return (
       <div>
         <EmptyState>
           {scannedCount > 0
-            ? `Argus scanned ${scannedCount} markets. No setups currently meet entry requirements.`
-            : "No scan results yet. Waiting for the next market scan cycle."}
+            ? `Argus checked ${scannedCount} markets. Nothing met the entry rules this cycle — that can be healthy.`
+            : "No scan results yet. Press “Scan markets now” above."}
         </EmptyState>
         <div className="form-actions" style={{ marginTop: "0.75rem" }}>
           <Link className="btn secondary" href="/market">
-            Trading Intelligence / Market
+            Open Market data
           </Link>
         </div>
       </div>
@@ -60,59 +92,98 @@ export function OpportunityRadar({
   }
 
   return (
-    <div>
-      <div className="table-wrap">
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Price</th>
-              <th>Bias</th>
-              <th>Score</th>
-              <th>Strategy</th>
-              <th>TF</th>
-              <th>Stage</th>
-              <th>Risk</th>
-              <th>Evaluated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {top.map((c) => (
-              <tr
-                key={c.id}
-                className={selectedId === c.id ? "row-selected" : undefined}
+    <div className="opportunity-radar">
+      <ul className="opportunity-cards">
+        {top.map((c) => {
+          const selected = selectedId === c.id;
+          return (
+            <li key={c.id}>
+              <button
+                type="button"
+                className={`opportunity-card ${selected ? "row-selected" : ""}`}
                 onClick={() => onSelect(c.id)}
-                style={{ cursor: "pointer" }}
               >
-                <td>{c.symbol}</td>
-                <td>
-                  {c.current_price == null ? "Unavailable" : money(c.current_price)}
-                </td>
-                <td>{c.bias}</td>
-                <td>{Number(c.score).toFixed(1)}</td>
-                <td>{c.strategy_key}</td>
-                <td>{c.timeframe}</td>
-                <td>{c.stage}</td>
-                <td>{c.risk_status}</td>
-                <td>{formatTimestamp(c.evaluated_at)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="form-actions" style={{ marginTop: "0.75rem" }}>
+                <div className="opportunity-card-head">
+                  <strong>{c.symbol}</strong>
+                  <span className={`stage-pill stage-${c.stage.toLowerCase().replace(/\s+/g, "-")}`}>
+                    {c.stage}
+                  </span>
+                </div>
+                <div className="opportunity-card-meta">
+                  <span>
+                    Price{" "}
+                    {c.current_price == null ? "Unavailable" : money(c.current_price)}
+                  </span>
+                  <span>{c.bias}</span>
+                  <span>Score {Number(c.score).toFixed(0)}</span>
+                  <span>
+                    {c.strategy_key === "sma_crossover"
+                      ? "Momentum (SMA)"
+                      : c.strategy_key}{" "}
+                    · {c.timeframe}
+                  </span>
+                </div>
+                <p className="opportunity-why">
+                  <strong>Why: </strong>
+                  {whyText(c)}
+                </p>
+                <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
+                  Checked {formatTimestamp(c.evaluated_at)}
+                </p>
+              </button>
+              <div className="teach-actions">
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={pending}
+                  onClick={() => teach(c, "interested")}
+                >
+                  Looks good
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={pending}
+                  onClick={() => teach(c, "not_interested")}
+                >
+                  Skip this
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={pending}
+                  onClick={() => teach(c, "needs_more_data")}
+                >
+                  Need more data
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={pending}
+                  onClick={() => teach(c, "looks_wrong")}
+                >
+                  Looks wrong
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {note ? (
+        <p className="control-feedback ok" role="status">
+          {note}
+        </p>
+      ) : (
+        <p className="muted-note">
+          Teaching buttons save your preference for paper practice. They do not place
+          trades or spend real money.
+        </p>
+      )}
+      <div className="form-actions" style={{ marginTop: "0.5rem" }}>
         <Link className="btn secondary" href="/market">
-          Full Trading Intelligence
+          Open Market data
         </Link>
       </div>
     </div>
   );
-}
-
-export function useSelectedCandidate(candidates: ScanCandidate[]) {
-  const [selectedId, setSelectedId] = useState<string | null>(
-    candidates.find((c) => c.stage !== "Rejected")?.id ?? candidates[0]?.id ?? null,
-  );
-  const selected = candidates.find((c) => c.id === selectedId) ?? null;
-  return { selectedId, setSelectedId, selected };
 }

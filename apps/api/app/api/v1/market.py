@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import RequireAnyAuthenticatedRead, RequireFounderOrOperator
+from app.api.deps import RequireAnyAuthenticatedRead, RequireFounder, RequireFounderOrOperator
 from app.db.session import get_db
 from app.schemas.market import (
     EconomicEventRead,
@@ -31,7 +31,10 @@ from app.schemas.market_scan import (
     ScanEventRead,
     ScanRunResponse,
     ScanStatusRead,
+    TeachSignalRequest,
+    TeachSignalResponse,
 )
+from app.services.audit_service import AuditService
 from app.services.auth_service import AuthenticatedPrincipal, AuthError
 from app.services.market_intelligence_service import (
     MarketIntelligenceError,
@@ -252,27 +255,33 @@ def scan_status(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     service: MarketScanService = Depends(get_scan_service),
 ) -> ScanStatusRead:
-    snap = service.status_snapshot()
-    return ScanStatusRead(
-        scanner_state=snap["scanner_state"],
-        cycle=ScanCycleRead.model_validate(snap["cycle"]) if snap["cycle"] else None,
-        symbols_monitored=snap["symbols_monitored"],
-        market_data_at=snap["market_data_at"],
-        market_data_age_seconds=snap["market_data_age_seconds"],
-        market_data_stale=snap["market_data_stale"],
-        pause_new_entries_active=snap["pause_new_entries_active"],
-        kill_switch_active=snap["kill_switch_active"],
-        trading_allowed=snap["trading_allowed"],
-        last_decision=(
-            ScanEventRead.model_validate(snap["last_decision"])
-            if snap["last_decision"]
-            else None
-        ),
-        pipeline_counts=snap["pipeline_counts"],
-        rejection_counts=snap["rejection_counts"],
-        next_scheduled_at=snap["next_scheduled_at"],
-        worker_note=snap["worker_note"],
-    )
+    try:
+        snap = service.plain_status_summary()
+        return ScanStatusRead(
+            scanner_state=snap["scanner_state"],
+            cycle=ScanCycleRead.model_validate(snap["cycle"]) if snap["cycle"] else None,
+            symbols_monitored=snap["symbols_monitored"],
+            market_data_at=snap["market_data_at"],
+            market_data_age_seconds=snap["market_data_age_seconds"],
+            market_data_stale=snap["market_data_stale"],
+            pause_new_entries_active=snap["pause_new_entries_active"],
+            kill_switch_active=snap["kill_switch_active"],
+            trading_allowed=snap["trading_allowed"],
+            last_decision=(
+                ScanEventRead.model_validate(snap["last_decision"])
+                if snap["last_decision"]
+                else None
+            ),
+            pipeline_counts=snap["pipeline_counts"] or {},
+            rejection_counts=snap["rejection_counts"] or {},
+            next_scheduled_at=snap["next_scheduled_at"],
+            worker_note=snap.get("headline") or snap["worker_note"],
+        )
+    except Exception as exc:  # noqa: BLE001 — never blank Home on status shape issues
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "scan_status_error", "message": str(exc)[:240]},
+        ) from exc
 
 
 @router.get("/scan/candidates", response_model=list[ScanCandidateRead])
@@ -319,3 +328,43 @@ def run_scan(
             detail={"code": exc.code, "message": exc.message},
         ) from exc
     return ScanRunResponse(cycle=ScanCycleRead.model_validate(service._cycle_dict(cycle)))
+
+
+@router.post("/scan/teach", response_model=TeachSignalResponse)
+def teach_scan(
+    body: TeachSignalRequest,
+    principal: AuthenticatedPrincipal = Depends(RequireFounder),
+    service: MarketScanService = Depends(get_scan_service),
+    db: Session = Depends(get_db),
+) -> TeachSignalResponse:
+    """Paper teaching signal — records Founder preference; never places orders."""
+    try:
+        event = service.record_teaching_signal(
+            symbol=body.symbol,
+            signal=body.signal,
+            actor_user_id=principal.user.id,
+            candidate_id=body.candidate_id,
+            note=body.note,
+        )
+        AuditService(db).append(
+            action="market.scan.teach",
+            resource_type="market_scan_event",
+            resource_id=str(event.id),
+            actor_user_id=principal.user.id,
+            payload={
+                "signal": body.signal,
+                "symbol": body.symbol.upper(),
+                "candidate_id": str(body.candidate_id) if body.candidate_id else None,
+            },
+        )
+        db.commit()
+    except MarketScanError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return TeachSignalResponse(
+        ok=True,
+        message="Teaching note saved. Argus did not place a trade.",
+        event_id=event.id,
+    )

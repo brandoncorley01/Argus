@@ -103,5 +103,22 @@ class ScanBarsResponse(BaseModel):
     bars: list[ScanBarRead]
 
 
+class TeachSignalRequest(BaseModel):
+    """Founder teaching signal for paper — does not place orders."""
+
+    signal: str = Field(
+        description="interested | not_interested | needs_more_data | looks_wrong"
+    )
+    symbol: str = Field(min_length=1, max_length=64)
+    candidate_id: uuid.UUID | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class TeachSignalResponse(BaseModel):
+    ok: bool
+    message: str
+    event_id: uuid.UUID | None = None
+
+
 class ScanRunResponse(BaseModel):
     cycle: ScanCycleRead

@@ -558,12 +558,119 @@ class MarketScanService:
             self.db.rollback()
             raise
 
+    def record_teaching_signal(
+        self,
+        *,
+        symbol: str,
+        signal: str,
+        actor_user_id: uuid.UUID | None,
+        candidate_id: uuid.UUID | None = None,
+        note: str | None = None,
+    ) -> MarketScanEvent:
+        """Persist a Founder teaching signal. Never places an order."""
+        allowed = {
+            "interested",
+            "not_interested",
+            "needs_more_data",
+            "looks_wrong",
+        }
+        if signal not in allowed:
+            raise MarketScanError(
+                "invalid_signal",
+                f"Teaching signal must be one of: {', '.join(sorted(allowed))}",
+            )
+        labels = {
+            "interested": "Founder marked setup as interesting",
+            "not_interested": "Founder marked setup as not interesting",
+            "needs_more_data": "Founder asked for more market data",
+            "looks_wrong": "Founder flagged setup as looking wrong",
+        }
+        cycle = self.latest_cycle()
+        correlation_id = (cycle.correlation_id if cycle else uuid.uuid4().hex[:16])
+        event = MarketScanEvent(
+            cycle_id=cycle.id if cycle else None,
+            candidate_id=candidate_id,
+            component="founder_teaching",
+            symbol=symbol.upper(),
+            stage="Teaching",
+            outcome=signal,
+            reason_code=signal,
+            title=labels[signal],
+            detail=(note or labels[signal])[:500],
+            strategy_key=None,
+            correlation_id=correlation_id,
+            occurred_at=_utcnow(),
+            payload={"actor_user_id": str(actor_user_id) if actor_user_id else None},
+        )
+        self.db.add(event)
+        self.db.flush()
+        self.db.refresh(event)
+        return event
+
+    def plain_status_summary(self) -> dict[str, Any]:
+        """Short Founder-facing sentences for the Home 'what Argus is doing' strip."""
+        snap = self.status_snapshot()
+        cycle = snap.get("cycle")
+        candidates = self.list_candidates(limit=5)
+        watching = [c for c in candidates if c.stage in {"Watching", "Evaluating", "Risk Review"}]
+        rejected = [c for c in candidates if c.stage == "Rejected"]
+
+        if snap["kill_switch_active"]:
+            headline = "Paper trading is blocked by the kill switch."
+        elif snap["pause_new_entries_active"]:
+            headline = "New paper entries are paused. Argus can still scan and manage exits."
+        elif snap["scanner_state"] == "Scanning":
+            sym = cycle.get("current_symbol") if cycle else None
+            headline = (
+                f"Scanning {sym} right now…"
+                if sym
+                else "Market scan in progress…"
+            )
+        elif watching:
+            names = ", ".join(c.symbol for c in watching[:3])
+            headline = f"Watching {names} — not entered yet."
+        elif rejected and cycle:
+            top = rejected[0]
+            why = top.reason_text or top.reason_code or "did not meet entry rules"
+            headline = f"Last look: {top.symbol} was not taken — {why}"
+        elif snap["scanner_state"] == "Failed":
+            headline = "Scanner cannot run until market instruments (and preferably bars) exist."
+        elif cycle:
+            scanned = cycle.get("symbols_scanned") or 0
+            headline = (
+                f"Between scans. Last cycle checked {scanned} market"
+                f"{'s' if scanned != 1 else ''} and found no entry."
+            )
+        else:
+            headline = "Waiting for the first market scan."
+
+        return {
+            **snap,
+            "headline": headline,
+            "watching_count": len(watching),
+            "rejected_count": len(rejected),
+            "top_watching": [
+                {
+                    "symbol": c.symbol,
+                    "stage": c.stage,
+                    "reason_text": c.reason_text,
+                    "score": c.score,
+                }
+                for c in watching[:3]
+            ],
+        }
+
     def bars_for_symbol(self, symbol: str, *, limit: int = 60) -> dict[str, Any]:
         inst = self.db.scalar(
             select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
         )
         if inst is None:
-            return {"symbol": symbol.upper(), "timeframe": None, "bars": [], "available": False}
+            return {
+                "symbol": symbol.upper(),
+                "timeframe": None,
+                "bars": [],
+                "available": False,
+            }
         bars_orm, timeframe, _ = self._load_bar_rows(inst.id, limit=limit)
         return {
             "symbol": symbol.upper(),
@@ -732,6 +839,8 @@ class MarketScanService:
     def _event_dict(event: MarketScanEvent) -> dict[str, Any]:
         return {
             "id": event.id,
+            "cycle_id": event.cycle_id,
+            "candidate_id": event.candidate_id,
             "occurred_at": event.occurred_at,
             "component": event.component,
             "symbol": event.symbol,

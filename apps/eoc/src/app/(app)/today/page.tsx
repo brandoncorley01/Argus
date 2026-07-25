@@ -9,6 +9,7 @@ import { EndDayButton } from "@/components/founder/EndDayButton";
 import { MarketScannerPanel } from "@/components/founder/MarketScannerPanel";
 import { OpportunityWorkspace } from "@/components/founder/OpportunityWorkspace";
 import type { ScanCandidate } from "@/components/founder/OpportunityRadar";
+import { WhatArgusIsDoing } from "@/components/founder/WhatArgusIsDoing";
 import { EmptyState, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
@@ -137,6 +138,7 @@ type ScanStatus = {
   pipeline_counts: Record<string, number>;
   rejection_counts: Record<string, number>;
   next_scheduled_at: string | null;
+  worker_note?: string;
 };
 
 type ScanEvent = {
@@ -391,10 +393,10 @@ export default async function TodayPage() {
     <div className="founder-home command-center market-command-center">
       <header className="page-header rise">
         <div>
-          <h1>Market Command Center</h1>
+          <h1>Home</h1>
           <p>
-            Operating picture for paper trading and observation-only market scanning.
-            Live unlock remains on the existing authorization path.
+            Paper practice desk — see what Argus is scanning, why it skips or watches
+            a setup, and teach it with your notes. Not real money.
           </p>
         </div>
       </header>
@@ -425,6 +427,24 @@ export default async function TodayPage() {
         portfolioId={portfolio?.id ?? null}
         pauseNewEntries={pauseNewEntries}
         buildId={ARGUS_UI_BUILD}
+      />
+
+      <WhatArgusIsDoing
+        headline={
+          scanStatus?.worker_note ||
+          (ready
+            ? "Waiting for scanner status…"
+            : "Start Argus to begin scanning and paper trading.")
+        }
+        scannerState={scanStatus?.scanner_state ?? "Unavailable"}
+        scanned={scanStatus?.cycle?.symbols_scanned ?? 0}
+        watching={
+          (candidates ?? []).filter((c) =>
+            ["Watching", "Evaluating", "Risk Review"].includes(c.stage),
+          ).length
+        }
+        openPositions={summary?.open_position_count ?? 0}
+        tradingAllowed={!killSwitch && !pauseNewEntries}
       />
 
       <section className="panel rise" aria-label="Account summary">
@@ -511,7 +531,7 @@ export default async function TodayPage() {
         <Panel title="Active Market Scanner">
           <MarketScannerPanel status={scanStatus} feed={scannerFeed} />
         </Panel>
-        <Panel title="Decision Pipeline">
+        <Panel title="How the last scan sorted markets">
           <DecisionPipeline
             counts={scanStatus?.pipeline_counts ?? {}}
             rejections={scanStatus?.rejection_counts ?? {}}
@@ -527,109 +547,82 @@ export default async function TodayPage() {
       </div>
 
       <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Active trades">
+        <Panel title="Open paper trades">
+          <p className="muted-note" style={{ marginTop: 0 }}>
+            Entry price is the fill price per coin. Capital is qty × entry (so with
+            qty 1 they match). Current uses the latest stored market bar when one
+            exists.
+          </p>
           <ActiveTrades positions={positions} />
         </Panel>
-        <Panel title="Argus Decision Stream">
+        <Panel title="What Argus decided (latest)">
           <DecisionStream initialItems={decisions} />
         </Panel>
       </div>
 
       <div className="grid grid-2" style={{ marginTop: "1rem" }}>
-        <Panel title="Performance & risk">
+        <Panel title="Paper results">
           <div className="summary-grid summary-grid-compact">
             <div className="summary-card">
               <span className="metric-label">
-                Closed trades (recent list){" "}
-                <Tip text="Replayed sell fills with entry/exit. Not the same as daily-report fill_count." />
+                Closed paper trades{" "}
+                <Tip text="Sell fills with entry/exit replayed from your paper book." />
               </span>
               <strong>{closedTrades.length}</strong>
             </div>
             <div className="summary-card">
               <span className="metric-label">
-                Closed trades dated today{" "}
-                <Tip text="Subset of closed-trade replay whose exit timestamp is UTC today." />
+                Closed today (UTC){" "}
+                <Tip text="Closed trades whose exit time is today." />
               </span>
               <strong>{closedTodayCount}</strong>
             </div>
             <div className="summary-card">
               <span className="metric-label">
-                Report fill count{" "}
-                <Tip text="Daily report trade_count = buy+sell fills that UTC day — not round trips." />
+                Money in open trades{" "}
+                <Tip text="Live cost basis — same as Capital in open trades above." />
               </span>
-              <strong>{reportContent?.trade_count ?? "Unavailable"}</strong>
+              <strong>{liveExposure == null ? "—" : money(liveExposure)}</strong>
             </div>
             <div className="summary-card">
               <span className="metric-label">
-                Win rate{" "}
-                <Tip text="From daily report: winning sell fills / sell fills that day." />
+                Report win rate{" "}
+                <Tip text="Only when a daily report has closing sells for that UTC day." />
               </span>
               <strong>{formatWinRate(reportContent?.win_rate)}</strong>
             </div>
-            <div className="summary-card">
-              <span className="metric-label">Largest winner</span>
-              <strong className={pnlClass(reportContent?.largest_winner)}>
-                {reportContent?.largest_winner == null
-                  ? "Unavailable"
-                  : moneyPnl(reportContent.largest_winner)}
-              </strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">Largest loser</span>
-              <strong className={pnlClass(reportContent?.largest_loser)}>
-                {reportContent?.largest_loser == null
-                  ? "Unavailable"
-                  : moneyPnl(reportContent.largest_loser)}
-              </strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Portfolio exposure (live){" "}
-                <Tip text="Always live capital in open trades (cost basis)." />
-              </span>
-              <strong>{liveExposure == null ? "Unavailable" : money(liveExposure)}</strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Report exposure snapshot{" "}
-                <Tip text="Exposure stored when the daily report was generated — may differ from live." />
-              </span>
-              <strong>
-                {reportExposure == null ? "Unavailable" : money(reportExposure)}
-              </strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">Risk events (report day)</span>
-              <strong>{reportContent?.risk_events_count ?? "Unavailable"}</strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Daily risk remaining{" "}
-                <Tip text="No remaining-allowance field is persisted yet." />
-              </span>
-              <strong>Unavailable</strong>
-            </div>
-            <div className="summary-card">
-              <span className="metric-label">
-                Consecutive losses / drawdown{" "}
-                <Tip text="Not computed from stored history yet." />
-              </span>
-              <strong>Unavailable</strong>
-            </div>
+            {reportContent?.largest_winner != null ? (
+              <div className="summary-card">
+                <span className="metric-label">Largest winner (report)</span>
+                <strong className={pnlClass(reportContent.largest_winner)}>
+                  {moneyPnl(reportContent.largest_winner)}
+                </strong>
+              </div>
+            ) : null}
+            {reportContent?.largest_loser != null ? (
+              <div className="summary-card">
+                <span className="metric-label">Largest loser (report)</span>
+                <strong className={pnlClass(reportContent.largest_loser)}>
+                  {moneyPnl(reportContent.largest_loser)}
+                </strong>
+              </div>
+            ) : null}
           </div>
-          {report ? (
-            <p className="muted-note" style={{ marginBottom: 0 }}>
-              Latest report date: {report.report_date} (UTC). Cron generates yesterday
-              by default; End of Day generates for the selected day.
-            </p>
-          ) : null}
+          <p className="muted-note" style={{ marginBottom: 0 }}>
+            We hide empty risk metrics instead of filling the page with
+            “Unavailable”. Daily risk remaining and drawdown still need more history.
+            {report ? ` Latest report day: ${report.report_date} (UTC).` : ""}
+            {reportExposure != null && liveExposure != null && reportExposure !== liveExposure
+              ? ` Report exposure snapshot was ${money(reportExposure)} when that report was saved.`
+              : ""}
+          </p>
         </Panel>
 
-        <Panel title="Recent completed trades">
+        <Panel title="Recent closed paper trades">
           {closedTrades.length === 0 ? (
             <EmptyState>
-              No closed trades from fill replay yet. Report fill counts are not shown
-              here as completed round trips.
+              No closed paper trades yet. Buys alone are not completed trades — a sell
+              that finishes (or reduces) a position will show here.
             </EmptyState>
           ) : (
             <div className="table-wrap">
@@ -641,7 +634,6 @@ export default async function TodayPage() {
                     <th>Exit</th>
                     <th>P&amp;L</th>
                     <th>Held</th>
-                    <th>Reason</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -654,7 +646,6 @@ export default async function TodayPage() {
                         {moneyPnl(t.realized_pnl)}
                       </td>
                       <td>{holdingLabel(t.holding_seconds)}</td>
-                      <td>{t.exit_reason ?? "Unavailable"}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -15,7 +15,6 @@ export type ScanBar = {
   volume: string | null;
 };
 
-/** Minimal verified close series — not a decorative indicator set. */
 export function WatchedCandidateChart({
   candidate,
   bars,
@@ -28,7 +27,7 @@ export function WatchedCandidateChart({
   if (!candidate) {
     return (
       <EmptyState>
-        Select a candidate from Opportunity Radar to inspect verified price data.
+        Tap a market card on the left to see what Argus thought about it.
       </EmptyState>
     );
   }
@@ -43,45 +42,48 @@ export function WatchedCandidateChart({
           {candidate.symbol} · {timeframe ?? candidate.timeframe}
         </strong>
         <span>
-          Price{" "}
+          Last price{" "}
           {candidate.current_price == null
             ? "Unavailable"
             : money(candidate.current_price)}
         </span>
-        <span>Stage {candidate.stage}</span>
-        <span>Updated {formatTimestamp(candidate.market_data_at)}</span>
+        <span>{candidate.stage}</span>
+        <span>Data {formatTimestamp(candidate.market_data_at)}</span>
       </div>
 
       {!hasChart ? (
         <EmptyState>
-          Chart-quality candle series unavailable for {candidate.symbol}. Persisted
-          OHLCV bars are required — nothing is invented. Open Market for bar tables
-          when ingest has data.
+          Not enough stored candles to draw a chart for {candidate.symbol} (
+          {closes.length} bar{closes.length === 1 ? "" : "s"}). Argus still used
+          whatever bars exist for the decision — ingest more history on Market to
+          unlock the chart.
         </EmptyState>
       ) : (
-        <PriceSparkline values={closes} />
+        <>
+          <PriceSparkline values={closes} />
+          <p className="muted-note">Verified closes only — no decorative indicators.</p>
+        </>
       )}
 
       <ul className="plain-list">
         <li>
-          Entry zone:{" "}
-          {candidate.entry_zone == null ? "Unavailable" : money(candidate.entry_zone)}
+          <strong>Plain English: </strong>
+          {candidate.reason_text ??
+            (candidate.stage === "Rejected"
+              ? "Argus skipped this setup."
+              : "Argus is watching this setup.")}
         </li>
         <li>
-          Stop-loss:{" "}
-          {candidate.stop_loss == null ? "Unavailable" : money(candidate.stop_loss)}
+          Suggested entry:{" "}
+          {candidate.entry_zone == null ? "Not calculated" : money(candidate.entry_zone)}
         </li>
         <li>
-          Profit target:{" "}
-          {candidate.take_profit == null
-            ? "Unavailable"
-            : money(candidate.take_profit)}
+          Stop: {candidate.stop_loss == null ? "Not set" : money(candidate.stop_loss)}
         </li>
         <li>
-          Indicators used by active probe: SMA fast/slow ({candidate.strategy_key}).
-          No decorative indicators are added.
+          Target:{" "}
+          {candidate.take_profit == null ? "Not set" : money(candidate.take_profit)}
         </li>
-        <li>{candidate.reason_text ?? "No additional reason text."}</li>
       </ul>
     </div>
   );
@@ -107,12 +109,7 @@ function PriceSparkline({ values }: { values: number[] }) {
       role="img"
       aria-label="Verified close prices"
     >
-      <polyline
-        fill="none"
-        stroke="var(--accent)"
-        strokeWidth="2"
-        points={pts}
-      />
+      <polyline fill="none" stroke="var(--accent)" strokeWidth="2" points={pts} />
     </svg>
   );
 }
