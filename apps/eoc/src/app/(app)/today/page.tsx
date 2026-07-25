@@ -16,7 +16,6 @@ import {
 import { apiFetch } from "@/lib/server/api";
 import { ARGUS_UI_BUILD } from "@/lib/build";
 import {
-  getIncidents,
   getMicroLiveStatus,
   getProcessReady,
   soft,
@@ -54,9 +53,8 @@ export default async function TodayPage() {
   const user = await requireUser();
   const name = firstName(user.username);
 
-  const [ready, incidents, microLive, health, portfolios, reports] = await Promise.all([
+  const [ready, microLive, health, portfolios, reports] = await Promise.all([
     soft(getProcessReady),
-    soft(getIncidents),
     soft(getMicroLiveStatus),
     soft(() => apiFetch<SystemHealth>("/api/v1/operations/system-health")),
     soft(() => apiFetch<Portfolio[]>("/api/v1/paper/portfolios")),
@@ -77,21 +75,14 @@ export default async function TodayPage() {
   }
   const open = positions.filter((p) => Number(p.quantity) !== 0);
 
-  const openIncidents =
-    incidents?.filter((i) => i.status === "open" || i.status === "investigating")
-      .length ?? 0;
-  const criticalAlerts =
-    (health?.active_alerts ?? []).filter(
-      (a) => a.severity === "critical" || a.severity === "high",
-    ).length + openIncidents;
   const workerFailed = Object.entries(health?.runtime_monitor ?? {}).some(
     ([k, v]) => (k === "worker" || k === "api") && v.status === "failed",
   );
 
+  // Home status = can Argus run paper now? Ignore stale Advanced alerts here.
   const status = deriveStatus({
-    apiReady: ready == null ? false : true,
+    apiReady: ready != null,
     paperPaused: Boolean(portfolio?.kill_switch_active),
-    criticalAlerts,
     workerFailed,
   });
 

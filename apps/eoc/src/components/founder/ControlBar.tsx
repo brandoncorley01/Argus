@@ -60,18 +60,30 @@ export function ControlBar({
 }: {
   status: "Running" | "Stopped" | "Attention";
 }) {
+  const statusLabel =
+    status === "Running"
+      ? "Running"
+      : status === "Stopped"
+        ? "Stopped"
+        : "Paused / service issue";
+  const statusHint =
+    status === "Running"
+      ? "Argus is up. Use Stop when you are done."
+      : status === "Stopped"
+        ? "Press Start Argus to begin."
+        : "Paper may be paused, or a service needs a restart.";
+
   return (
     <section className="control-bar panel home-controls" aria-label="Start and stop Argus">
       <div className="control-status-row">
         <div>
           <div className="metric-label">Status</div>
           <div className={`control-status control-status-${status.toLowerCase()}`}>
-            {status === "Running"
-              ? "Running"
-              : status === "Stopped"
-                ? "Stopped"
-                : "Needs attention"}
+            {statusLabel}
           </div>
+          <p className="control-hint" style={{ marginTop: "0.35rem" }}>
+            {statusHint}
+          </p>
         </div>
       </div>
 

@@ -41,14 +41,18 @@ export function direction(qty: string | number): string {
 
 export type SimpleStatus = "Running" | "Stopped" | "Attention";
 
+/**
+ * Founder Home status must match Start/Stop reality.
+ * Do not flip to "Needs attention" for stale alerts/incidents —
+ * those belong under Advanced, not the primary status.
+ */
 export function deriveStatus(opts: {
   apiReady: boolean | null;
   paperPaused: boolean;
-  criticalAlerts: number;
+  criticalAlerts?: number;
   workerFailed: boolean;
 }): SimpleStatus {
-  if (opts.apiReady === false) return "Stopped";
-  if (opts.apiReady == null) return "Attention";
-  if (opts.paperPaused || opts.criticalAlerts > 0 || opts.workerFailed) return "Attention";
+  if (opts.apiReady === false || opts.apiReady == null) return "Stopped";
+  if (opts.paperPaused || opts.workerFailed) return "Attention";
   return "Running";
 }
