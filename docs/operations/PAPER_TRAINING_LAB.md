@@ -21,7 +21,7 @@ to the simulated paper broker. **Live trading is never unlocked by this lab.**
 
 | Break | Cause | Repair |
 | --- | --- | --- |
-| Scanner status / insufficient history | No instruments and no continuous OHLCV intake | `POST /api/v1/market/prices/refresh` registers default markets and downloads public Coinbase Exchange 15m candles into Recent Price History |
+| Scanner status / insufficient history | No instruments and no continuous OHLCV intake | `POST /api/v1/market/prices/refresh` registers default markets and downloads public Coinbase Exchange 1m/5m candles into Recent Price History |
 | Single-symbol / empty scan | Instruments never seeded | Refresh ensures an 18-market default universe |
 | Wrong rejection label | `< MIN_BARS` coded as `confirmation_incomplete` | Now `insufficient_history` with plain-language copy |
 | Scan never entered paper | Observation-only by design | Automatic Practice + Coaching Take call `submit_order` (paper only); worker may auto-enter when mode=`automatic` |

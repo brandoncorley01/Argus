@@ -582,8 +582,9 @@ export function TradingCockpit({
           </span>
         </div>
         <p className="muted-note heartbeat-note">
-          Dials move from real scan / price / paper updates (Eastern time). Argus
-          does not invent heartbeats or fake trades.
+          Auto-scan every minute on 1m/5m charts when the worker is running.
+          Dials use real scan / price / paper updates (Eastern time) — never
+          invented.
         </p>
         <div className="argus-dial-row">
           <Dial
@@ -678,11 +679,18 @@ export function TradingCockpit({
         <p className="live-ticker">
           Scanner <strong>{cockpit.scanner_state}</strong>
           {" · "}
-          Market <strong>{cockpit.current_market ?? "between markets"}</strong>
+          Charts <strong>1m / 5m</strong>
           {" · "}
-          Scan {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total}
+          Markets{" "}
+          <strong>
+            {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total}
+          </strong>
           {" · "}
-          Paper balance{" "}
+          Focus <strong>{cockpit.current_market ?? "rotating markets"}</strong>
+          {" · "}
+          Next scan <strong className="countdown">{fmtCountdown(nextScanSec)}</strong>
+          {" · "}
+          Paper{" "}
           <strong>
             {liveAccount.balance != null ? money(liveAccount.balance) : "—"}
           </strong>

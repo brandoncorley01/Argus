@@ -67,3 +67,17 @@ def test_scan_interval_is_one_minute() -> None:
     from app.services.market_scan_service import SCAN_INTERVAL
 
     assert SCAN_INTERVAL == timedelta(minutes=1)
+
+
+def test_short_timeframe_preference_and_candle_lengths() -> None:
+    from app.services.market_scan_service import (
+        TIMEFRAME_PREF,
+        CANDIDATE_WATCH_TTL,
+        candle_length_for,
+    )
+
+    assert TIMEFRAME_PREF[0] == "1m"
+    assert TIMEFRAME_PREF[1] == "5m"
+    assert candle_length_for("1m") == timedelta(minutes=1)
+    assert candle_length_for("5m") == timedelta(minutes=5)
+    assert CANDIDATE_WATCH_TTL == timedelta(minutes=20)

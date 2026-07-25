@@ -2,6 +2,8 @@
 
 Uses Coinbase Exchange public candles (no account / no live trading).
 Does not invent prices — only stores what the exchange returns.
+
+Primary practice charts are 1m and 5m so the scanner can re-evaluate quickly.
 """
 
 from __future__ import annotations
@@ -53,8 +55,13 @@ COINBASE_CANDLES_URL = (
     "https://api.exchange.coinbase.com/products/{product_id}/candles"
     "?granularity={granularity}&start={start}&end={end}"
 )
-GRANULARITY_15M = 900
-BARS_NEEDED = 40  # > MIN_BARS (25) so scan has room to evaluate
+
+# (timeframe label, granularity seconds, bars to request)
+# Short charts only — refreshed every minute for opportunity scanning.
+REFRESH_TIMEFRAMES: tuple[tuple[str, int, int], ...] = (
+    ("1m", 60, 80),
+    ("5m", 300, 50),
+)
 
 
 class MarketPriceRefreshError(Exception):
@@ -103,9 +110,8 @@ class MarketPriceRefreshService:
         ).first()
         if founder is None:
             raise MarketPriceRefreshError(
-                "no_founder",
-                "No Founder account is available to attribute price refresh. "
-                "Sign in as Founder and press Refresh recent prices.",
+                "no_actor",
+                "No Founder account is available to attribute price refresh.",
             )
         from types import SimpleNamespace
 
@@ -120,8 +126,9 @@ class MarketPriceRefreshService:
         *,
         actor: AuthenticatedPrincipal | None = None,
         symbols: list[str] | None = None,
+        timeframes: tuple[tuple[str, int, int], ...] | None = None,
     ) -> dict[str, Any]:
-        """Fetch fresh 15m candles and ingest via the governed manual provider path.
+        """Fetch fresh short-TF candles and ingest via the governed path.
 
         Uses provider_key=manual with source_attribution naming the public feed so
         operators can see provenance. Failures are returned per-symbol; never invents bars.
@@ -129,8 +136,8 @@ class MarketPriceRefreshService:
         principal = self._resolve_actor(actor)
         self.ensure_default_instruments()
         target = [s.upper() for s in (symbols or list(DEFAULT_SYMBOLS))]
+        frames = timeframes or REFRESH_TIMEFRAMES
         now = datetime.now(UTC).replace(microsecond=0)
-        start = now - timedelta(seconds=GRANULARITY_15M * BARS_NEEDED)
         accepted = 0
         failed: list[dict[str, str]] = []
         per_symbol: dict[str, int] = {}
@@ -145,12 +152,59 @@ class MarketPriceRefreshService:
                 self.db.commit()
             except Exception:  # noqa: BLE001 — refresh must continue even if purge fails
                 self.db.rollback()
-            try:
-                raw = self._fetch_candles(symbol, start=start, end=now)
-            except MarketPriceRefreshError as exc:
-                failed.append({"symbol": symbol, "code": exc.code, "message": exc.message})
-                continue
-            if not raw:
+
+            symbol_count = 0
+            for tf_label, granularity, bar_count in frames:
+                start = now - timedelta(seconds=granularity * bar_count)
+                try:
+                    raw = self._fetch_candles(
+                        symbol, start=start, end=now, granularity=granularity
+                    )
+                except MarketPriceRefreshError as exc:
+                    failed.append(
+                        {
+                            "symbol": f"{symbol}:{tf_label}",
+                            "code": exc.code,
+                            "message": exc.message,
+                        }
+                    )
+                    continue
+                if not raw:
+                    failed.append(
+                        {
+                            "symbol": f"{symbol}:{tf_label}",
+                            "code": "empty_feed",
+                            "message": (
+                                f"The public price feed returned no {tf_label} candles "
+                                f"for {symbol}. Argus will not invent prices."
+                            ),
+                        }
+                    )
+                    continue
+                for row in raw:
+                    # Coinbase: [time, low, high, open, close, volume]
+                    ts, low, high, open_, close, volume = row
+                    open_time = datetime.fromtimestamp(int(ts), tz=UTC)
+                    close_time = open_time + timedelta(seconds=granularity)
+                    bars.append(
+                        OhlcvBarIngest(
+                            symbol=symbol,
+                            timeframe=tf_label,
+                            open_time=open_time,
+                            close_time=close_time,
+                            open=Decimal(str(open_)),
+                            high=Decimal(str(high)),
+                            low=Decimal(str(low)),
+                            close=Decimal(str(close)),
+                            volume=Decimal(str(volume)),
+                            source_attribution="coinbase_exchange_public_candles",
+                            external_id=f"cb-{symbol}-{tf_label}-{int(ts)}",
+                        )
+                    )
+                    symbol_count += 1
+            if symbol_count:
+                per_symbol[symbol] = symbol_count
+            elif not any(f.get("symbol", "").startswith(f"{symbol}:") for f in failed):
                 failed.append(
                     {
                         "symbol": symbol,
@@ -161,30 +215,6 @@ class MarketPriceRefreshService:
                         ),
                     }
                 )
-                continue
-            count = 0
-            for row in raw:
-                # Coinbase: [time, low, high, open, close, volume]
-                ts, low, high, open_, close, volume = row
-                open_time = datetime.fromtimestamp(int(ts), tz=UTC)
-                close_time = open_time + timedelta(seconds=GRANULARITY_15M)
-                bars.append(
-                    OhlcvBarIngest(
-                        symbol=symbol,
-                        timeframe="15m",
-                        open_time=open_time,
-                        close_time=close_time,
-                        open=Decimal(str(open_)),
-                        high=Decimal(str(high)),
-                        low=Decimal(str(low)),
-                        close=Decimal(str(close)),
-                        volume=Decimal(str(volume)),
-                        source_attribution="coinbase_exchange_public_candles",
-                        external_id=f"cb-{symbol}-15m-{int(ts)}",
-                    )
-                )
-                count += 1
-            per_symbol[symbol] = count
 
         if not bars:
             raise MarketPriceRefreshError(
@@ -222,17 +252,17 @@ class MarketPriceRefreshService:
             actor_user_id=principal.user.id,
             payload={
                 "symbols": target,
+                "timeframes": [tf for tf, _, _ in frames],
                 "bars_submitted": len(bars),
                 "records_accepted": accepted,
-                "failed": failed[:20],
-                "per_symbol": per_symbol,
+                "failed_count": len(failed),
             },
         )
         self.db.commit()
 
         ready_note = (
-            "Recent price history was updated from the public Coinbase Exchange feed. "
-            "Press Scan markets now to re-evaluate strategies."
+            "Recent 1m/5m price history was updated from the public Coinbase Exchange feed. "
+            "Argus will re-evaluate on the next automatic scan."
             if accepted > 0
             else "No new price bars were accepted. See failed symbols for next steps."
         )
@@ -241,6 +271,7 @@ class MarketPriceRefreshService:
             "records_accepted": accepted,
             "bars_submitted": len(bars),
             "symbols_requested": target,
+            "timeframes": [tf for tf, _, _ in frames],
             "per_symbol_bars": per_symbol,
             "failed": failed,
             "next_step": ready_note,
@@ -251,11 +282,16 @@ class MarketPriceRefreshService:
         }
 
     def _fetch_candles(
-        self, symbol: str, *, start: datetime, end: datetime
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+        granularity: int,
     ) -> list[list[float]]:
         url = COINBASE_CANDLES_URL.format(
             product_id=symbol,
-            granularity=GRANULARITY_15M,
+            granularity=granularity,
             start=start.isoformat().replace("+00:00", "Z"),
             end=end.isoformat().replace("+00:00", "Z"),
         )

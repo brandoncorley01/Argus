@@ -21,16 +21,34 @@ from app.models.paper_trading import PaperPortfolio, PaperPosition
 from app.services.strategy_engine import Bar, SmaCrossoverStrategy
 
 SCAN_INTERVAL = timedelta(minutes=1)
-STALE_BAR = timedelta(hours=6)
+# Short-TF practice: marks older than this are treated as needing refresh.
+STALE_BAR = timedelta(minutes=30)
 MIN_BARS = 25
 EVENT_RETENTION = timedelta(days=7)
 MAX_EVENTS_PER_CYCLE = 120
 STRATEGY_KEY = "sma_crossover"
-TIMEFRAME_PREF = ("15m", "1h", "1d", "5m")
-# Server-side watch window — opportunities expire if not confirmed.
-CANDIDATE_WATCH_TTL = timedelta(minutes=45)
-# 15m candle length for "next candle close" countdowns.
-CANDLE_LENGTH = timedelta(minutes=15)
+# Prefer 1m/5m charts so Argus re-evaluates often (not stuck on 15m closes).
+TIMEFRAME_PREF = ("1m", "5m", "15m")
+# Server-side watch window — short enough for 1–5m opportunity cadence.
+CANDIDATE_WATCH_TTL = timedelta(minutes=20)
+# Default candle length when timeframe is unknown.
+CANDLE_LENGTH = timedelta(minutes=1)
+
+
+def candle_length_for(timeframe: str | None) -> timedelta:
+    """Map stored timeframe label to candle duration for next-eval countdowns."""
+    tf = (timeframe or "1m").lower()
+    if tf in {"1m", "1min", "1"}:
+        return timedelta(minutes=1)
+    if tf in {"5m", "5min", "5"}:
+        return timedelta(minutes=5)
+    if tf in {"15m", "15min", "15"}:
+        return timedelta(minutes=15)
+    if tf in {"1h", "60m"}:
+        return timedelta(hours=1)
+    if tf in {"1d", "24h"}:
+        return timedelta(days=1)
+    return CANDLE_LENGTH
 
 
 class MarketScanError(Exception):
@@ -159,7 +177,7 @@ class MarketScanService:
                 else (cycle.completed_at + SCAN_INTERVAL if cycle and cycle.completed_at else None)
             ),
             "worker_note": (
-                "Scanner runs on the health-supervisor worker cron. "
+                "Argus auto-scans every minute on 1m/5m charts when the worker is up. "
                 "Home reads persisted cycles only — it does not invent activity."
             ),
         }
@@ -178,10 +196,13 @@ class MarketScanService:
             ):
                 return latest
 
+            # Keep 1m/5m bars fresh so each minute scan has real short-TF data.
+            self._ensure_short_tf_prices(now)
+
             correlation_id = uuid.uuid4().hex[:16]
             cycle = MarketScanCycle(
                 status="running",
-                timeframe="15m",
+                timeframe="1m",
                 strategy_key=STRATEGY_KEY,
                 correlation_id=correlation_id,
                 started_at=now,
@@ -509,11 +530,12 @@ class MarketScanService:
                         } else None,
                         risk_status=risk_status,
                         bars=bars,
+                        timeframe=timeframe or "1m",
                     )
                     cand = self._add_candidate(
                         cycle,
                         symbol=inst.symbol,
-                        timeframe=timeframe or "15m",
+                        timeframe=timeframe or "1m",
                         bias="Bullish",
                         stage=stage,
                         score=score,
@@ -823,9 +845,51 @@ class MarketScanService:
         ]
         return bars, timeframe, close_time
 
+    def _ensure_short_tf_prices(self, now: datetime) -> None:
+        """Refresh 1m/5m candles when the book is stale before a scan cycle."""
+        latest_bar_at = self.db.scalar(
+            select(MarketOhlcvBar.close_time)
+            .order_by(desc(MarketOhlcvBar.close_time))
+            .limit(1)
+        )
+        if latest_bar_at is not None and (now - latest_bar_at) < timedelta(seconds=90):
+            return
+        try:
+            from app.services.market_price_refresh_service import (
+                MarketPriceRefreshError,
+                MarketPriceRefreshService,
+            )
+
+            # Short frames only — keep the scan path fast.
+            MarketPriceRefreshService(self.db).refresh_recent_prices(
+                actor=None,
+                timeframes=(("1m", 60, 80), ("5m", 300, 50)),
+            )
+        except MarketPriceRefreshError:
+            # Scan continues with whatever verified bars already exist.
+            return
+        except Exception:  # noqa: BLE001 — never block scanning on refresh failure
+            return
+
     def _load_bar_rows(
         self, instrument_id: uuid.UUID, *, limit: int
     ) -> tuple[list[MarketOhlcvBar], str | None, datetime | None]:
+        # Prefer short TFs only when they have enough history to evaluate.
+        for tf in TIMEFRAME_PREF:
+            rows = list(
+                self.db.scalars(
+                    select(MarketOhlcvBar)
+                    .where(
+                        MarketOhlcvBar.instrument_id == instrument_id,
+                        MarketOhlcvBar.timeframe == tf,
+                    )
+                    .order_by(MarketOhlcvBar.open_time.asc())
+                )
+            )
+            if len(rows) >= MIN_BARS:
+                rows = rows[-limit:]
+                return rows, tf, rows[-1].close_time
+        # Fallback: best available preferred TF even if short, else any bars.
         for tf in TIMEFRAME_PREF:
             rows = list(
                 self.db.scalars(
@@ -838,10 +902,8 @@ class MarketScanService:
                 )
             )
             if rows:
-                # Keep last N for evaluation.
                 rows = rows[-limit:]
                 return rows, tf, rows[-1].close_time
-        # Any timeframe fallback.
         rows = list(
             self.db.scalars(
                 select(MarketOhlcvBar)
@@ -889,14 +951,16 @@ class MarketScanService:
         expires_at: datetime | None,
         risk_status: str,
         bars: list[Bar],
+        timeframe: str | None = "1m",
     ) -> dict[str, Any]:
         now = _utcnow()
+        candle_len = candle_length_for(timeframe)
         next_candle = None
         if market_data_at is not None:
-            # Next evaluation aligns with next 15m close after latest bar.
-            next_candle = market_data_at + CANDLE_LENGTH
+            # Next evaluation aligns with next short-TF candle close.
+            next_candle = market_data_at + candle_len
             while next_candle <= now:
-                next_candle = next_candle + CANDLE_LENGTH
+                next_candle = next_candle + candle_len
         rr = None
         if stop is not None and target is not None and price > 0:
             risk = abs(price - stop)

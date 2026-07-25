@@ -326,7 +326,8 @@ class WorkerSettings:
         cron(run_health_supervisor_cycle, second={0, 30}),
         cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
-        cron(run_market_price_refresh, minute={1, 16, 31, 46}),
+        # Short-TF price refresh — 1m/5m charts (scan also refreshes when stale).
+        cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
         # Continuous opportunity scan — every minute (genuine cycles only).
         cron(run_market_scan_cycle, minute=set(range(60))),
     ]
