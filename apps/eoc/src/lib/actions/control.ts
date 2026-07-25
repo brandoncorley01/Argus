@@ -94,9 +94,16 @@ export async function startArgusAction(): Promise<ActionResult> {
   const res = await runPs1("start-argus.ps1", 240_000);
   revalidatePath("/today");
   revalidatePath("/control");
-  return res.ok
-    ? { ok: true, message: "Argus started.", detail: res.detail }
-    : res;
+  if (!res.ok) return res;
+  const detail = res.detail ?? "";
+  if (detail.includes("REFRESH_HOME_AFTER_UPDATE") || detail.includes("Updated to main")) {
+    return {
+      ok: true,
+      message: "Argus updated and started. Refresh this page in a few seconds.",
+      detail,
+    };
+  }
+  return { ok: true, message: "Argus started. Refresh this page if status looks stale.", detail };
 }
 
 export async function stopArgusAction(): Promise<ActionResult> {

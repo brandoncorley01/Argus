@@ -33,13 +33,12 @@ function Get-ArgusApiReadyUrl {
 }
 
 function Sync-ArgusCode([string]$Root) {
-  # Founder-friendly: Start Argus always loads the GitHub main Home UI (Start/Stop).
-  # Never block startup if offline.
+  # Founder cadence: Start Argus pulls GitHub main. Returns $true only when SHA changed.
   if (-not (Test-Path (Join-Path $Root ".git"))) {
     Write-Host "Code update skipped (not a git checkout)."
     return $false
   }
-  Write-Host "Updating Argus from GitHub main (Home Start/Stop)..."
+  Write-Host "Updating Argus from GitHub main..."
   Push-Location $Root
   try {
     $null = git rev-parse --abbrev-ref HEAD 2>$null
@@ -47,13 +46,13 @@ function Sync-ArgusCode([string]$Root) {
       Write-Host "WARN: git unavailable - continuing with local files."
       return $false
     }
+    $before = (git rev-parse HEAD).Trim()
     git fetch origin 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
       Write-Host "WARN: could not reach GitHub - continuing with local files."
       return $false
     }
-    # Always use main. Local divergent UI work must not hide Start/Stop.
-    git checkout -B main "origin/main" 2>&1 | Out-Host
+    git checkout -f -B main "origin/main" 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
       Write-Host "WARN: could not checkout origin/main - continuing with local files."
       return $false
@@ -63,9 +62,14 @@ function Sync-ArgusCode([string]$Root) {
       Write-Host "WARN: could not reset to origin/main - continuing with local files."
       return $false
     }
+    $after = (git rev-parse HEAD).Trim()
     $sha = (git rev-parse --short HEAD).Trim()
-    Write-Host "OK  Code on main @ $sha"
-    return $true
+    if ($before -ne $after) {
+      Write-Host "OK  Updated to main @ $sha"
+      return $true
+    }
+    Write-Host "OK  Already on main @ $sha"
+    return $false
   } catch {
     Write-Host "WARN: code update skipped: $($_.Exception.Message)"
     return $false

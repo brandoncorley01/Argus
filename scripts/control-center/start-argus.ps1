@@ -35,7 +35,8 @@ try {
   $eocPid = $pids.eoc
   $workerPid = $pids.worker
 
-  # After a code update, recycle API (and dashboard only when not started from the browser).
+  # After a code update, recycle API. From browser Start, reload dashboard after reply returns.
+  $reloadDashboard = $false
   if ($updated) {
     Write-Host "Code changed - refreshing services..."
     Stop-PidIfRunning $pids.api "API launcher"
@@ -45,7 +46,8 @@ try {
       $eocPid = $null
     } else {
       Stop-ArgusPortListeners @(8000)
-      Write-Host "Keeping dashboard running (browser Start)."
+      $reloadDashboard = $true
+      Write-Host "Dashboard will reload after Start finishes so Home picks up the update."
     }
     $apiPid = $null
   }
@@ -121,6 +123,26 @@ try {
     $dash = Get-ArgusDashboardUrl
     Write-Host "Opening Home: $dash"
     Start-Process $dash
+  } elseif ($reloadDashboard) {
+    # Delay so the browser Start request can finish, then bring Home back on new code.
+    Write-Host "Reloading dashboard for updated Home..."
+    $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
+    $restart = @"
+Start-Sleep -Seconds 5
+try {
+  Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id `$_.OwningProcess -Force -ErrorAction SilentlyContinue }
+} catch {}
+Start-Sleep -Seconds 2
+Set-Location '$Root'
+`$env:ARGUS_API_BASE_URL = 'http://127.0.0.1:8000'
+pnpm eoc:dev *> '$eocLog'
+"@
+    $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $restart
+    )
+    Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $eocProc.Id -WorkerPid $workerPid
+    Write-Host "REFRESH_HOME_AFTER_UPDATE"
   }
   Write-Host "=== Argus started ==="
 } catch {

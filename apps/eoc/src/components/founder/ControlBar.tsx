@@ -70,7 +70,7 @@ export function ControlBar({
     status === "Running"
       ? "Argus is up. Use Stop when you are done."
       : status === "Stopped"
-        ? "Press Start Argus to begin."
+        ? "Press Start Argus. That also pulls the latest update."
         : "Paper may be paused, or a service needs a restart.";
 
   return (
