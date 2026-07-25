@@ -1,4 +1,4 @@
-# Local Windows notifications for Argus Control Center (Sprint 4).
+﻿# Local Windows notifications for Argus Control Center (Sprint 4).
 # Prefer toast/balloon; always persist last alert under runtime/control-center.
 
 function Show-ArgusNotification {
@@ -50,6 +50,6 @@ function Show-ArgusNotification {
     Start-Sleep -Milliseconds 500
     $icon.Dispose()
   } catch {
-    # Headless / no UI — file + console already recorded.
+    # Headless / no UI - file + console already recorded.
   }
 }

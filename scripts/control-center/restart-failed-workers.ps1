@@ -1,4 +1,4 @@
-# Restart failed health-supervisor workers only. Never mutates trading history.
+﻿# Restart failed health-supervisor workers only. Never mutates trading history.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 

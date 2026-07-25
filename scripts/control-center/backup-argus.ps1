@@ -1,4 +1,4 @@
-# Founder backup launcher — wraps paper backup + integrity verify.
+﻿# Founder backup launcher - wraps paper backup + integrity verify.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 

@@ -1,4 +1,4 @@
-# Paste this ENTIRE block into PowerShell (no download / no cache).
+﻿# Paste this ENTIRE block into PowerShell (no download / no cache).
 $ErrorActionPreference = "Continue"
 $Root = "C:\Users\brand\OneDrive\Desktop\Argus"
 Set-Location $Root
@@ -32,7 +32,7 @@ function Stop-ArgusLocks {
 }
 
 function Clear-GitCleanInteractive {
-  # git clean can prompt forever on locked OneDrive dirs — never answer interactively.
+  # git clean can prompt forever on locked OneDrive dirs - never answer interactively.
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = "git"
   $psi.Arguments = "clean -fd"

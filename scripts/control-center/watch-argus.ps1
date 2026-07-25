@@ -1,4 +1,4 @@
-# One-shot operational watch: notify on critical runtime / backup / recon issues.
+﻿# One-shot operational watch: notify on critical runtime / backup / recon issues.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
@@ -9,14 +9,14 @@ Write-Host "=== Argus operational watch ==="
 
 if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
   Show-ArgusNotification -Title "Argus critical health issue" -Message "API health endpoint is down." -Level "critical"
-  Write-Host "API down — notified"
+  Write-Host "API down - notified"
   exit 1
 }
 
 try {
   $health = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/operations/system-health" -TimeoutSec 10 -ErrorAction Stop
 } catch {
-  # Unauthenticated read may 401 — fall back to process probes only.
+  # Unauthenticated read may 401 - fall back to process probes only.
   Write-Host "system-health requires auth; using local probes"
   $health = $null
 }

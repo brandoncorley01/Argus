@@ -1,4 +1,4 @@
-# Full Argus restart — stop then start. Preserves Docker volumes / paper history.
+﻿# Full Argus restart - stop then start. Preserves Docker volumes / paper history.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 

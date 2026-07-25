@@ -1,4 +1,4 @@
-# Force this PC onto GitHub main Home UI (Start / Stop).
+﻿# Force this PC onto GitHub main Home UI (Start / Stop).
 #   irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/force-home-update.ps1?$(Get-Random)" | iex
 $ErrorActionPreference = "Continue"
 
@@ -76,7 +76,7 @@ function Clear-GitCleanInteractive {
 Stop-ArgusLocks
 
 $code = Invoke-Git fetch origin
-if ($code -ne 0) { throw "git fetch failed — check internet / GitHub access." }
+if ($code -ne 0) { throw "git fetch failed - check internet / GitHub access." }
 
 $killPaths = @(
   "ARGUS_FOUNDER_QUICKSTART.md",

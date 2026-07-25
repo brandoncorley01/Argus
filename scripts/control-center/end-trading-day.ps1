@@ -1,4 +1,4 @@
-# End Trading Day — generate/confirm daily paper report, then backup.
+﻿# End Trading Day - generate/confirm daily paper report, then backup.
 # Does not stop Argus and does not liquidate positions.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
@@ -16,7 +16,7 @@ try {
 } catch {
   $msg = $_.Exception.Message
   if ($msg -match "immutable|already exists|409") {
-    Write-Host "A report already exists for this date — kept as-is."
+    Write-Host "A report already exists for this date - kept as-is."
     $reportOk = $true
   } else {
     Write-Host "REPORT ISSUE: $msg"

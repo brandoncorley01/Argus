@@ -1,4 +1,4 @@
-# Shared paths for Argus Control Center launchers (sourced by other scripts).
+﻿# Shared paths for Argus Control Center launchers (sourced by other scripts).
 $ErrorActionPreference = "Stop"
 
 . "$PSScriptRoot\_notify.ps1"
@@ -44,23 +44,23 @@ function Sync-ArgusCode([string]$Root) {
   try {
     $null = git rev-parse --abbrev-ref HEAD 2>$null
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: git unavailable — continuing with local files."
+      Write-Host "WARN: git unavailable - continuing with local files."
       return $false
     }
     git fetch origin 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: could not reach GitHub — continuing with local files."
+      Write-Host "WARN: could not reach GitHub - continuing with local files."
       return $false
     }
     # Always use main. Local divergent UI work must not hide Start/Stop.
     git checkout -B main "origin/main" 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: could not checkout origin/main — continuing with local files."
+      Write-Host "WARN: could not checkout origin/main - continuing with local files."
       return $false
     }
     git reset --hard "origin/main" 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: could not reset to origin/main — continuing with local files."
+      Write-Host "WARN: could not reset to origin/main - continuing with local files."
       return $false
     }
     $sha = (git rev-parse --short HEAD).Trim()

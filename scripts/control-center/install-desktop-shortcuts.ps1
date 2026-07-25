@@ -1,4 +1,4 @@
-# Install Desktop shortcuts — Daily controls first, tools second.
+﻿# Install Desktop shortcuts - Daily controls first, tools second.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
@@ -19,20 +19,20 @@ function New-ArgusShortcut([string]$Name, [string]$ScriptLeaf, [string]$Descript
   Write-Host "Created: $lnkPath"
 }
 
-Write-Host "=== ARGUS — DAILY ==="
-New-ArgusShortcut "Start Argus" "start-argus.ps1" "ARGUS DAILY — Start"
-New-ArgusShortcut "Open Argus" "open-dashboard.ps1" "ARGUS DAILY — Open Home"
-New-ArgusShortcut "End Trading Day" "end-trading-day.ps1" "ARGUS DAILY — Report + Backup"
-New-ArgusShortcut "Stop Argus" "stop-argus.ps1" "ARGUS DAILY — Stop"
+Write-Host "=== ARGUS - DAILY ==="
+New-ArgusShortcut "Start Argus" "start-argus.ps1" "ARGUS DAILY - Start"
+New-ArgusShortcut "Open Argus" "open-dashboard.ps1" "ARGUS DAILY - Open Home"
+New-ArgusShortcut "End Trading Day" "end-trading-day.ps1" "ARGUS DAILY - Report + Backup"
+New-ArgusShortcut "Stop Argus" "stop-argus.ps1" "ARGUS DAILY - Stop"
 
-Write-Host "=== ARGUS — TOOLS ==="
-New-ArgusShortcut "Argus Status" "status-argus.ps1" "ARGUS TOOLS — Status"
-New-ArgusShortcut "Restart Argus" "restart-argus.ps1" "ARGUS TOOLS — Restart"
-New-ArgusShortcut "Backup Argus" "backup-argus.ps1" "ARGUS TOOLS — Backup"
-New-ArgusShortcut "Generate Argus Daily Report" "generate-daily-report.ps1" "ARGUS TOOLS — Report only"
+Write-Host "=== ARGUS - TOOLS ==="
+New-ArgusShortcut "Argus Status" "status-argus.ps1" "ARGUS TOOLS - Status"
+New-ArgusShortcut "Restart Argus" "restart-argus.ps1" "ARGUS TOOLS - Restart"
+New-ArgusShortcut "Backup Argus" "backup-argus.ps1" "ARGUS TOOLS - Backup"
+New-ArgusShortcut "Generate Argus Daily Report" "generate-daily-report.ps1" "ARGUS TOOLS - Report only"
 
 # Keep legacy name pointing at Home for older muscle memory
-New-ArgusShortcut "Open Argus Dashboard" "open-dashboard.ps1" "ARGUS DAILY — Open Home (alias)"
+New-ArgusShortcut "Open Argus Dashboard" "open-dashboard.ps1" "ARGUS DAILY - Open Home (alias)"
 
 Write-Host ""
 Write-Host "Desktop shortcuts installed."

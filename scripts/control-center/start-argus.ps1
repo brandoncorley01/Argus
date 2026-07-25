@@ -1,4 +1,4 @@
-# Start Argus Control Center — update code, infra, API, worker, dashboard; open Today.
+﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Today.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
@@ -17,7 +17,7 @@ try {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
   }
 
-  # You should not need to run git yourself — Start keeps the Founder UI current.
+  # You should not need to run git yourself - Start keeps the Founder UI current.
   $updated = Sync-ArgusCode $Root
 
   # Drop stale Next.js cache so Home Start/Stop cannot be masked by old builds.
@@ -37,7 +37,7 @@ try {
 
   # After a code update, recycle API (and dashboard only when not started from the browser).
   if ($updated) {
-    Write-Host "Code changed — refreshing services..."
+    Write-Host "Code changed - refreshing services..."
     Stop-PidIfRunning $pids.api "API launcher"
     if (-not $KeepDashboard) {
       Stop-PidIfRunning $pids.eoc "EOC launcher"

@@ -1,4 +1,4 @@
-# Generate yesterday's (UTC) Internal Paper daily report via the API.
+﻿# Generate yesterday's (UTC) Internal Paper daily report via the API.
 # Requires API up and ARGUS_OPERATOR_USERNAME / ARGUS_OPERATOR_PASSWORD (or BOOTSTRAP_*) in env/.env
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"

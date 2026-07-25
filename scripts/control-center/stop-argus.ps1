@@ -1,4 +1,4 @@
-# Stop Argus trading services; keep the Founder dashboard up so Start/Stop remain available.
+﻿# Stop Argus trading services; keep the Founder dashboard up so Start/Stop remain available.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
@@ -14,7 +14,7 @@ $pids = Read-ArgusPids $Root
 Stop-PidIfRunning $pids.api "API launcher"
 Stop-PidIfRunning $pids.worker "Worker launcher"
 
-# Stop API port only — do NOT kill the dashboard on port 3000.
+# Stop API port only - do NOT kill the dashboard on port 3000.
 foreach ($port in @(8000)) {
   try {
     $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue

@@ -1,4 +1,4 @@
-# Argus Control Center status
+﻿# Argus Control Center status
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
