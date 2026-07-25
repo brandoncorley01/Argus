@@ -1,12 +1,23 @@
 import type { HealthStatus } from "@/lib/types";
 
+/** Founder-facing clock — US Eastern (EST/EDT). Fixed zone keeps SSR/client HTML aligned. */
+export const ARGUS_DISPLAY_TIMEZONE = "America/New_York";
+
 export function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "—";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  // Deterministic UTC string — avoids SSR/client locale hydration mismatches.
-  const iso = d.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+  return d.toLocaleString("en-US", {
+    timeZone: ARGUS_DISPLAY_TIMEZONE,
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  });
 }
 
 export function healthTone(

@@ -9,14 +9,18 @@ import {
   recordTrainingFeedbackAction,
   refreshRecentPricesAction,
   runMarketScanAction,
+  setTrainingModeAction,
 } from "@/lib/actions/paper";
 import type {
   CockpitSnapshot,
   CockpitWallTile,
   CockpitWatch,
 } from "@/lib/founder/cockpitTypes";
-import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
+import { money, moneyPnl } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
+
+const COCKPIT_POLL_MS = 5_000;
+const PULSE_POLL_MS = 5_000;
 
 function fmtCountdown(totalSec: number | null | undefined): string {
   if (totalSec == null || !Number.isFinite(totalSec)) return "—";
@@ -26,31 +30,76 @@ function fmtCountdown(totalSec: number | null | undefined): string {
   return `${m}:${r.toString().padStart(2, "0")}`;
 }
 
-function Gauge({
+function ageSeconds(
+  iso: string | null | undefined,
+  nowMs: number | null,
+): number | null {
+  if (!iso || nowMs == null) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.floor((nowMs - t) / 1000));
+}
+
+/** Circular dial — fill is a real 0–100% from verified ages/counts, not decoration. */
+function Dial({
   label,
-  value,
-  max,
+  valueLabel,
+  pct,
   tone = "neutral",
+  beating = false,
 }: {
   label: string;
-  value: number;
-  max: number;
+  valueLabel: string;
+  pct: number;
   tone?: "ok" | "warn" | "bad" | "neutral";
+  beating?: boolean;
 }) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  const clamped = Math.max(0, Math.min(100, pct));
+  const r = 36;
+  const c = 2 * Math.PI * r;
+  const dash = (clamped / 100) * c;
   return (
-    <div className={`cockpit-gauge tone-${tone}`}>
-      <div className="metric-label">{label}</div>
-      <div className="cockpit-gauge-track" aria-hidden>
-        <div className="cockpit-gauge-fill" style={{ width: `${pct}%` }} />
+    <div
+      className={`argus-dial tone-${tone}${beating ? " is-beating" : ""}`}
+      role="img"
+      aria-label={`${label}: ${valueLabel}`}
+    >
+      <svg viewBox="0 0 96 96" className="argus-dial-svg" aria-hidden>
+        <circle className="argus-dial-track" cx="48" cy="48" r={r} />
+        <circle
+          className="argus-dial-fill"
+          cx="48"
+          cy="48"
+          r={r}
+          strokeDasharray={`${dash} ${c - dash}`}
+          transform="rotate(-90 48 48)"
+        />
+      </svg>
+      <div className="argus-dial-center">
+        <strong>{valueLabel}</strong>
+        <span>{label}</span>
       </div>
-      <strong>
-        {value}
-        {max ? ` / ${max}` : ""}
-      </strong>
     </div>
   );
 }
+
+type PaperPulse = {
+  fetched_at: string;
+  summary: {
+    cash_balance: string;
+    buying_power: string;
+    committed_capital: string;
+    total_account_value: string;
+    open_position_count: number;
+    kill_switch_active: boolean;
+    pause_new_entries_active: boolean;
+  };
+  closed_trade_count: number;
+  total_realized_pnl: string;
+  open_unrealized_pnl?: string;
+  mode: "automatic" | "coaching";
+  default_notional: string;
+};
 
 function Sparkline({
   values,
@@ -241,7 +290,6 @@ export function TradingCockpit({
   trainingMode,
   account,
   positionsOpen,
-  realizedToday,
   totalPnl,
 }: {
   initial: CockpitSnapshot | null;
@@ -254,7 +302,6 @@ export function TradingCockpit({
     openCount: number;
   };
   positionsOpen: number;
-  realizedToday: string | null;
   totalPnl: number | null;
 }) {
   const [cockpit, setCockpit] = useState<CockpitSnapshot | null>(initial);
@@ -270,6 +317,15 @@ export function TradingCockpit({
   const [message, setMessage] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [pending, startTransition] = useTransition();
+  const [mode, setMode] = useState<"automatic" | "coaching">(trainingMode);
+  const [liveAccount, setLiveAccount] = useState(account);
+  const [closedCount, setClosedCount] = useState(0);
+  const [liveTotalPnl, setLiveTotalPnl] = useState<number | null>(totalPnl);
+  const [openUnrealized, setOpenUnrealized] = useState<number | null>(null);
+  const [lastBeatAt, setLastBeatAt] = useState<string | null>(
+    initial?.generated_at ?? null,
+  );
+  const [beatCount, setBeatCount] = useState(0);
   // null until mount — Date.now() in useState breaks hydration vs SSR HTML
   const [now, setNow] = useState<number | null>(null);
 
@@ -287,6 +343,8 @@ export function TradingCockpit({
         if (!res.ok) return;
         const data = (await res.json()) as CockpitSnapshot;
         if (cancelled) return;
+        setLastBeatAt(data.generated_at);
+        setBeatCount((n) => n + 1);
         setCockpit((prev) => {
           if (prev) {
             for (const tile of data.wall) {
@@ -309,12 +367,51 @@ export function TradingCockpit({
         /* keep last good snapshot */
       }
     };
-    const id = window.setInterval(poll, 15000);
+    void poll();
+    const id = window.setInterval(poll, COCKPIT_POLL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
   }, []);
+
+  useEffect(() => {
+    if (!portfolioId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `/api/founder/paper-pulse?portfolioId=${encodeURIComponent(portfolioId)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as PaperPulse;
+        if (cancelled) return;
+        setMode(data.mode);
+        setClosedCount(data.closed_trade_count);
+        setLiveTotalPnl(Number(data.total_realized_pnl));
+        setOpenUnrealized(
+          data.open_unrealized_pnl != null
+            ? Number(data.open_unrealized_pnl)
+            : null,
+        );
+        setLiveAccount({
+          balance: data.summary.total_account_value,
+          cash: data.summary.buying_power,
+          inTrades: data.summary.committed_capital,
+          openCount: data.summary.open_position_count,
+        });
+      } catch {
+        /* keep last good pulse */
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, PULSE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [portfolioId]);
 
   useEffect(() => {
     if (!selected) {
@@ -377,24 +474,6 @@ export function TradingCockpit({
   const tile: CockpitWallTile | null =
     cockpit?.wall.find((w) => w.symbol === selected) ?? null;
 
-  const scanPct =
-    cockpit && cockpit.scan_progress.total > 0
-      ? Math.round(
-          (cockpit.scan_progress.scanned / cockpit.scan_progress.total) * 100,
-        )
-      : 0;
-
-  const riskUsed =
-    account.inTrades != null && account.balance != null
-      ? Math.min(
-          100,
-          Math.round(
-            (Number(account.inTrades) / Math.max(Number(account.balance), 1)) *
-              100,
-          ),
-        )
-      : 0;
-
   if (!cockpit) {
     return (
       <section className="panel rise" aria-label="Trading Cockpit">
@@ -404,6 +483,58 @@ export function TradingCockpit({
           then Scan markets now. Argus will not invent movement.
         </p>
       </section>
+    );
+  }
+
+  const beatAge = ageSeconds(lastBeatAt, now);
+  const feedAge =
+    now == null
+      ? cockpit.market_data_age_seconds
+      : ageSeconds(cockpit.market_data_at, now);
+  const scanInterval = Math.max(1, cockpit.scan_interval_seconds);
+  const scanFill =
+    nextScanSec == null
+      ? 0
+      : Math.min(100, Math.round(((scanInterval - nextScanSec) / scanInterval) * 100));
+  const beatFresh = beatAge != null && beatAge <= 12;
+  const feedOk = feedAge != null && !cockpit.market_data_stale;
+  const openCount = cockpit.open_trades || liveAccount.openCount || positionsOpen;
+  const watchingN = cockpit.watching_count;
+  const whyNoTrades: string[] = [];
+  if (mode === "coaching" && openCount === 0) {
+    whyNoTrades.push(
+      "Coaching Mode is on — Argus will not enter a simulated trade until you press Take on a watched plan.",
+    );
+  }
+  if (mode === "automatic" && openCount === 0 && watchingN === 0) {
+    whyNoTrades.push(
+      "Automatic Practice is on, but no Watching candidates with clear risk are ready yet.",
+    );
+  }
+  if (mode === "automatic" && openCount === 0 && watchingN > 0) {
+    whyNoTrades.push(
+      "Automatic Practice is on. Argus enters only when a watched idea passes risk checks (stage Watching + risk clear).",
+    );
+  }
+  if (cockpit.pause_new_entries_active) {
+    whyNoTrades.push("Pause new trades is on — new paper entries are blocked.");
+  }
+  if (cockpit.kill_switch_active) {
+    whyNoTrades.push("Emergency stop is on — trading is halted.");
+  }
+  if (cockpit.market_data_stale) {
+    whyNoTrades.push(
+      "Price history is outdated — press Refresh recent prices so Argus can evaluate markets honestly.",
+    );
+  }
+  if (closedCount === 0 && (liveTotalPnl == null || liveTotalPnl === 0)) {
+    whyNoTrades.push(
+      "No closed paper trades yet — realized P&L appears after Argus exits at the planned stop or take-profit (or you close on Trades).",
+    );
+  }
+  if (openCount > 0) {
+    whyNoTrades.push(
+      "Open paper trades are live on the dials — unrealized P&L moves with verified marks; Argus exits when stop or target is hit.",
     );
   }
 
@@ -438,90 +569,133 @@ export function TradingCockpit({
 
   return (
     <div className="trading-cockpit">
-      {/* 3. Cockpit gauges */}
-      <section className="panel rise cockpit-panel" aria-label="Live Trading Cockpit">
+      {/* Live heartbeat dials — driven by real poll ages, not invented motion */}
+      <section className="panel rise heartbeat-panel" aria-label="Argus heartbeat">
         <div className="cockpit-head">
-          <h2 style={{ marginTop: 0 }}>Live Trading Cockpit</h2>
-          <span className={`status-light ${cockpit.market_data_stale ? "warn" : "ok"}`}>
-            {cockpit.market_data_stale ? "Prices need refresh" : "Market data current"}
+          <h2 style={{ marginTop: 0 }}>Argus heartbeat</h2>
+          <span className={`status-light ${beatFresh ? "ok" : "warn"}`}>
+            {beatFresh
+              ? `Live · beat #${beatCount || 1}`
+              : beatAge == null
+                ? "Connecting…"
+                : `Last beat ${beatAge}s ago`}
           </span>
         </div>
-        <div className="cockpit-gauges">
-          <Gauge
-            label="Markets monitored"
-            value={cockpit.markets_monitored}
-            max={Math.max(cockpit.markets_monitored, 1)}
-            tone="neutral"
+        <p className="muted-note heartbeat-note">
+          Dials move from real scan / price / paper updates (Eastern time). Argus
+          does not invent heartbeats or fake trades.
+        </p>
+        <div className="argus-dial-row">
+          <Dial
+            label="Argus pulse"
+            valueLabel={beatAge == null ? "—" : `${beatAge}s`}
+            pct={
+              beatAge == null
+                ? 0
+                : Math.max(8, 100 - Math.min(100, beatAge * (100 / 20)))
+            }
+            tone={beatFresh ? "ok" : "warn"}
+            beating={beatFresh}
           />
-          <div className="cockpit-gauge">
-            <div className="metric-label">Current market</div>
-            <strong>{cockpit.current_market ?? "Between markets"}</strong>
-          </div>
-          <div className="cockpit-gauge">
-            <div className="metric-label">Scan progress</div>
-            <div className="cockpit-gauge-track">
-              <div
-                className="cockpit-gauge-fill"
-                style={{ width: `${scanPct}%` }}
-              />
-            </div>
-            <strong>
-              {cockpit.scan_progress.scanned} of {cockpit.scan_progress.total} (
-              {scanPct}%)
-            </strong>
-          </div>
-          <div className="cockpit-gauge">
-            <div className="metric-label">Next scan</div>
-            <strong className="countdown">{fmtCountdown(nextScanSec)}</strong>
-          </div>
-          <Gauge
-            label="Possible trades"
-            value={cockpit.possible_trades_found}
-            max={Math.max(cockpit.possible_trades_found, 1)}
-            tone={cockpit.possible_trades_found ? "ok" : "neutral"}
+          <Dial
+            label="Price feed"
+            valueLabel={
+              feedAge == null
+                ? "—"
+                : feedAge < 120
+                  ? `${feedAge}s`
+                  : `${Math.floor(feedAge / 60)}m`
+            }
+            pct={
+              feedAge == null
+                ? 0
+                : Math.max(5, 100 - Math.min(100, (feedAge / 21600) * 100))
+            }
+            tone={feedOk ? "ok" : "warn"}
+            beating={feedOk}
           />
-          <Gauge
+          <Dial
+            label="Scan cycle"
+            valueLabel={fmtCountdown(nextScanSec)}
+            pct={scanFill}
+            tone={cockpit.scanner_state === "Scanning" ? "ok" : "neutral"}
+            beating={cockpit.scanner_state === "Scanning"}
+          />
+          <Dial
             label="Watching"
-            value={cockpit.watching_count}
-            max={Math.max(cockpit.watching_count, 1)}
-            tone={cockpit.watching_count ? "warn" : "neutral"}
+            valueLabel={String(watchingN)}
+            pct={Math.min(100, watchingN * 25)}
+            tone={watchingN ? "warn" : "neutral"}
+            beating={watchingN > 0}
           />
-          <Gauge
-            label="Awaiting confirmation"
-            value={cockpit.awaiting_confirmation}
-            max={Math.max(cockpit.awaiting_confirmation, 1)}
-            tone="warn"
+          <Dial
+            label="Open paper"
+            valueLabel={String(openCount)}
+            pct={Math.min(100, openCount * 34)}
+            tone={openCount ? "ok" : "neutral"}
+            beating={openCount > 0}
           />
-          <Gauge
-            label="Open trades"
-            value={cockpit.open_trades || positionsOpen}
-            max={Math.max(cockpit.open_trades || positionsOpen, 1)}
-            tone="ok"
+          <Dial
+            label="Open P&L"
+            valueLabel={
+              openCount === 0 || openUnrealized == null
+                ? "—"
+                : moneyPnl(String(openUnrealized))
+            }
+            pct={
+              openCount === 0 || openUnrealized == null
+                ? 5
+                : Math.min(100, 50 + Math.abs(openUnrealized))
+            }
+            tone={
+              openCount === 0 || openUnrealized == null
+                ? "neutral"
+                : openUnrealized >= 0
+                  ? "ok"
+                  : "bad"
+            }
+            beating={openCount > 0}
           />
-          <div className="cockpit-gauge">
-            <div className="metric-label">Risk used (paper)</div>
-            <div className="cockpit-gauge-track">
-              <div
-                className="cockpit-gauge-fill"
-                style={{ width: `${riskUsed}%` }}
-              />
-            </div>
-            <strong>{riskUsed}% of account in trades</strong>
-          </div>
-          <div className="cockpit-gauge">
-            <div className="metric-label">Paper performance</div>
-            <strong className={pnlClass(realizedToday)}>
-              Today{" "}
-              {realizedToday != null ? moneyPnl(realizedToday) : "not reported"}
-            </strong>
-            <span className={`muted-note ${pnlClass(String(totalPnl ?? 0))}`}>
-              Total{" "}
-              {totalPnl != null && Number.isFinite(totalPnl)
-                ? moneyPnl(String(totalPnl))
-                : "—"}
-            </span>
-          </div>
+          <Dial
+            label="Closed P&L"
+            valueLabel={
+              closedCount === 0
+                ? "none"
+                : liveTotalPnl != null && Number.isFinite(liveTotalPnl)
+                  ? moneyPnl(String(liveTotalPnl))
+                  : "—"
+            }
+            pct={closedCount === 0 ? 5 : Math.min(100, 40 + closedCount * 10)}
+            tone={
+              closedCount === 0
+                ? "neutral"
+                : (liveTotalPnl ?? 0) >= 0
+                  ? "ok"
+                  : "bad"
+            }
+          />
         </div>
+        <p className="live-ticker">
+          Scanner <strong>{cockpit.scanner_state}</strong>
+          {" · "}
+          Market <strong>{cockpit.current_market ?? "between markets"}</strong>
+          {" · "}
+          Scan {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total}
+          {" · "}
+          Paper balance{" "}
+          <strong>
+            {liveAccount.balance != null ? money(liveAccount.balance) : "—"}
+          </strong>
+          {" · "}
+          Feed{" "}
+          <strong>
+            {formatTimestamp(cockpit.market_data_at)}
+            {cockpit.market_data_stale ? " (outdated)" : ""}
+          </strong>
+          {" · "}
+          Practice{" "}
+          <strong>{mode === "automatic" ? "Automatic" : "Coaching"}</strong>
+        </p>
         <div className="what-argus-actions">
           <button
             type="button"
@@ -550,12 +724,73 @@ export function TradingCockpit({
             Scan markets now
           </button>
         </div>
+        {message ? <p className="attention-box">{message}</p> : null}
         {cockpit.next_step ? (
-          <p className="attention-box">{cockpit.next_step}</p>
+          <p className="muted-note">{cockpit.next_step}</p>
         ) : null}
       </section>
 
-      {/* 4. Market wall */}
+      <section className="panel rise ops-confidence" aria-label="Why no trades yet">
+        <h2 style={{ marginTop: 0 }}>Why you may not see trades or profits yet</h2>
+        <ul className="ops-confidence-list">
+          {whyNoTrades.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        <div className="what-argus-actions">
+          {portfolioId ? (
+            <>
+              <button
+                type="button"
+                className={`btn ${mode === "coaching" ? "control-btn control-btn-start" : "secondary"}`}
+                disabled={pending || mode === "coaching"}
+                onClick={() =>
+                  startTransition(async () => {
+                    const r = await setTrainingModeAction({
+                      portfolioId,
+                      mode: "coaching",
+                    });
+                    setMessage(r.message);
+                    if (r.ok) setMode("coaching");
+                  })
+                }
+              >
+                Coaching (you approve Take)
+              </button>
+              <button
+                type="button"
+                className={`btn ${mode === "automatic" ? "control-btn control-btn-start" : "secondary"}`}
+                disabled={pending || mode === "automatic"}
+                onClick={() =>
+                  startTransition(async () => {
+                    const r = await setTrainingModeAction({
+                      portfolioId,
+                      mode: "automatic",
+                    });
+                    setMessage(r.message);
+                    if (r.ok) setMode("automatic");
+                  })
+                }
+              >
+                Automatic Practice (Argus may enter)
+              </button>
+            </>
+          ) : null}
+          <Link className="btn secondary" href="/paper-training">
+            Open Paper Training
+          </Link>
+        </div>
+        {mode === "coaching" && watchingN > 0 ? (
+          <p className="attention-box">
+            Argus is watching {watchingN} idea
+            {watchingN === 1 ? "" : "s"}. Select a market below and press{" "}
+            <strong>Let Argus take this simulated trade</strong> to open a paper
+            position. Profits only appear after a paper trade is closed.
+          </p>
+        ) : null}
+      </section>
+
+      {/* Market wall */}
       <section className="panel rise" aria-label="Market wall">
         <h2 style={{ marginTop: 0 }}>Market wall</h2>
         <p className="muted-note">

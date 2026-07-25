@@ -264,7 +264,13 @@ class PaperTrainingService:
             note=note,
             resulting_order_id=order.id,
             actor_user_id=actor.user.id,
-            detail={"mode": settings.mode},
+            detail={
+                "mode": settings.mode,
+                "stop_loss": str(cand.stop_loss) if cand.stop_loss is not None else None,
+                "take_profit": (
+                    str(cand.take_profit) if cand.take_profit is not None else None
+                ),
+            },
         )
         self.db.add(decision)
         cand.stage = "Entered"
@@ -559,7 +565,7 @@ class PaperTrainingService:
         if qty <= 0:
             raise PaperTrainingError("qty_zero", "Paper investment size is too small.")
         side = "buy" if cand.bias != "Bearish" else "buy"  # long-only paper for safety
-        return self.paper.submit_order(
+        order = self.paper.submit_order(
             portfolio_id=portfolio_id,
             actor=actor,
             symbol=cand.symbol,
@@ -569,6 +575,108 @@ class PaperTrainingService:
             limit_price=price,
             idempotency_key=f"train-{cand.id}-{uuid.uuid4().hex[:8]}",
         )
+        # Persist planned exit levels on the entry order (paper only).
+        self.paper._event(
+            order,
+            "paper_exit_plan",
+            order.status,
+            order.status,
+            {
+                "candidate_id": str(cand.id),
+                "stop_loss": str(cand.stop_loss) if cand.stop_loss is not None else None,
+                "take_profit": (
+                    str(cand.take_profit) if cand.take_profit is not None else None
+                ),
+                "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else None,
+            },
+        )
+        self.db.commit()
+        self.db.refresh(order)
+        return order
+
+    def evaluate_paper_exits(
+        self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None = None
+    ) -> list[dict[str, Any]]:
+        """Close paper longs when verified marks hit stored stop or target.
+
+        Never invents prices. Never touches live execution. Exits remain allowed
+        even when pause_new_entries is active.
+        """
+        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        if portfolio is None or portfolio.kill_switch_active:
+            return []
+        resolved = self._resolve_actor(actor, portfolio)
+        if resolved is None:
+            return []
+        closed: list[dict[str, Any]] = []
+        positions = [
+            p
+            for p in self.paper.list_positions(portfolio_id)
+            if p.quantity and p.quantity > 0
+        ]
+        for pos in positions:
+            plan = self.paper._exit_plan_levels(portfolio_id, pos.symbol)
+            stop = plan.get("stop_loss")
+            target = plan.get("take_profit")
+            if stop is None and target is None:
+                continue
+            mark, _mark_at = self.paper._latest_mark(pos.symbol)
+            if mark is None:
+                continue
+            reason: str | None = None
+            if stop is not None and mark <= stop:
+                reason = "stop_loss"
+            elif target is not None and mark >= target:
+                reason = "take_profit"
+            if reason is None:
+                continue
+            try:
+                order = self.paper.submit_order(
+                    portfolio_id=portfolio_id,
+                    actor=resolved,
+                    symbol=pos.symbol,
+                    side="sell",
+                    order_type="market",
+                    quantity=abs(pos.quantity),
+                    limit_price=mark,
+                    idempotency_key=f"exit-{reason}-{pos.symbol}-{uuid.uuid4().hex[:8]}",
+                )
+            except PaperTradingError:
+                continue
+            self.paper._event(
+                order,
+                "paper_exit_triggered",
+                order.status,
+                order.status,
+                {
+                    "reason": reason,
+                    "mark": str(mark),
+                    "stop_loss": str(stop) if stop is not None else None,
+                    "take_profit": str(target) if target is not None else None,
+                },
+            )
+            self.audit.append(
+                action="paper.training.auto_exit",
+                resource_type="paper_order",
+                resource_id=str(order.id),
+                actor_user_id=resolved.user.id,
+                payload={
+                    "symbol": pos.symbol,
+                    "reason": reason,
+                    "mark": str(mark),
+                },
+            )
+            closed.append(
+                {
+                    "symbol": pos.symbol,
+                    "order_id": str(order.id),
+                    "reason": reason,
+                    "mark": str(mark),
+                }
+            )
+        if closed:
+            self.db.commit()
+        return closed
 
     def trade_lesson_for_candidate(self, cand: MarketScanCandidate) -> dict[str, Any]:
         return {

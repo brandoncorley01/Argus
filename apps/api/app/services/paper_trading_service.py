@@ -272,6 +272,7 @@ class PaperTradingService:
                 .limit(1)
             )
             mark, mark_at = self._latest_mark(pos.symbol)
+            plan = self._exit_plan_levels(portfolio_id, pos.symbol)
             market_value: Decimal | None = None
             unrealized: Decimal | None = None
             pnl_pct: Decimal | None = None
@@ -305,8 +306,8 @@ class PaperTradingService:
                     "strategy_version_id": (
                         last_order.strategy_version_id if last_order else None
                     ),
-                    "stop_loss": None,
-                    "take_profit": None,
+                    "stop_loss": plan.get("stop_loss"),
+                    "take_profit": plan.get("take_profit"),
                     "state": (
                         "Holding"
                         if price_status == "live"
@@ -315,6 +316,39 @@ class PaperTradingService:
                 }
             )
         return rows
+
+    def _exit_plan_levels(
+        self, portfolio_id: uuid.UUID, symbol: str
+    ) -> dict[str, Decimal | None]:
+        """Read stop/target attached when the paper entry was opened (if any)."""
+        from app.models.paper_trading import PaperOrderEvent
+
+        row = self.db.execute(
+            select(PaperOrderEvent.payload)
+            .join(PaperOrder, PaperOrder.id == PaperOrderEvent.order_id)
+            .where(
+                PaperOrder.portfolio_id == portfolio_id,
+                PaperOrder.symbol == symbol.upper(),
+                PaperOrder.side == "buy",
+                PaperOrderEvent.event_type == "paper_exit_plan",
+            )
+            .order_by(PaperOrderEvent.occurred_at.desc())
+            .limit(1)
+        ).first()
+        if row is None:
+            return {"stop_loss": None, "take_profit": None}
+        payload = row[0] or {}
+
+        def _dec(key: str) -> Decimal | None:
+            raw = payload.get(key)
+            if raw is None or raw == "":
+                return None
+            try:
+                return Decimal(str(raw))
+            except Exception:  # noqa: BLE001
+                return None
+
+        return {"stop_loss": _dec("stop_loss"), "take_profit": _dec("take_profit")}
 
     def list_closed_trades(
         self, portfolio_id: uuid.UUID, *, limit: int = 5

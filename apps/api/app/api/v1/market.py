@@ -453,6 +453,9 @@ def run_scan(
             training.maybe_auto_enter_from_scan(
                 portfolio_id=portfolio.id, actor=principal
             )
+            training.evaluate_paper_exits(
+                portfolio_id=portfolio.id, actor=principal
+            )
     except Exception:  # noqa: BLE001 — never fail the scan response on auto-enter
         pass
     return ScanRunResponse(cycle=ScanCycleRead.model_validate(service._cycle_dict(cycle)))

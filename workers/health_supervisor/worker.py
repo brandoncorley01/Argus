@@ -226,19 +226,26 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                     from app.services.paper_training_service import PaperTrainingService
 
                     training = PaperTrainingService(session)
+                    auto_exits = 0
                     for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
                         opened = training.maybe_auto_enter_from_scan(
                             portfolio_id=portfolio.id, actor=None
                         )
                         auto_opened += len(opened)
+                        exits = training.evaluate_paper_exits(
+                            portfolio_id=portfolio.id, actor=None
+                        )
+                        auto_exits += len(exits)
                 except Exception:  # noqa: BLE001
                     auto_opened = 0
+                    auto_exits = 0
                 return {
                     "cycle_id": str(cycle.id),
                     "status": cycle.status,
                     "symbols_scanned": cycle.symbols_scanned,
                     "candidates_found": cycle.candidates_found,
                     "auto_paper_entries": auto_opened,
+                    "auto_paper_exits": auto_exits,
                 }
             except Exception as exc:  # noqa: BLE001
                 # Never let scanner errors affect trading engine health cycles.
@@ -268,10 +275,27 @@ async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
 
             try:
                 result = MarketPriceRefreshService(session).refresh_recent_prices(actor=None)
+                auto_exits = 0
+                try:
+                    from sqlalchemy import select
+
+                    from app.models.paper_trading import PaperPortfolio
+                    from app.services.paper_training_service import PaperTrainingService
+
+                    training = PaperTrainingService(session)
+                    for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
+                        auto_exits += len(
+                            training.evaluate_paper_exits(
+                                portfolio_id=portfolio.id, actor=None
+                            )
+                        )
+                except Exception:  # noqa: BLE001
+                    auto_exits = 0
                 return {
                     "ok": result.get("ok"),
                     "records_accepted": result.get("records_accepted"),
                     "failed_count": len(result.get("failed") or []),
+                    "auto_paper_exits": auto_exits,
                 }
             except MarketPriceRefreshError as exc:
                 return {"ok": False, "code": exc.code, "error": exc.message[:240]}

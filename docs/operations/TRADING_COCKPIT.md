@@ -1,55 +1,47 @@
 # Live Trading Cockpit
 
-Build id: `trading-cockpit-v1.2`.
+Build id: `trading-cockpit-v1.3`.
 
-Home presents a visual **Trading Cockpit** driven only by verified market data,
-scan cycles, candidates, and paper portfolio figures. Motion reflects real
-value changes — Argus does not invent prices or pretend to scan.
+Home is a live **Trading Cockpit** with heartbeat dials driven by verified scan,
+price, and paper-account updates. Motion reflects real poll ages and mark
+changes — Argus does not invent heartbeats, prices, or P&L.
 
-## Crash recovery (v1.1+)
+## Eastern time
 
-- Cockpit timestamps/prices are JSON-safe (ISO strings / decimal strings)
-- Missing Paper Training tables no longer 500 the cockpit endpoint — Home gets
-  a degraded empty cockpit and keeps rendering
-- `scripts/migrate-up.ps1` (Start Argus) calls `repair_training_schema.py` to
-  verify `paper_training_settings` and re-apply the training migration if
-  alembic was stamped without tables
-- Home shows a friendly recovery panel instead of a blank Internal Server Error
+Founder-facing timestamps use **US Eastern** (`America/New_York`, EST/EDT) with
+a fixed zone so server HTML matches the browser.
 
-## Hydration (v1.2)
+## Heartbeat dials
 
-- Live countdowns start from server snapshot seconds, then tick after mount
-  (no `Date.now()` during SSR)
-- Timestamps render as deterministic UTC strings to avoid locale SSR/client mismatch
+Polled every **5 seconds**:
+
+- Argus pulse (cockpit fetch age)
+- Price feed age
+- Scan cycle countdown (1-minute scans)
+- Watching count
+- Open paper trades
+- Open unrealized P&L (verified marks only)
+- Closed realized P&L
+
+## Paper money path (honest)
+
+1. **Coaching (default):** Argus watches ideas; you press **Take** to open a
+   simulated trade.
+2. **Automatic Practice:** after each scan, Argus may enter Watching + risk-clear
+   candidates (paper only, risk checks still apply).
+3. **Exits:** when an entry opens, planned stop/target are stored on the order.
+   On later scans / price refresh, Argus sells the paper position if the verified
+   mark hits stop or take-profit. Realized P&L then appears on the Closed dial.
+
+Live trading remains locked. No fabricated activity.
 
 ## Continuous scanning
 
-- Scan interval: **1 minute** (`SCAN_INTERVAL` + worker cron every minute)
-- Price refresh remains on its own schedule (~15 minutes)
+- Scan interval: **1 minute**
+- Price refresh ~15 minutes
 - Home may trigger a scan when the last cycle is ≥ 1 minute old
 
-## Cockpit API
+## Crash recovery
 
-`GET /api/v1/market/scan/cockpit` returns:
-
-- Gauges: markets monitored, current market, scan progress, next scan,
-  possible trades, watching / awaiting confirmation, open trades, risk used
-- **Market wall** tiles with sparkline closes, outlook, status, last analyzed
-- **Watch plans** with server timestamps: watching_since, expire_at (45 min TTL),
-  next candle evaluation, confirmation checklist, entry/stop/target, narratives
-- **What Argus is doing** / **Why Argus decided** plain-language lines
-
-EOC polls `/api/founder/cockpit` every 15s for live updates.
-
-## Watching semantics
-
-- `watching_since` persists across cycles for the same symbol while still Watching
-- Opportunities **expire after 45 minutes** without confirmation (server-side)
-- Countdowns on Home are derived from stored ISO timestamps, not invented timers
-
-## Safety
-
-- Paper / Live remain separated
-- Coaching Take/Skip and idea marks (Good / Questionable / Bad) stay paper-only
-- Stale prices are labeled; P&L is not shown as zero when marks are missing
-- Reduced-motion preferences disable pulse animations
+- Cockpit returns degraded empty snapshots instead of blanking Home
+- `migrate-up.ps1` verifies/repairs `paper_training_settings` via API venv Python
