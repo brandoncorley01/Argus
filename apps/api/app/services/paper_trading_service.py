@@ -192,10 +192,17 @@ class PaperTradingService:
             Decimal("0"),
         )
         buying_power = portfolio.cash_balance - portfolio.reserved_cash
-        marks_complete = all(r.get("mark_price") is not None for r in position_rows) or not position_rows
+        marks_complete = (
+            all(r.get("mark_price") is not None for r in position_rows)
+            or not position_rows
+        )
         if marks_complete and position_rows:
             mtm = sum(
-                (Decimal(str(r["market_value"])) for r in position_rows if r.get("market_value") is not None),
+                (
+                    Decimal(str(r["market_value"]))
+                    for r in position_rows
+                    if r.get("market_value") is not None
+                ),
                 Decimal("0"),
             )
             total_value = portfolio.cash_balance + mtm

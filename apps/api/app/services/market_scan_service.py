@@ -192,6 +192,20 @@ class MarketScanService:
                     .order_by(MarketInstrument.symbol.asc())
                 )
             )
+            pause = bool(
+                self.db.scalar(
+                    select(PaperPortfolio.pause_new_entries_active)
+                    .where(PaperPortfolio.status == "active")
+                    .limit(1)
+                )
+            )
+            kill = bool(
+                self.db.scalar(
+                    select(PaperPortfolio.kill_switch_active)
+                    .where(PaperPortfolio.status == "active")
+                    .limit(1)
+                )
+            )
             cycle.symbols_total = len(instruments)
             rejection_counts: dict[str, int] = {}
             pipeline = {
@@ -452,11 +466,16 @@ class MarketScanService:
                         take_profit=target if target > price else None,
                     )
                     if events_emitted < MAX_EVENTS_PER_CYCLE:
+                        outcome = (
+                            "watching"
+                            if stage == "Watching"
+                            else stage.lower().replace(" ", "_")
+                        )
                         self._emit(
                             cycle,
                             component="strategy_evaluator",
                             symbol=inst.symbol,
-                            outcome="watching" if stage == "Watching" else stage.lower().replace(" ", "_"),
+                            outcome=outcome,
                             title=f"Candidate {stage.lower()} for {inst.symbol}",
                             detail=reason_text or "Strategy probe passed.",
                             reason_code=reason_code,
