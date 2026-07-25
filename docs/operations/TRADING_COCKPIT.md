@@ -11,8 +11,9 @@ value changes — Argus does not invent prices or pretend to scan.
 - Cockpit timestamps/prices are JSON-safe (ISO strings / decimal strings)
 - Missing Paper Training tables no longer 500 the cockpit endpoint — Home gets
   a degraded empty cockpit and keeps rendering
-- `scripts/migrate-up.ps1` (Start Argus) verifies `paper_training_settings` and
-  re-applies the training migration if alembic was stamped without tables
+- `scripts/migrate-up.ps1` (Start Argus) calls `repair_training_schema.py` to
+  verify `paper_training_settings` and re-apply the training migration if
+  alembic was stamped without tables
 - Home shows a friendly recovery panel instead of a blank Internal Server Error
 
 ## Continuous scanning
