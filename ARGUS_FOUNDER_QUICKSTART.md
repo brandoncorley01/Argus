@@ -7,8 +7,8 @@
 3. On **Home** (Command Center):
    - **Start Argus** / **Stop Argus** for the system
    - **Pause New Trades** to block new paper entries while open positions can still be managed
-4. Confirm build shows **market-command-v1** (or newer)
-5. Use account summary, scanner, opportunity radar, active trades, and decision stream to confirm Argus is working
+4. Confirm build shows **market-command-v2** (or newer)
+5. Read **What Argus is doing now**, press **Scan markets now**, and use **Looks good / Skip** on setups to teach paper practice
 
 Paper funds are never real money. Live unlock is not available from Home.
 
