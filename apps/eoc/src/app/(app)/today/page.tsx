@@ -8,14 +8,12 @@ import {
   type ScanCandidate,
 } from "@/components/founder/ConsideringTrades";
 import { EndDayButton } from "@/components/founder/EndDayButton";
-import {
-  buildJustDidTimeline,
-  WhatArgusJustDid,
-} from "@/components/founder/WhatArgusJustDid";
+import { WhatArgusJustDid } from "@/components/founder/WhatArgusJustDid";
 import { WhatArgusIsDoing } from "@/components/founder/WhatArgusIsDoing";
 import { EmptyState, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
+import { buildJustDidTimeline } from "@/lib/founder/justDidTimeline";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
 import { apiFetch } from "@/lib/server/api";
