@@ -1320,6 +1320,12 @@ from app.models.market_scan import (  # noqa: E402
     MarketScanEvent,
 )
 
+__all__ += [
+    "MarketScanCandidate",
+    "MarketScanCycle",
+    "MarketScanEvent",
+]
+
 # Phase 13 Micro-Live Institution models (deny-by-default; re-exported for
 # Alembic metadata)
 from app.models.micro_live import (  # noqa: E402
