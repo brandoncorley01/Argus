@@ -1,9 +1,10 @@
 # Founder Command Center (Home)
 
 Home (`/today`) is the Founder daily command center for **paper** practice.
-Build id: `paper-training-lab-v1`.
+Build id: `trading-cockpit-v1`.
 
-See [`MARKET_COMMAND_CENTER.md`](./MARKET_COMMAND_CENTER.md) and
+See [`TRADING_COCKPIT.md`](./TRADING_COCKPIT.md),
+[`MARKET_COMMAND_CENTER.md`](./MARKET_COMMAND_CENTER.md), and
 [`PAPER_TRAINING_LAB.md`](./PAPER_TRAINING_LAB.md).
 
 Primary navigation: **Home · Paper Training · Trades · Reports · Settings**.

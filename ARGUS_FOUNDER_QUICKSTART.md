@@ -8,8 +8,9 @@
    - **Start Argus** / **Stop Argus** for the system
    - **Pause New Trades** to block new paper entries while open positions can still be managed
    - **Refresh recent prices**, then **Scan markets now**
-4. Confirm build shows **paper-training-lab-v1** (or newer)
-5. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
+4. Confirm build shows **trading-cockpit-v1** (or newer)
+5. Watch the **Live Trading Cockpit** and market wall (real scan progress + countdowns)
+6. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
 
 Primary nav: Home · Paper Training · Trades · Reports · Settings.
 
@@ -22,7 +23,7 @@ The dashboard is not running. Do **not** keep refreshing `127.0.0.1` alone.
 1. In your Argus folder, double-click **`Start-Argus.cmd`**
 2. Wait until the black window finishes (can take a few minutes; Docker must be running)
 3. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
-4. Sign in and confirm build **paper-training-lab-v1**
+4. Sign in and confirm build **trading-cockpit-v1**
 
 Faster option if Start already failed once: double-click **`Recover-Dashboard.cmd`**.
 
