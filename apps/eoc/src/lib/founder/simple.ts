@@ -42,17 +42,17 @@ export function direction(qty: string | number): string {
 export type SimpleStatus = "Running" | "Stopped" | "Attention";
 
 /**
- * Founder Home status must match Start/Stop reality.
- * Do not flip to "Needs attention" for stale alerts/incidents —
- * those belong under Advanced, not the primary status.
+ * Founder Home status must match Start/Stop + Paper.
+ * Running = Argus is up. Stopped = not up. Attention = paper paused only.
+ * Never use stale alerts/incidents/worker noise for this label.
  */
 export function deriveStatus(opts: {
   apiReady: boolean | null;
   paperPaused: boolean;
   criticalAlerts?: number;
-  workerFailed: boolean;
+  workerFailed?: boolean;
 }): SimpleStatus {
   if (opts.apiReady === false || opts.apiReady == null) return "Stopped";
-  if (opts.paperPaused || opts.workerFailed) return "Attention";
+  if (opts.paperPaused) return "Attention";
   return "Running";
 }

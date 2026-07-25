@@ -23,13 +23,6 @@ import {
 
 export const metadata: Metadata = { title: "Home" };
 
-type SystemHealth = {
-  overall_status: string;
-  active_alerts?: Array<{ severity: string; description: string }>;
-  runtime_monitor?: Record<string, { status: string; detail: string }>;
-  backup?: { available: boolean; integrity_ok?: boolean | null; completed_at?: string | null };
-};
-
 type Portfolio = {
   id: string;
   name: string;
@@ -53,10 +46,9 @@ export default async function TodayPage() {
   const user = await requireUser();
   const name = firstName(user.username);
 
-  const [ready, microLive, health, portfolios, reports] = await Promise.all([
+  const [ready, microLive, portfolios, reports] = await Promise.all([
     soft(getProcessReady),
     soft(getMicroLiveStatus),
-    soft(() => apiFetch<SystemHealth>("/api/v1/operations/system-health")),
     soft(() => apiFetch<Portfolio[]>("/api/v1/paper/portfolios")),
     soft(() =>
       apiFetch<DailyReport[]>("/api/v1/operations/daily-reports", {
@@ -75,15 +67,10 @@ export default async function TodayPage() {
   }
   const open = positions.filter((p) => Number(p.quantity) !== 0);
 
-  const workerFailed = Object.entries(health?.runtime_monitor ?? {}).some(
-    ([k, v]) => (k === "worker" || k === "api") && v.status === "failed",
-  );
-
-  // Home status = can Argus run paper now? Ignore stale Advanced alerts here.
+  // Home status tracks Start/Stop + Paper only.
   const status = deriveStatus({
     apiReady: ready != null,
     paperPaused: Boolean(portfolio?.kill_switch_active),
-    workerFailed,
   });
 
   const liveLocked =
@@ -102,7 +89,7 @@ export default async function TodayPage() {
         </div>
       </header>
 
-      <ControlBar status={status} />
+      <ControlBar status={status} buildId={ARGUS_UI_BUILD} />
 
       <div className="simple-row">
         <div className="simple-chip">

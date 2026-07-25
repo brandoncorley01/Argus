@@ -22,7 +22,7 @@ try {
 
   # Drop stale Next.js cache so Home Start/Stop cannot be masked by old builds.
   $nextCache = Join-Path $Root "apps\eoc\.next"
-  if ($updated -and (Test-Path $nextCache)) {
+  if (($updated -or $KeepDashboard) -and (Test-Path $nextCache)) {
     Write-Host "Clearing stale dashboard cache..."
     Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
   }
@@ -35,8 +35,9 @@ try {
   $eocPid = $pids.eoc
   $workerPid = $pids.worker
 
-  # After a code update, recycle API. From browser Start, reload dashboard after reply returns.
-  $reloadDashboard = $false
+  # After a code update, recycle API. From browser Start, always reload dashboard
+  # so Home status/UI fixes are never stuck on an old Next.js process.
+  $reloadDashboard = $KeepDashboard
   if ($updated) {
     Write-Host "Code changed - refreshing services..."
     Stop-PidIfRunning $pids.api "API launcher"
@@ -46,10 +47,11 @@ try {
       $eocPid = $null
     } else {
       Stop-ArgusPortListeners @(8000)
-      $reloadDashboard = $true
       Write-Host "Dashboard will reload after Start finishes so Home picks up the update."
     }
     $apiPid = $null
+  } elseif ($KeepDashboard) {
+    Write-Host "Dashboard will reload after Start finishes so Home stays current."
   }
 
   if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {

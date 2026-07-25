@@ -95,15 +95,11 @@ export async function startArgusAction(): Promise<ActionResult> {
   revalidatePath("/today");
   revalidatePath("/control");
   if (!res.ok) return res;
-  const detail = res.detail ?? "";
-  if (detail.includes("REFRESH_HOME_AFTER_UPDATE") || detail.includes("Updated to main")) {
-    return {
-      ok: true,
-      message: "Argus updated and started. Refresh this page in a few seconds.",
-      detail,
-    };
-  }
-  return { ok: true, message: "Argus started. Refresh this page if status looks stale.", detail };
+  return {
+    ok: true,
+    message: "Argus started. This page will reload in a few seconds.",
+    detail: res.detail,
+  };
 }
 
 export async function stopArgusAction(): Promise<ActionResult> {
