@@ -45,6 +45,7 @@ def _run_alembic(*args: str) -> None:
 def _training_settings_missing() -> bool:
     sys.path.insert(0, str(API_ROOT))
     from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
 
     from app.core.settings import clear_settings_cache, get_settings
     from app.db.session import get_session_factory, reset_engine
@@ -64,6 +65,14 @@ def _training_settings_missing() -> bool:
             )
         ).scalar()
         return bool(missing)
+    except OperationalError as exc:
+        sys.stderr.write(
+            "Could not connect to PostgreSQL while verifying Paper Training schema.\n"
+            "Open Docker Desktop, confirm postgres is up (docker compose ps),\n"
+            "check DATABASE_URL / POSTGRES_PASSWORD in .env, then Start Argus again.\n"
+            f"Detail: {exc.orig if getattr(exc, 'orig', None) else exc}\n"
+        )
+        raise SystemExit(2) from exc
     finally:
         db.close()
         reset_engine()
