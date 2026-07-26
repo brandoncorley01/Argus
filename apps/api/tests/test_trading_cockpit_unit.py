@@ -98,7 +98,21 @@ def test_doing_lines_are_live_cadence() -> None:
     )
     assert lines
     assert "10" in lines[0]["text"]
-    assert "next pass" in lines[0]["text"].lower()
+    assert "auto scan on" in lines[0]["text"].lower()
+
+
+def test_next_scan_at_stays_in_the_future_between_cycles() -> None:
+    now = datetime(2026, 7, 26, 12, 1, 30, tzinfo=UTC)
+    cycle = SimpleNamespace(
+        status="succeeded",
+        completed_at=now - timedelta(seconds=90),
+        next_scheduled_at=now - timedelta(seconds=30),
+    )
+    nxt = MarketScanService._next_scan_at(
+        cycle, now=now, scanner_state="Between Cycles"  # type: ignore[arg-type]
+    )
+    assert nxt is not None
+    assert nxt > now
 
 
 def test_doing_lines_use_live_open_count_not_stale_pipeline() -> None:

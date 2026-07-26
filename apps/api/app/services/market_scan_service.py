@@ -193,16 +193,42 @@ class MarketScanService:
             "pipeline_counts": pipeline,
             "open_positions_live": open_positions_live,
             "rejection_counts": (cycle.rejection_counts if cycle else {}) or {},
-            "next_scheduled_at": (
-                cycle.next_scheduled_at
-                if cycle and cycle.next_scheduled_at
-                else (cycle.completed_at + SCAN_INTERVAL if cycle and cycle.completed_at else None)
+            "next_scheduled_at": self._next_scan_at(
+                cycle, now=now, scanner_state=scanner_state
             ),
             "worker_note": (
-                "Argus auto-scans every minute on 1m/5m charts when the worker is up. "
+                "Argus auto-scans every minute on 1m/5m charts while running. "
+                "Start once; it keeps scanning until you Stop. "
                 "Home reads persisted cycles only — it does not invent activity."
             ),
         }
+
+    @staticmethod
+    def _next_scan_at(
+        cycle: MarketScanCycle | None,
+        *,
+        now: datetime,
+        scanner_state: str,
+    ) -> datetime | None:
+        """Forward-looking next pass time while Argus is running.
+
+        Cron often returns the same cycle within the interval; that can leave
+        next_scheduled_at in the past and make the UI look like Argus stopped.
+        Keep the countdown on the next due slot until Delayed/Failed/Paused.
+        """
+        if cycle is None:
+            return None
+        if scanner_state in {"Failed", "Paused"}:
+            return cycle.next_scheduled_at
+        if cycle.status == "running":
+            return cycle.next_scheduled_at or (now + SCAN_INTERVAL)
+        completed = cycle.completed_at
+        if completed is None:
+            return cycle.next_scheduled_at
+        elapsed = max(0.0, (now - completed).total_seconds())
+        interval = SCAN_INTERVAL.total_seconds()
+        slots = int(elapsed // interval) + 1
+        return completed + timedelta(seconds=slots * interval)
 
     def run_scan_cycle(self, *, force: bool = False) -> MarketScanCycle:
         """Run one scan over active instruments. Safe to call from worker or API."""
@@ -216,6 +242,10 @@ class MarketScanService:
                 and latest.completed_at is not None
                 and now - latest.completed_at < SCAN_INTERVAL
             ):
+                due = latest.completed_at + SCAN_INTERVAL
+                if latest.next_scheduled_at is None or latest.next_scheduled_at < due:
+                    latest.next_scheduled_at = due
+                    self.db.commit()
                 return latest
 
             # Keep 1m/5m bars fresh so each minute scan has real short-TF data.
@@ -1404,12 +1434,17 @@ class MarketScanService:
                 }
             )
         elif state == "Delayed":
-            lines.append({"text": "Scan delayed — worker may be down", "tone": "warn"})
+            lines.append(
+                {
+                    "text": "Scan delayed — worker catching up (still running)",
+                    "tone": "warn",
+                }
+            )
         elif total:
             lines.append(
                 {
-                    "text": f"Last pass {scanned}/{total} markets · next pass pending",
-                    "tone": "info",
+                    "text": f"Last pass {scanned}/{total} markets · auto scan on",
+                    "tone": "ok",
                 }
             )
 

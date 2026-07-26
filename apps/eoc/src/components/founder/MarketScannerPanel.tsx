@@ -31,7 +31,7 @@ const STATE_PLAIN: Record<string, string> = {
   Scanning: "Looking at markets right now",
   "Between Cycles": "Resting until the next scan",
   Paused: "Trading paused — scans may still run",
-  Delayed: "Scan is late — worker may be behind",
+  Delayed: "Scan is late — worker catching up",
   Failed: "Scanner cannot run yet",
 };
 

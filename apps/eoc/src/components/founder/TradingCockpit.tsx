@@ -548,13 +548,16 @@ export function TradingCockpit({
         ? "Scanning"
         : cockpit.scanner_state === "Delayed"
           ? "Scan delayed"
-          : "Scan ready",
+          : cockpit.scanner_state === "Paused"
+            ? "Paused"
+            : "Running",
     tone:
       cockpit.scanner_state === "Scanning"
         ? "ok"
-        : cockpit.scanner_state === "Delayed"
+        : cockpit.scanner_state === "Delayed" ||
+            cockpit.scanner_state === "Paused"
           ? "warn"
-          : "neutral",
+          : "ok",
   });
   if (watchingN > 0) {
     statusChips.push({ label: `${watchingN} watching`, tone: "warn" });
@@ -1059,21 +1062,26 @@ export function TradingCockpit({
           <h2 style={{ marginTop: 0 }}>Live monitor</h2>
           <span
             className={`status-light ${
-              cockpit.scanner_state === "Delayed" || (nextScanSec != null && nextScanSec <= 0 && cockpit.scanner_state !== "Scanning")
+              cockpit.scanner_state === "Delayed"
                 ? "warn"
-                : feedOk
+                : cockpit.scanner_state === "Scanning" || feedOk
                   ? "ok"
                   : "warn"
             }`}
           >
             {cockpit.scanner_state === "Scanning"
               ? `Checking ${cockpit.current_market ?? "…"}`
-              : cockpit.scanner_state === "Delayed" ||
-                  (nextScanSec != null && nextScanSec <= 0)
-                ? "Scan overdue — Start Argus"
-                : nextScanSec != null
-                  ? `Next pass ${fmtCountdown(nextScanSec)}`
-                  : cockpit.scanner_state}
+              : cockpit.scanner_state === "Paused"
+                ? "Paused"
+                : cockpit.scanner_state === "Failed"
+                  ? "Scan failed — check worker"
+                  : cockpit.scanner_state === "Delayed"
+                    ? "Scan delayed — worker catching up"
+                    : nextScanSec != null && nextScanSec <= 0
+                      ? "Next pass due"
+                      : nextScanSec != null
+                        ? `Next pass ${fmtCountdown(nextScanSec)}`
+                        : "Running"}
           </span>
         </div>
         <div className="status-chip-row live-monitor-strip">
