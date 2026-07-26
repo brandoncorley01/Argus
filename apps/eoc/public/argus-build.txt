@@ -1,1 +1,1 @@
-live-monitor-v1.3 pending
+live-monitor-v1.3 26c79d9
