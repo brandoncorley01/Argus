@@ -20,12 +20,11 @@ function Wait-ArgusPostgres {
     }
     Start-Sleep -Seconds 2
   }
-  throw @(
-    "PostgreSQL did not become ready within ${TimeoutSec}s.",
-    "Open Docker Desktop, confirm containers are running (docker compose ps),",
-    "then press Start Argus again.",
-    "Detail: $last"
-  ) -join " "
+  throw (
+    "PostgreSQL did not become ready within ${TimeoutSec}s. " +
+    "Open Docker Desktop, confirm containers are running (docker compose ps), " +
+    "then press Start Argus again. Detail: $last"
+  )
 }
 
 function Invoke-ArgusAlembicUpgrade {
@@ -35,10 +34,8 @@ function Invoke-ArgusAlembicUpgrade {
     # Same interpreter Start Argus uses for uvicorn.
     & $ApiPython -m alembic upgrade head
     if ($LASTEXITCODE -eq 0) { return 0 }
-    # Incomplete venv — fall through to uv-managed run.
-    if ($LASTEXITCODE -ne 0) {
-      Write-Host "API venv alembic failed (exit $LASTEXITCODE); trying uv run..."
-    }
+    # Incomplete venv - fall through to uv-managed run.
+    Write-Host "API venv alembic failed (exit $LASTEXITCODE); trying uv run..."
   }
   python -m uv run alembic upgrade head
   return $LASTEXITCODE
@@ -75,12 +72,12 @@ while ($attempt -lt $maxAttempts -and -not $migrateOk) {
   }
 }
 if (-not $migrateOk) {
-  throw @(
-    "Database migrate failed — Argus could not connect to PostgreSQL.",
-    "Check: (1) Docker Desktop is running, (2) .env DATABASE_URL password matches",
-    "POSTGRES_PASSWORD, (3) port 5432 is free.",
+  throw (
+    "Database migrate failed - Argus could not connect to PostgreSQL. " +
+    "Check: (1) Docker Desktop is running, (2) .env DATABASE_URL password matches " +
+    "POSTGRES_PASSWORD, (3) port 5432 is free. " +
     "Then Start Argus again. Detail: $lastErr"
-  ) -join " "
+  )
 }
 
 # Use the API venv (same as Start Argus), not system Python.
@@ -94,11 +91,11 @@ if (Test-Path -LiteralPath $ApiPython) {
   python -m uv run python "$Root\scripts\repair_training_schema.py"
 }
 if ($LASTEXITCODE -ne 0) {
-  throw @(
-    "Paper Training schema verify/repair failed.",
-    "PostgreSQL may still be starting or DATABASE_URL in .env may be wrong.",
+  throw (
+    "Paper Training schema verify/repair failed. " +
+    "PostgreSQL may still be starting or DATABASE_URL in .env may be wrong. " +
     "Start Docker Desktop, then Start Argus again."
-  ) -join " "
+  )
 }
 
 Write-Host "Database is up to date."
