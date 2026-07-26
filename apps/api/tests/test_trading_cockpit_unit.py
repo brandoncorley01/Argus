@@ -80,4 +80,60 @@ def test_short_timeframe_preference_and_candle_lengths() -> None:
     assert TIMEFRAME_PREF[1] == "5m"
     assert candle_length_for("1m") == timedelta(minutes=1)
     assert candle_length_for("5m") == timedelta(minutes=5)
-    assert CANDIDATE_WATCH_TTL == timedelta(minutes=20)
+    assert CANDIDATE_WATCH_TTL == timedelta(minutes=8)
+
+
+def test_doing_lines_are_live_cadence() -> None:
+    svc = MarketScanService(db=None)  # type: ignore[arg-type]
+    lines = svc._doing_lines(
+        {
+            "scanner_state": "Between Cycles",
+            "symbols_monitored": 10,
+            "scan_progress": {"scanned": 10, "total": 10},
+            "pipeline_counts": {"positions": 0},
+            "market_data_stale": False,
+        },
+        [],
+    )
+    assert lines
+    assert "10" in lines[0]["text"]
+    assert "next pass" in lines[0]["text"].lower()
+
+
+def test_monitor_rows_sort_focus_first() -> None:
+    svc = MarketScanService(db=None)  # type: ignore[arg-type]
+    now = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+    rows = svc._monitor_rows(
+        [
+            {
+                "symbol": "ETH-USD",
+                "status": "Rejected",
+                "current_price": 3000.0,
+                "pct_change": 0.1,
+                "outlook": "Falling",
+                "signal_strength": 20,
+                "timeframe": "1m",
+                "stale": False,
+                "market_data_at": (now - timedelta(seconds=30)).isoformat(),
+                "last_analyzed_at": (now - timedelta(seconds=40)).isoformat(),
+            },
+            {
+                "symbol": "BTC-USD",
+                "status": "Watching",
+                "current_price": 100000.0,
+                "pct_change": 0.2,
+                "outlook": "Rising",
+                "signal_strength": 80,
+                "timeframe": "1m",
+                "stale": False,
+                "market_data_at": (now - timedelta(seconds=20)).isoformat(),
+                "last_analyzed_at": (now - timedelta(seconds=25)).isoformat(),
+            },
+        ],
+        current_market="ETH-USD",
+        now=now,
+    )
+    assert rows[0]["symbol"] == "ETH-USD"
+    assert rows[0]["phase"] == "focus"
+    assert rows[0]["focus"] is True
+    assert rows[1]["phase"] == "watch"

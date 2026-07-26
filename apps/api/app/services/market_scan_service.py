@@ -29,8 +29,8 @@ MAX_EVENTS_PER_CYCLE = 120
 STRATEGY_KEY = "sma_crossover"
 # Prefer 1m/5m charts so Argus re-evaluates often (not stuck on 15m closes).
 TIMEFRAME_PREF = ("1m", "5m", "15m")
-# Server-side watch window — short enough for 1–5m opportunity cadence.
-CANDIDATE_WATCH_TTL = timedelta(minutes=20)
+# Server-side watch window — short for 1m/5m cadence (was 20m; felt stuck).
+CANDIDATE_WATCH_TTL = timedelta(minutes=8)
 # Default candle length when timeframe is unknown.
 CANDLE_LENGTH = timedelta(minutes=1)
 
@@ -790,7 +790,9 @@ class MarketScanService:
             "headline": headline,
             "watching_count": len(watching),
             "rejected_count": len(rejected),
-            "current_market": current_symbol or (watching[0].symbol if watching else None),
+            # Only set while a cycle is actively scanning — do not freeze on
+            # the first watch symbol between passes (that made Home look stuck).
+            "current_market": current_symbol if snap["scanner_state"] == "Scanning" else None,
             "scan_progress": {
                 "scanned": scanned,
                 "total": symbols_total,
@@ -1121,6 +1123,10 @@ class MarketScanService:
 
         doing = self._doing_lines(status, candidates)
         decided = self._decided_lines(limit=12)
+        current_market = status.get("current_market")
+        monitor = self._monitor_rows(
+            wall, current_market=current_market, now=now
+        )
 
         scanned = int((status.get("scan_progress") or {}).get("scanned") or 0)
         total = int((status.get("scan_progress") or {}).get("total") or 0)
@@ -1128,7 +1134,7 @@ class MarketScanService:
             "generated_at": now.isoformat(),
             "headline": status.get("headline"),
             "scanner_state": status.get("scanner_state") or "Between Cycles",
-            "current_market": status.get("current_market"),
+            "current_market": current_market,
             "markets_monitored": len(instruments),
             "scan_progress": {"scanned": scanned, "total": total},
             "next_scan_at": _as_iso(status.get("next_scheduled_at")),
@@ -1148,6 +1154,7 @@ class MarketScanService:
             "next_step": status.get("next_step"),
             "wall": wall,
             "watches": watches,
+            "monitor": monitor,
             "doing": doing,
             "decided": [
                 {
@@ -1344,45 +1351,132 @@ class MarketScanService:
     def _doing_lines(
         self, status: dict[str, Any], candidates: list[MarketScanCandidate]
     ) -> list[dict[str, str]]:
+        """Short activity lines for the live monitor strip (not a frozen essay)."""
         lines: list[dict[str, str]] = []
         cur = status.get("current_market")
-        if status.get("scanner_state") == "Scanning" and cur:
-            lines.append({"text": f"Scanning {cur}", "tone": "info"})
-        for c in candidates:
-            if c.stage == "Watching":
-                lines.append(
-                    {
-                        "text": f"Waiting for a candle to close on {c.symbol}",
-                        "tone": "wait",
-                    }
-                )
-            elif c.stage == "Risk Review":
-                lines.append({"text": f"Checking risk for {c.symbol}", "tone": "wait"})
+        progress = status.get("scan_progress") or {}
+        scanned = int(progress.get("scanned") or 0)
+        total = int(progress.get("total") or status.get("symbols_monitored") or 0)
+        state = status.get("scanner_state") or "Between Cycles"
+
+        if state == "Scanning" and cur:
+            lines.append(
+                {
+                    "text": f"Checking {cur} ({scanned}/{total})",
+                    "tone": "ok",
+                }
+            )
+        elif state == "Delayed":
+            lines.append({"text": "Scan delayed — worker may be down", "tone": "warn"})
+        elif total:
+            lines.append(
+                {
+                    "text": f"Last pass {scanned}/{total} markets · next pass pending",
+                    "tone": "info",
+                }
+            )
+
+        watching = [c for c in candidates if c.stage == "Watching"]
+        risk = [c for c in candidates if c.stage == "Risk Review"]
+        if watching:
+            syms = ", ".join(c.symbol for c in watching[:4])
+            more = f" +{len(watching) - 4}" if len(watching) > 4 else ""
+            lines.append(
+                {
+                    "text": f"Watch {len(watching)}: {syms}{more}",
+                    "tone": "wait",
+                }
+            )
+        if risk:
+            lines.append(
+                {
+                    "text": f"Risk check {len(risk)}: "
+                    + ", ".join(c.symbol for c in risk[:3]),
+                    "tone": "wait",
+                }
+            )
+
         open_n = int((status.get("pipeline_counts") or {}).get("positions") or 0)
         if open_n:
             lines.append(
                 {
-                    "text": f"Monitoring the stop on {open_n} open paper trade"
+                    "text": f"Stops live on {open_n} open paper trade"
                     f"{'' if open_n == 1 else 's'}",
                     "tone": "ok",
                 }
             )
+        if status.get("market_data_stale"):
+            lines.append({"text": "Feed stale — Update prices", "tone": "warn"})
         if not lines:
-            if status.get("market_data_stale"):
-                lines.append(
-                    {
-                        "text": "Waiting because market prices need a refresh",
-                        "tone": "warn",
-                    }
-                )
-            else:
-                lines.append(
-                    {
-                        "text": "Waiting because no setup currently qualifies",
-                        "tone": "wait",
-                    }
-                )
-        return lines[:8]
+            lines.append({"text": "Standing by for next scan", "tone": "wait"})
+        return lines[:6]
+
+    def _monitor_rows(
+        self,
+        wall: list[dict[str, Any]],
+        *,
+        current_market: str | None,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Per-market live monitor rows derived from the wall (verified data only)."""
+        rows: list[dict[str, Any]] = []
+        for tile in wall:
+            close_iso = tile.get("market_data_at")
+            age: int | None = None
+            if isinstance(close_iso, str):
+                try:
+                    close_dt = datetime.fromisoformat(close_iso.replace("Z", "+00:00"))
+                    age = max(0, int((now - close_dt).total_seconds()))
+                except ValueError:
+                    age = None
+            analyzed_iso = tile.get("last_analyzed_at")
+            analyzed_age: int | None = None
+            if isinstance(analyzed_iso, str):
+                try:
+                    a_dt = datetime.fromisoformat(analyzed_iso.replace("Z", "+00:00"))
+                    analyzed_age = max(0, int((now - a_dt).total_seconds()))
+                except ValueError:
+                    analyzed_age = None
+            status = str(tile.get("status") or "Scanning")
+            phase = "idle"
+            if tile.get("symbol") == current_market:
+                phase = "focus"
+            elif status in {"Watching", "Risk Check", "Almost Ready"}:
+                phase = "watch"
+            elif status == "Trade Open":
+                phase = "open"
+            elif tile.get("stale") or status == "Waiting for Data":
+                phase = "stale"
+            elif status == "Rejected":
+                phase = "clear"
+            rows.append(
+                {
+                    "symbol": tile.get("symbol"),
+                    "status": status,
+                    "phase": phase,
+                    "price": tile.get("current_price"),
+                    "pct_change": tile.get("pct_change"),
+                    "outlook": tile.get("outlook"),
+                    "signal_strength": tile.get("signal_strength") or 0,
+                    "timeframe": tile.get("timeframe"),
+                    "stale": bool(tile.get("stale")),
+                    "market_data_at": close_iso,
+                    "age_seconds": age,
+                    "last_analyzed_at": analyzed_iso,
+                    "analyzed_age_seconds": analyzed_age,
+                    "focus": tile.get("symbol") == current_market,
+                }
+            )
+        # Focus / watch / open first so the live board reads as active work.
+        order = {"focus": 0, "open": 1, "watch": 2, "stale": 3, "clear": 4, "idle": 5}
+        rows.sort(
+            key=lambda r: (
+                order.get(str(r.get("phase")), 9),
+                -float(r.get("signal_strength") or 0),
+                str(r.get("symbol") or ""),
+            )
+        )
+        return rows
 
     def _decided_lines(self, *, limit: int = 12) -> list[dict[str, Any]]:
         from app.services.plain_language import plain_rejection

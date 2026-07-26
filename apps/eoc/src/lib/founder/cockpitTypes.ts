@@ -58,6 +58,23 @@ export type CockpitWatch = {
   evaluated_at: string;
 };
 
+export type CockpitMonitorRow = {
+  symbol: string;
+  status: string;
+  phase: string;
+  price: number | null;
+  pct_change: number | null;
+  outlook: string;
+  signal_strength: number;
+  timeframe: string | null;
+  stale: boolean;
+  market_data_at: string | null;
+  age_seconds: number | null;
+  last_analyzed_at: string | null;
+  analyzed_age_seconds: number | null;
+  focus: boolean;
+};
+
 export type CockpitSnapshot = {
   generated_at: string;
   headline: string | null;
@@ -80,6 +97,7 @@ export type CockpitSnapshot = {
   next_step: string | null;
   wall: CockpitWallTile[];
   watches: CockpitWatch[];
+  monitor?: CockpitMonitorRow[];
   doing: Array<{ text: string; tone: string }>;
   decided: Array<{ id: string; at: string; text: string; tone: string }>;
   scan_interval_seconds: number;

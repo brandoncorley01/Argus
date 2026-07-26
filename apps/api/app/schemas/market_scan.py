@@ -156,6 +156,7 @@ class CockpitSnapshotRead(BaseModel):
     next_step: str | None = None
     wall: list[dict[str, Any]]
     watches: list[dict[str, Any]]
+    monitor: list[dict[str, Any]] = []
     doing: list[dict[str, Any]]
     decided: list[dict[str, Any]]
     scan_interval_seconds: int

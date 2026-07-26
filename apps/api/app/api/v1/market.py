@@ -395,6 +395,7 @@ def scan_cockpit(
                 ),
                 "wall": [],
                 "watches": [],
+                "monitor": [],
                 "doing": [
                     {
                         "text": f"Cockpit could not load: {str(exc)[:160]}",

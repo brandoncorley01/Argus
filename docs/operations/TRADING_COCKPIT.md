@@ -1,6 +1,6 @@
 # Live Trading Cockpit
 
-Build id: `trading-cockpit-v1.6`.
+Build id: `trading-cockpit-v1.7`.
 
 Home is a live **Trading Cockpit** with heartbeat dials driven by verified scan,
 price, and paper-account updates. Motion reflects real poll ages and mark
@@ -11,14 +11,17 @@ changes — Argus does not invent heartbeats, prices, or P&L.
 Founder-facing timestamps use **US Eastern** (`America/New_York`, EST/EDT) with
 a fixed zone so server HTML matches the browser.
 
-## Desk layout (v1.6)
+## Desk layout (v1.7)
 
 - **Live desk** — status chips + dials (pulse, prices, next scan, watching, open, P&L)
+- **Live monitor** — per-market board with ticking feed age / last-seen (replaces the
+  frozen “Now” essay that stuck on “monitoring N”)
 - **Update prices** (feed) vs **Re-score now** (brain) are separate action cards
 - Practice mode toggle: **You approve** / **Auto enter**
 - Market wall tiles show a freshness dot; focus panel uses check glyphs and plan meters
-- Home keepalive: if the 1m/5m feed is ≥90s old, the open Home page pulls prices
-  and may re-score (worker still owns the primary cadence)
+- Home keepalive every ~20s: if the 1m/5m feed is ≥60s old or a scan is due, Home
+  pulls prices and re-scores (worker still owns the primary cadence)
+- Watch window is **8 minutes** on short-TF setups so watches do not pile up
 
 ## Short-timeframe scanning
 
@@ -30,7 +33,7 @@ Argus evaluates opportunities on **1m and 5m** charts (not 15m-first):
   again immediately before a scan if short-TF bars are older than ~90 seconds)
 - Feed age uses **1m/5m closes only** (a fresh 15m bar cannot hide a stale short book)
 - Bars older than **5 minutes** are stale for short-TF practice
-- Watch window is **20 minutes**
+- Watch window is **8 minutes**
 
 If the feed looks old, press **Update prices**, confirm the worker is up
 (`status-argus` / worker.log), and leave Home open so keepalive can catch up.
@@ -62,4 +65,8 @@ Live trading remains locked. No fabricated activity.
 ## Crash recovery
 
 - Cockpit returns degraded empty snapshots instead of blanking Home
-- `migrate-up.ps1` verifies/repairs `paper_training_settings` via API venv Python
+- `migrate-up.ps1` waits for PostgreSQL, retries alembic, then verifies/repairs
+  `paper_training_settings` via API venv Python
+- If Start fails on a SQLAlchemy connection traceback: open **Docker Desktop**,
+  confirm `docker compose ps` shows postgres healthy, check `.env` passwords,
+  then Start Argus again

@@ -1699,6 +1699,71 @@ button.action-card:disabled { opacity: 0.55; cursor: not-allowed; }
 .plan-compact { margin-top: 0.25rem; }
 .wall-tile header { align-items: center; }
 
+.live-monitor-panel { border: 2px solid var(--accent); }
+.live-monitor-strip { margin-bottom: 0.65rem; }
+.live-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.55rem;
+}
+.live-monitor-row {
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.55rem 0.65rem;
+  background: var(--paper-elevated);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.35s, transform 0.2s;
+}
+.live-monitor-row:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.live-monitor-row.is-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.live-monitor-row.is-focus,
+.live-monitor-row.phase-focus {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  animation: monitor-focus 1.4s ease-in-out infinite;
+}
+.live-monitor-row.phase-watch { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.live-monitor-row.phase-open { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.live-monitor-row.phase-stale { opacity: 0.78; }
+.live-monitor-row header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.2rem;
+}
+.live-monitor-status {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.live-monitor-price {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.2rem;
+}
+.live-monitor-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+@keyframes monitor-focus {
+  0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+  50% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .status-light.warn { animation: none; }
   .cockpit-gauge-fill { transition: none; }
@@ -1708,6 +1773,9 @@ button.action-card:disabled { opacity: 0.55; cursor: not-allowed; }
   .fresh-dot.is-fresh { animation: none; }
   .live-flash { animation: none; }
   button.action-card:hover:not(:disabled) { transform: none; }
+  .live-monitor-row.is-focus,
+  .live-monitor-row.phase-focus { animation: none; }
+  .live-monitor-row:hover { transform: none; }
 }
 
 @media (max-width: 900px) {

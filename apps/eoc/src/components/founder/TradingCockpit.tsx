@@ -17,8 +17,9 @@ import type {
 import { money, moneyPnl } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
 
-const COCKPIT_POLL_MS = 5_000;
+const COCKPIT_POLL_MS = 3_000;
 const PULSE_POLL_MS = 5_000;
+const KEEP_ALIVE_MS = 20_000;
 
 function fmtCountdown(totalSec: number | null | undefined): string {
   if (totalSec == null || !Number.isFinite(totalSec)) return "—";
@@ -422,18 +423,18 @@ export function TradingCockpit({
       const scanDue =
         cockpit?.next_scan_at != null &&
         Date.parse(cockpit.next_scan_at) <= Date.now();
-      if ((age == null || age < 90) && !scanDue) return;
+      if ((age == null || age < 60) && !scanDue) return;
       busy = true;
       try {
-        if (age == null || age >= 90) {
+        if (age == null || age >= 60) {
           const r = await refreshRecentPricesAction();
           if (!cancelled && r.ok) {
             setKeepAliveNote("Prices updated");
             setLastBeatAt(new Date().toISOString());
           }
         }
-        if (scanDue || age == null || age >= 90) {
-          const s = await runMarketScanAction(age != null && age >= 180);
+        if (scanDue || age == null || age >= 60) {
+          const s = await runMarketScanAction(age != null && age >= 120);
           if (!cancelled && s.ok) setKeepAliveNote("Markets re-scored");
         }
       } finally {
@@ -443,8 +444,8 @@ export function TradingCockpit({
         }
       }
     };
-    const boot = window.setTimeout(() => void keepAlive(), 2500);
-    const id = window.setInterval(() => void keepAlive(), 60_000);
+    const boot = window.setTimeout(() => void keepAlive(), 1500);
+    const id = window.setInterval(() => void keepAlive(), KEEP_ALIVE_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(boot);
@@ -1062,33 +1063,112 @@ export function TradingCockpit({
         </div>
       </section>
 
-      <div className="grid grid-2 activity-dual">
-        <section className="panel rise" aria-label="Now">
-          <h2 style={{ marginTop: 0 }}>Now</h2>
-          <ul className="doing-list">
-            {cockpit.doing.map((d, i) => (
-              <li key={`${d.text}-${i}`} className={`tone-${d.tone}`}>
-                {d.text}
-              </li>
-            ))}
-          </ul>
-        </section>
-        <section className="panel rise" aria-label="Decided">
+      <section className="panel rise live-monitor-panel" aria-label="Live monitor">
+        <div className="cockpit-head">
+          <h2 style={{ marginTop: 0 }}>Live monitor</h2>
+          <span className={`status-light ${feedOk ? "ok" : "warn"}`}>
+            {cockpit.scanner_state === "Scanning"
+              ? `Checking ${cockpit.current_market ?? "…"}`
+              : nextScanSec != null
+                ? `Next pass ${fmtCountdown(nextScanSec)}`
+                : cockpit.scanner_state}
+          </span>
+        </div>
+        <div className="status-chip-row live-monitor-strip">
+          {cockpit.doing.map((d, i) => (
+            <span key={`${d.text}-${i}`} className={`status-chip tone-${d.tone === "info" ? "neutral" : d.tone}`}>
+              <i aria-hidden />
+              {d.text}
+            </span>
+          ))}
+          <span className="status-chip tone-neutral">
+            Beat {beatCount || 1}
+          </span>
+        </div>
+        <div className="live-monitor-grid" role="list">
+          {(cockpit.monitor?.length ? cockpit.monitor : cockpit.wall.map((t) => ({
+            symbol: t.symbol,
+            status: t.status,
+            phase: t.stale ? "stale" : "idle",
+            price: t.current_price,
+            pct_change: t.pct_change,
+            outlook: t.outlook,
+            signal_strength: t.signal_strength,
+            timeframe: t.timeframe,
+            stale: t.stale,
+            market_data_at: t.market_data_at,
+            age_seconds: ageSeconds(t.market_data_at, now),
+            last_analyzed_at: t.last_analyzed_at,
+            analyzed_age_seconds: ageSeconds(t.last_analyzed_at, now),
+            focus: t.symbol === cockpit.current_market,
+          }))).map((row) => {
+            const age =
+              now == null
+                ? row.age_seconds
+                : ageSeconds(row.market_data_at, now);
+            const checked =
+              now == null
+                ? row.analyzed_age_seconds
+                : ageSeconds(row.last_analyzed_at, now);
+            return (
+              <button
+                type="button"
+                key={row.symbol}
+                role="listitem"
+                className={`live-monitor-row phase-${row.phase}${row.focus ? " is-focus" : ""}${selected === row.symbol ? " is-selected" : ""}`}
+                onClick={() => setSelected(row.symbol)}
+              >
+                <header>
+                  <strong>{row.symbol}</strong>
+                  <span className={`fresh-dot ${row.stale ? "is-stale" : "is-fresh"}`} />
+                  <span className="live-monitor-status">{row.status}</span>
+                </header>
+                <div className="live-monitor-price">
+                  {row.price != null ? money(String(row.price)) : "—"}
+                  {row.pct_change != null ? (
+                    <span className={row.pct_change >= 0 ? "pnl-pos" : "pnl-neg"}>
+                      {row.pct_change >= 0 ? "+" : ""}
+                      {row.pct_change.toFixed(2)}%
+                    </span>
+                  ) : null}
+                </div>
+                <div className="live-monitor-meta">
+                  <span>{row.timeframe ?? "—"}</span>
+                  <span className="countdown">
+                    {age == null ? "—" : age < 120 ? `${age}s` : `${Math.floor(age / 60)}m`}
+                  </span>
+                  <span>
+                    {checked == null
+                      ? "unchecked"
+                      : checked < 120
+                        ? `seen ${checked}s`
+                        : `seen ${Math.floor(checked / 60)}m`}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="panel rise" aria-label="Decided">
+        <div className="cockpit-head">
           <h2 style={{ marginTop: 0 }}>Decided</h2>
-          <ul className="decided-list">
-            {cockpit.decided.length === 0 ? (
-              <li className="muted-note">None yet</li>
-            ) : (
-              cockpit.decided.slice(0, 8).map((d) => (
-                <li key={d.id} className={`tone-${d.tone}`}>
-                  <time dateTime={d.at}>{formatTimestamp(d.at)}</time>
-                  <span>{d.text}</span>
-                </li>
-              ))
-            )}
-          </ul>
-        </section>
-      </div>
+          <span className="muted-note">Latest verified calls</span>
+        </div>
+        <ul className="decided-list">
+          {cockpit.decided.length === 0 ? (
+            <li className="muted-note">None yet</li>
+          ) : (
+            cockpit.decided.slice(0, 8).map((d) => (
+              <li key={d.id} className={`tone-${d.tone}`}>
+                <time dateTime={d.at}>{formatTimestamp(d.at)}</time>
+                <span>{d.text}</span>
+              </li>
+            ))
+          )}
+        </ul>
+      </section>
 
       <details className="panel rise tech-panel">
         <summary>System detail</summary>
