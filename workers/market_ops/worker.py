@@ -120,18 +120,27 @@ async def startup(ctx: dict[str, Any]) -> None:
     instance_key = os.environ.get(
         "ARGUS_WORKER_INSTANCE_KEY", f"{socket.gethostname()}:market-ops:{os.getpid()}"
     )
+    ctx["instance_key"] = instance_key
+    ctx["instance_id"] = None
     factory = get_session_factory(settings)
     session = factory()
     try:
         service = HealthSupervisorService(session, settings)
-        instance = service.register_instance(
-            worker_key="market_ops_worker",
-            instance_key=instance_key,
-            hostname=socket.gethostname(),
-            metadata={"role": "arq_market_ops"},
-        )
-        ctx["instance_id"] = instance.id
-        ctx["instance_key"] = instance_key
+        try:
+            instance = service.register_instance(
+                worker_key="market_ops_worker",
+                instance_key=instance_key,
+                hostname=socket.gethostname(),
+                metadata={"role": "arq_market_ops"},
+            )
+            ctx["instance_id"] = instance.id
+        except Exception as exc:  # noqa: BLE001 — scans must still run if registry lags
+            # Missing worker identity must not freeze Live Monitor scan cycles.
+            print(
+                f"market_ops: health registration skipped ({exc}); "
+                "continuing scan/price crons",
+                flush=True,
+            )
     finally:
         session.close()
 
