@@ -691,16 +691,19 @@ class PaperTrainingService:
                     from app.models import IncidentSeverity
                     from app.services.incident_service import IncidentService
 
-                    IncidentService(self.db).open_system_incident(
-                        title=f"Paper auto-exit failed for {pos.symbol}",
-                        description=(
-                            f"Automated {reason} exit could not submit. "
-                            f"{getattr(exc, 'message', str(exc))[:240]}"
-                        ),
-                        severity=IncidentSeverity.HIGH,
-                        correlation_key=f"paper-auto-exit:{portfolio_id}:{pos.symbol}",
-                        commit=False,
-                    )
+                    with self.db.begin_nested():
+                        IncidentService(self.db).open_system_incident(
+                            title=f"Paper auto-exit failed for {pos.symbol}",
+                            description=(
+                                f"Automated {reason} exit could not submit. "
+                                f"{getattr(exc, 'message', str(exc))[:240]}"
+                            ),
+                            severity=IncidentSeverity.HIGH,
+                            correlation_key=(
+                                f"paper-auto-exit:{portfolio_id}:{pos.symbol}"
+                            ),
+                            commit=False,
+                        )
                 except Exception:  # noqa: BLE001
                     pass
                 continue
