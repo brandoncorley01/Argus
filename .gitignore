@@ -62,6 +62,13 @@ rc1_*.txt
 rc_*.txt
 p15_*.txt
 rc_pg_check.py
+h4_*.txt
+sprint2_*.txt
+sprint3_*.txt
+_pytest_*.txt
+separation_pre.txt
+SPRINT2_WIP_INVENTORY.txt
+ARGUS_SPRINT2_WIP_INVENTORY.md
 
 # Test artifacts
 .tox/

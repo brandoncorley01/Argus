@@ -223,7 +223,9 @@ class MarketPriceRefreshService:
                 "Check network access to api.exchange.coinbase.com, then try again.",
             )
 
-        # Chunk ingest to keep payloads reasonable
+        # Chunk ingest to keep payloads reasonable. Include a run id so concurrent
+        # UI refresh + scan refresh in the same minute do not collide on keys.
+        refresh_id = uuid.uuid4().hex[:12]
         chunk_size = 200
         for i in range(0, len(bars), chunk_size):
             chunk = bars[i : i + chunk_size]
@@ -237,13 +239,25 @@ class MarketPriceRefreshService:
                 result = self.market.ingest_batch(
                     body=body,
                     actor=principal,
-                    idempotency_key=f"price-refresh:{bucket}:{i}",
+                    idempotency_key=f"price-refresh:{bucket}:{refresh_id}:{i}",
                     request_id=None,
                 )
                 accepted += int(result.get("records_accepted") or 0)
             except MarketIntelligenceError as exc:
                 failed.append(
                     {"symbol": "*", "code": exc.code, "message": exc.message}
+                )
+            except Exception as exc:  # noqa: BLE001 — keep refresh resilient
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                failed.append(
+                    {
+                        "symbol": "*",
+                        "code": "ingest_error",
+                        "message": str(exc)[:240],
+                    }
                 )
 
         self.audit.append(

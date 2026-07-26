@@ -630,7 +630,14 @@ class PaperTradingService:
         client_order_id: str | None = None,
     ) -> PaperOrder:
         portfolio = self.get_portfolio(portfolio_id)
-        key = idempotency_key or str(uuid.uuid4())
+        # Prefer caller-supplied keys (training uses deterministic train-enter:/exit:).
+        # When client_order_id is present, derive a stable key; otherwise allocate once.
+        if idempotency_key:
+            key = idempotency_key
+        elif client_order_id:
+            key = f"paper:{portfolio_id}:{client_order_id}"
+        else:
+            key = str(uuid.uuid4())
         existing = self.db.scalar(
             select(PaperOrder).where(PaperOrder.idempotency_key == key)
         )

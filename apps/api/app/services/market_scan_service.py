@@ -906,8 +906,17 @@ class MarketScanService:
             )
         except MarketPriceRefreshError:
             # Scan continues with whatever verified bars already exist.
+            try:
+                self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             return
         except Exception:  # noqa: BLE001 — never block scanning on refresh failure
+            # Unique races can poison the session; clear before the cycle continues.
+            try:
+                self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             return
 
     def _load_bar_rows(

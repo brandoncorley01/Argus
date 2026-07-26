@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.market_intelligence import (
@@ -268,51 +269,56 @@ class MarketIntelligenceService:
 
         for bar in body.bars:
             attempted += 1
-            try:
-                result = self._ingest_bar(provider, bar)
-                if result == "duplicate":
-                    duplicate += 1
-                else:
-                    accepted += 1
-            except Exception as exc:  # noqa: BLE001
+            outcome = self._ingest_one(
+                lambda b=bar: self._ingest_bar(provider, b), "bar"
+            )
+            if outcome == "accepted":
+                accepted += 1
+            elif outcome == "duplicate":
+                duplicate += 1
+            else:
                 rejected += 1
-                errors.append(f"bar:{exc}")
+                errors.append(outcome)
 
         for news_item in body.news:
             attempted += 1
-            try:
-                result = self._ingest_news(provider, news_item)
-                if result == "duplicate":
-                    duplicate += 1
-                else:
-                    accepted += 1
-            except Exception as exc:  # noqa: BLE001
+            outcome = self._ingest_one(
+                lambda item=news_item: self._ingest_news(provider, item), "news"
+            )
+            if outcome == "accepted":
+                accepted += 1
+            elif outcome == "duplicate":
+                duplicate += 1
+            else:
                 rejected += 1
-                errors.append(f"news:{exc}")
+                errors.append(outcome)
 
         for econ_item in body.economic_events:
             attempted += 1
-            try:
-                result = self._ingest_economic(provider, econ_item)
-                if result == "duplicate":
-                    duplicate += 1
-                else:
-                    accepted += 1
-            except Exception as exc:  # noqa: BLE001
+            outcome = self._ingest_one(
+                lambda item=econ_item: self._ingest_economic(provider, item), "econ"
+            )
+            if outcome == "accepted":
+                accepted += 1
+            elif outcome == "duplicate":
+                duplicate += 1
+            else:
                 rejected += 1
-                errors.append(f"econ:{exc}")
+                errors.append(outcome)
 
         for research_item in body.research:
             attempted += 1
-            try:
-                result = self._ingest_research(provider, research_item)
-                if result == "duplicate":
-                    duplicate += 1
-                else:
-                    accepted += 1
-            except Exception as exc:  # noqa: BLE001
+            outcome = self._ingest_one(
+                lambda item=research_item: self._ingest_research(provider, item),
+                "research",
+            )
+            if outcome == "accepted":
+                accepted += 1
+            elif outcome == "duplicate":
+                duplicate += 1
+            else:
                 rejected += 1
-                errors.append(f"research:{exc}")
+                errors.append(outcome)
 
         if rejected and accepted:
             status = IngestionRunStatus.PARTIAL.value
@@ -331,19 +337,25 @@ class MarketIntelligenceService:
         run.detail = {"channel": body.channel}
 
         if idempotency_key:
-            self.db.add(
-                MarketIngestionIdempotency(
-                    idempotency_key=idempotency_key,
-                    run_id=run.id,
-                    response_digest=_digest(
-                        {
-                            "run_id": str(run.id),
-                            "status": status,
-                            "accepted": accepted,
-                        }
-                    ),
-                )
-            )
+            try:
+                with self.db.begin_nested():
+                    self.db.add(
+                        MarketIngestionIdempotency(
+                            idempotency_key=idempotency_key,
+                            run_id=run.id,
+                            response_digest=_digest(
+                                {
+                                    "run_id": str(run.id),
+                                    "status": status,
+                                    "accepted": accepted,
+                                }
+                            ),
+                        )
+                    )
+                    self.db.flush()
+            except IntegrityError:
+                # Concurrent refresh/scan claimed this key; keep this run's results.
+                pass
 
         self._record_quality_after_ingest(provider, body.channel)
         self.audit.append(
@@ -372,6 +384,18 @@ class MarketIntelligenceService:
             "idempotent_replay": False,
             "error_summary": run.error_summary,
         }
+
+    def _ingest_one(self, ingest_fn: Any, label: str) -> str:
+        """Run one record ingest under a savepoint so unique races never poison the session."""
+        try:
+            with self.db.begin_nested():
+                result = ingest_fn()
+            return "duplicate" if result == "duplicate" else "accepted"
+        except IntegrityError:
+            # Concurrent insert of the same observation/bar — treat as duplicate.
+            return "duplicate"
+        except Exception as exc:  # noqa: BLE001
+            return f"{label}:{exc}"
 
     def _ingest_bar(self, provider: MarketProvider, bar: Any) -> str:
         instrument = self.ensure_instrument(symbol=bar.symbol)

@@ -30,9 +30,22 @@ from app.services.plain_language import confidence_from_score, plain_rejection
 
 STRATEGY_KEY = "sma_crossover"
 STRATEGY_VERSION = "sma_crossover@1"
+CONFIDENCE_SCORING_VERSION = "confidence@2"
 CERT_REQUIRED_DAYS = 10
 CERT_MAX_DRAWDOWN = Decimal("500")  # paper dollars observational threshold
 SIMULATED_COST_BPS = Decimal("10")  # 10 bps each way observational haircut
+
+# Founder-facing watchlist stage labels (display mapping over scan stages).
+STAGE_MAP = {
+    "Discovered": "Scanning",
+    "Evaluating": "Watching",
+    "Watching": "Building Confidence",
+    "Risk Review": "Ready To Trade",
+    "Entered": "Trade Executed",
+    "Teaching": "Managing Position",
+    "Rejected": "Lessons Learned",
+    "Expired": "Lessons Learned",
+}
 
 
 class TradingIntelligenceService:
@@ -87,25 +100,69 @@ class TradingIntelligenceService:
         risk_status: str,
         regime: str,
         stale: bool,
-    ) -> tuple[Decimal, str]:
-        """Numeric confidence 0-100 from verified inputs only (observational)."""
+        momentum: float | None = None,
+        volume_ok: bool | None = None,
+        risk_reward: float | None = None,
+        duplicate_penalty: bool = False,
+    ) -> tuple[Decimal, str, dict[str, Any]]:
+        """Numeric confidence 0-100 from verified inputs only (observational).
+
+        Returns (score, label, contributing_factors). Never fabricates missing inputs.
+        """
+        factors: dict[str, Any] = {
+            "scoring_version": CONFIDENCE_SCORING_VERSION,
+            "trend": bias,
+            "base_signal_score": round(float(score), 2),
+            "market_regime": regime,
+            "risk_status": risk_status,
+            "stale_data": stale,
+            "momentum": momentum,
+            "volume_ok": volume_ok,
+            "risk_reward": risk_reward,
+            "duplicate_signal_penalty": duplicate_penalty,
+            "adjustments": [],
+        }
         base = max(0.0, min(100.0, float(score)))
         if bias != "Bullish":
             base *= 0.35
+            factors["adjustments"].append("non_bullish_bias_penalty")
         if risk_status != "clear":
             base *= 0.5
+            factors["adjustments"].append("risk_not_clear")
         if stale:
             base *= 0.4
+            factors["adjustments"].append("stale_data_penalty")
+        if duplicate_penalty:
+            base *= 0.7
+            factors["adjustments"].append("duplicate_signal_penalty")
+        if momentum is not None and momentum < 0 and bias == "Bullish":
+            base *= 0.8
+            factors["adjustments"].append("momentum_conflict")
+        if volume_ok is False:
+            base *= 0.85
+            factors["adjustments"].append("volume_unconfirmed")
+        if risk_reward is not None:
+            if risk_reward >= 2.0:
+                base = min(100.0, base + 5)
+                factors["adjustments"].append("favorable_risk_reward")
+            elif risk_reward < 1.0:
+                base *= 0.75
+                factors["adjustments"].append("poor_risk_reward")
         if regime == "trend_up":
             base = min(100.0, base + 8)
+            factors["adjustments"].append("regime_trend_up_boost")
         elif regime == "volatile":
             base *= 0.85
+            factors["adjustments"].append("regime_volatile_penalty")
         elif regime == "trend_down":
             base *= 0.55
+            factors["adjustments"].append("regime_trend_down_penalty")
         elif regime == "insufficient_data":
             base *= 0.5
+            factors["adjustments"].append("insufficient_data_penalty")
         conf = Decimal(str(round(base, 2)))
-        return conf, confidence_from_score(float(conf))
+        factors["final_score"] = float(conf)
+        return conf, confidence_from_score(float(conf)), factors
 
     def build_explanation(
         self,
@@ -138,12 +195,19 @@ class TradingIntelligenceService:
         stale: bool = False,
     ) -> TradeDecisionSnapshot:
         regime = self.infer_market_regime(cand.symbol)
-        conf, label = self.score_confidence(
+        rr = None
+        if cand.entry_zone and cand.stop_loss and cand.take_profit:
+            risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
+            reward = abs(float(cand.take_profit) - float(cand.entry_zone))
+            if risk > 0:
+                rr = reward / risk
+        conf, label, factors = self.score_confidence(
             score=float(cand.score or 0),
             bias=cand.bias or "Neutral",
             risk_status=cand.risk_status or "blocked",
             regime=regime,
             stale=stale,
+            risk_reward=rr,
         )
         explanation = self.build_explanation(
             symbol=cand.symbol,
@@ -169,6 +233,9 @@ class TradingIntelligenceService:
                 "bias": cand.bias,
                 "risk_status": cand.risk_status,
                 "stage": cand.stage,
+                "founder_stage": STAGE_MAP.get(cand.stage or "", cand.stage),
+                "contributing_factors": factors,
+                "scoring_version": CONFIDENCE_SCORING_VERSION,
                 "observational_only": True,
             },
         )
@@ -228,13 +295,14 @@ class TradingIntelligenceService:
         if entry_fill is not None:
             holding = max(0, int((closed_at - entry_fill.filled_at).total_seconds()))
 
-        # Approximate adverse excursion vs entry using recent lows (verified bars).
+        # Approximate adverse / favorable excursion vs entry using verified bars.
         drawdown: Decimal | None = None
+        mfe: Decimal | None = None
         instrument_id = self._instrument_id(symbol)
         if entry_price is not None and entry_fill is not None and instrument_id is not None:
-            lows = list(
+            bars = list(
                 self.db.scalars(
-                    select(MarketOhlcvBar.low)
+                    select(MarketOhlcvBar)
                     .where(
                         MarketOhlcvBar.instrument_id == instrument_id,
                         MarketOhlcvBar.close_time >= entry_fill.filled_at,
@@ -243,9 +311,11 @@ class TradingIntelligenceService:
                     .order_by(MarketOhlcvBar.close_time.asc())
                 )
             )
-            if lows:
-                min_low = min(Decimal(str(v)) for v in lows)
+            if bars:
+                min_low = min(Decimal(str(b.low)) for b in bars)
+                max_high = max(Decimal(str(b.high)) for b in bars)
                 drawdown = max(Decimal("0"), (entry_price - min_low) * qty)
+                mfe = max(Decimal("0"), (max_high - entry_price) * qty)
 
         cost_haircut = abs(exit_price * qty) * SIMULATED_COST_BPS / Decimal("10000") * 2
         adj = realized - cost_haircut
@@ -281,6 +351,11 @@ class TradingIntelligenceService:
                 "mark": str(mark),
                 "simulated_cost_haircut": str(cost_haircut),
                 "expectancy_adjusted_pnl": str(adj),
+                "max_favorable_excursion": str(mfe) if mfe is not None else None,
+                "would_take_again": bool(good),
+                "decision_quality": (
+                    "acceptable" if good else "review_required"
+                ),
                 "observational_only": True,
             },
             closed_at=closed_at,
@@ -312,7 +387,7 @@ class TradingIntelligenceService:
         if existing is not None:
             return existing
         regime = self.infer_market_regime(cand.symbol)
-        conf, _ = self.score_confidence(
+        conf, _, _ = self.score_confidence(
             score=float(cand.score or 0),
             bias=cand.bias or "Neutral",
             risk_status=cand.risk_status or "blocked",
@@ -568,7 +643,7 @@ class TradingIntelligenceService:
         }
 
     def founder_briefing(self) -> dict[str, Any]:
-        """Max five short bullets for the Founder Executive Briefing."""
+        """Executive Briefing payload for the Founder Home (PROVE mode)."""
         since = datetime.now(UTC) - timedelta(days=1)
         reviews_today = list(
             self.db.scalars(
@@ -600,6 +675,9 @@ class TradingIntelligenceService:
         cert = self.certification_progress()
         days = cert["trading_days_counted"]
         need = cert["required_trading_days"]
+        watch = self.watchlist_intelligence()
+        mission = self.morning_mission()
+        thinking = self.thinking_observations(limit=5)
 
         bullets = [
             f"Average confidence: {avg_conf:.1f}" if avg_conf is not None else "Average confidence: —",
@@ -616,9 +694,415 @@ class TradingIntelligenceService:
                 else "Recommendation: certification criteria met for review (live still locked)"
             ),
         ]
+        action_required = mission.get("founder_action_required") or (
+            "None — continue observing paper standards."
+            if watch.get("recommendation") == "WAIT"
+            else f"Review highest-priority opportunity ({watch.get('highest_confidence_opportunity', {}).get('symbol', '—')})."
+        )
         return {
             "bullets": bullets[:5],
+            "institution_status": mission.get("institution_status"),
+            "trading_mission": mission,
+            "trading_intelligence_summary": bullets[:5],
+            "highest_priority_opportunity": watch.get("highest_confidence_opportunity"),
+            "certification_progress": cert,
+            "founder_action_required": action_required,
+            "watchlist_intelligence": watch,
+            "thinking": thinking,
             "trades_reviewed_today": len(reviews_today),
+            "live_trading_locked": True,
+            "mode": "PROVE",
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+
+    def watchlist_intelligence(self) -> dict[str, Any]:
+        """Aggregate Founder watchlist intelligence from scan candidates (no fabrication)."""
+        from app.models.market_scan import MarketScanCandidate
+
+        cands = list(
+            self.db.scalars(
+                select(MarketScanCandidate).order_by(desc(MarketScanCandidate.evaluated_at)).limit(200)
+            )
+        )
+        counts = {
+            "scanning": 0,
+            "watching": 0,
+            "building_confidence": 0,
+            "ready": 0,
+            "executed": 0,
+            "removed": 0,
+            "avoided": 0,
+        }
+        ready_rows: list[MarketScanCandidate] = []
+        for c in cands:
+            stage = c.stage or ""
+            if stage == "Discovered":
+                counts["scanning"] += 1
+            elif stage == "Evaluating":
+                counts["watching"] += 1
+            elif stage == "Watching":
+                counts["building_confidence"] += 1
+            elif stage == "Risk Review":
+                counts["ready"] += 1
+                ready_rows.append(c)
+            elif stage == "Entered":
+                counts["executed"] += 1
+            elif stage == "Expired":
+                counts["removed"] += 1
+            elif stage == "Rejected":
+                counts["avoided"] += 1
+
+        top = None
+        if ready_rows or cands:
+            pool = ready_rows or [c for c in cands if c.stage in {"Watching", "Risk Review"}]
+            if pool:
+                best = max(pool, key=lambda x: float(x.score or 0))
+                regime = self.infer_market_regime(best.symbol)
+                conf, label, factors = self.score_confidence(
+                    score=float(best.score or 0),
+                    bias=best.bias or "Neutral",
+                    risk_status=best.risk_status or "blocked",
+                    regime=regime,
+                    stale=False,
+                )
+                top = {
+                    "symbol": best.symbol,
+                    "stage": STAGE_MAP.get(best.stage, best.stage),
+                    "stage_raw": best.stage,
+                    "confidence": float(conf),
+                    "confidence_label": label,
+                    "bias": best.bias,
+                    "recommendation": self._recommendation_for_candidate(best, conf),
+                    "contributing_factors": factors,
+                    "candidate_id": str(best.id),
+                }
+
+        recommendation = "WAIT"
+        if top and top["recommendation"] == "EXECUTE":
+            recommendation = "EXECUTE"
+        elif counts["avoided"] > counts["ready"] and counts["ready"] == 0:
+            recommendation = "AVOID" if counts["building_confidence"] == 0 else "WAIT"
+
+        waiting = []
+        if counts["building_confidence"]:
+            waiting.append("Volume/momentum confirmation on watched markets")
+        if counts["ready"] == 0:
+            waiting.append("No markets currently meet Ready To Trade standards")
+        if not waiting:
+            waiting.append("Institutional standards currently filter all discretionary entries")
+
+        top_five = []
+        ranked = sorted(
+            [c for c in cands if c.stage in {"Watching", "Risk Review", "Evaluating"}],
+            key=lambda x: float(x.score or 0),
+            reverse=True,
+        )[:5]
+        for c in ranked:
+            regime = self.infer_market_regime(c.symbol)
+            conf, label, _ = self.score_confidence(
+                score=float(c.score or 0),
+                bias=c.bias or "Neutral",
+                risk_status=c.risk_status or "blocked",
+                regime=regime,
+                stale=False,
+            )
+            top_five.append(
+                {
+                    "symbol": c.symbol,
+                    "stage": STAGE_MAP.get(c.stage, c.stage),
+                    "confidence": float(conf),
+                    "confidence_label": label,
+                    "recommendation": self._recommendation_for_candidate(c, conf),
+                    "candidate_id": str(c.id),
+                }
+            )
+
+        return {
+            "markets_scanning": counts["scanning"],
+            "markets_watching": counts["watching"] + counts["building_confidence"],
+            "markets_removed": counts["removed"],
+            "markets_avoided": counts["avoided"],
+            "markets_ready": counts["ready"],
+            "highest_confidence_opportunity": top,
+            "confidence_trend": "stable",
+            "waiting_conditions": waiting,
+            "current_recommendation": recommendation,
+            "top_opportunities": top_five,
+            "note": "Watchlist is observational. Live trading remains locked.",
+        }
+
+    def _recommendation_for_candidate(
+        self, cand: MarketScanCandidate, conf: Decimal
+    ) -> str:
+        if cand.bias != "Bullish":
+            return "AVOID"
+        if cand.stage == "Risk Review" and conf >= 70 and cand.risk_status == "clear":
+            return "EXECUTE"
+        if cand.stage in {"Rejected", "Expired"}:
+            return "AVOID"
+        return "WAIT"
+
+    def case_file(self, candidate_id: uuid.UUID) -> dict[str, Any] | None:
+        """Permanent Case File view for a watched/executed opportunity."""
+        from app.models.market_scan import MarketScanCandidate, MarketScanEvent
+
+        cand = self.db.get(MarketScanCandidate, candidate_id)
+        if cand is None:
+            return None
+        regime = self.infer_market_regime(cand.symbol)
+        conf, label, factors = self.score_confidence(
+            score=float(cand.score or 0),
+            bias=cand.bias or "Neutral",
+            risk_status=cand.risk_status or "blocked",
+            regime=regime,
+            stale=False,
+        )
+        events = list(
+            self.db.scalars(
+                select(MarketScanEvent)
+                .where(MarketScanEvent.candidate_id == candidate_id)
+                .order_by(MarketScanEvent.occurred_at.asc())
+                .limit(50)
+            )
+        )
+        snaps = list(
+            self.db.scalars(
+                select(TradeDecisionSnapshot)
+                .where(TradeDecisionSnapshot.candidate_id == candidate_id)
+                .order_by(TradeDecisionSnapshot.created_at.asc())
+            )
+        )
+        timeline = []
+        for e in events:
+            timeline.append(
+                {
+                    "at": e.occurred_at.isoformat() if e.occurred_at else None,
+                    "event": e.title or e.component,
+                    "stage": STAGE_MAP.get(e.stage or "", e.stage),
+                    "detail": {"outcome": e.outcome, "note": e.detail or ""},
+                }
+            )
+        for s in snaps:
+            timeline.append(
+                {
+                    "at": s.created_at.isoformat() if s.created_at else None,
+                    "event": "Decision snapshot recorded",
+                    "stage": STAGE_MAP.get(
+                        (s.detail or {}).get("stage", ""), (s.detail or {}).get("stage")
+                    ),
+                    "detail": {
+                        "confidence": str(s.confidence_score),
+                        "explanation": s.explanation,
+                    },
+                }
+            )
+        timeline.sort(key=lambda x: x.get("at") or "")
+
+        watched_seconds = None
+        if cand.evaluated_at:
+            watched_seconds = max(
+                0, int((datetime.now(UTC) - cand.evaluated_at).total_seconds())
+            )
+
+        rr = None
+        if cand.entry_zone and cand.stop_loss and cand.take_profit:
+            risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
+            reward = abs(float(cand.take_profit) - float(cand.entry_zone))
+            if risk > 0:
+                rr = reward / risk
+
+        return {
+            "candidate_id": str(cand.id),
+            "symbol": cand.symbol,
+            "direction": "Long" if cand.bias == "Bullish" else cand.bias,
+            "current_confidence": float(conf),
+            "confidence_label": label,
+            "confidence_history": [
+                {
+                    "at": s.created_at.isoformat() if s.created_at else None,
+                    "confidence": float(s.confidence_score),
+                    "label": s.confidence_label,
+                }
+                for s in snaps
+            ],
+            "current_stage": STAGE_MAP.get(cand.stage, cand.stage),
+            "stage_raw": cand.stage,
+            "reasoning": self.build_explanation(
+                symbol=cand.symbol,
+                bias=cand.bias or "Neutral",
+                score=float(cand.score or 0),
+                regime=regime,
+                reason_code=cand.reason_code,
+                reason_text=cand.reason_text,
+                confidence_label=label,
+            ),
+            "waiting_conditions": [
+                plain_rejection(cand.reason_code, cand.reason_text)
+            ],
+            "risk_assessment": cand.risk_status,
+            "expected_risk_reward": rr,
+            "market_regime": regime,
+            "strategy": cand.strategy_key or STRATEGY_KEY,
+            "time_under_observation_seconds": watched_seconds,
+            "decision_timeline": timeline,
+            "recommendation": self._recommendation_for_candidate(cand, conf),
+            "contributing_factors": factors,
+            "observational_only": True,
+            "live_trading_locked": True,
+        }
+
+    def thinking_observations(self, *, limit: int = 8) -> list[dict[str, Any]]:
+        """Concise institutional observations from meaningful recent state only."""
+        watch = self.watchlist_intelligence()
+        obs: list[dict[str, Any]] = []
+        watching = int(watch.get("markets_watching") or 0)
+        ready = int(watch.get("markets_ready") or 0)
+        avoided = int(watch.get("markets_avoided") or 0)
+        if watching:
+            obs.append(
+                {
+                    "text": f"Watching {watching} market(s).",
+                    "kind": "watchlist",
+                }
+            )
+        top = watch.get("highest_confidence_opportunity")
+        if top and top.get("confidence", 0) >= 60:
+            obs.append(
+                {
+                    "text": (
+                        f"{top['symbol']} confidence {top['confidence']:.0f} "
+                        f"({top.get('confidence_label')}) — {top.get('recommendation')}."
+                    ),
+                    "kind": "confidence",
+                }
+            )
+        if avoided and ready == 0:
+            obs.append(
+                {
+                    "text": "Capital preservation currently outweighs opportunity.",
+                    "kind": "discipline",
+                }
+            )
+        if ready == 0 and watching == 0:
+            obs.append(
+                {
+                    "text": "No trades currently satisfy institutional standards.",
+                    "kind": "discipline",
+                }
+            )
+        elif watch.get("current_recommendation") == "WAIT":
+            obs.append(
+                {
+                    "text": "Patience: waiting conditions remain unmet for execution.",
+                    "kind": "wait",
+                }
+            )
+        return obs[:limit]
+
+    def morning_mission(self) -> dict[str, Any]:
+        """Daily Trading Mission for the Founder (paper / PROVE mode)."""
+        cert = self.certification_progress()
+        watch = self.watchlist_intelligence()
+        learning = self.learning_summary()
+        open_pos = self.db.scalar(
+            select(func.count()).select_from(PaperPosition).where(PaperPosition.quantity != 0)
+        ) or 0
+        regime = learning.get("strongest_conditions") or "insufficient_data"
+        top = watch.get("highest_confidence_opportunity")
+        action = "None — observe and preserve capital."
+        if cert.get("open_critical_incidents", 0) > 0:
+            action = "Resolve critical system issues before new paper entries."
+        elif watch.get("current_recommendation") == "EXECUTE" and top:
+            action = f"Review Ready opportunity on {top.get('symbol')} (paper only)."
+        elif open_pos:
+            action = "Manage open paper positions; do not force new entries."
+
+        return {
+            "institution_status": "Paper desk · PROVE mode · Live locked",
+            "market_outlook": (
+                f"Primary regime focus: {str(regime).replace('_', ' ')}"
+                if regime
+                else "Market outlook unavailable"
+            ),
+            "trading_objective": "Protect capital first; take only high-confidence paper setups.",
+            "risk_environment": (
+                "Elevated"
+                if cert.get("open_critical_incidents", 0) > 0
+                else ("Active open risk" if open_pos else "Contained")
+            ),
+            "maximum_planned_exposure": "Governed by paper risk limits and pause controls",
+            "current_market_regime": regime,
+            "primary_areas_of_focus": [
+                "Watchlist confirmation quality",
+                "Open position management",
+                f"Certification progress {cert.get('trading_days_counted')}/{cert.get('required_trading_days')}",
+            ],
+            "highest_priority_opportunities": watch.get("top_opportunities") or [],
+            "certification_progress": {
+                "days": cert.get("trading_days_counted"),
+                "required": cert.get("required_trading_days"),
+                "eligible_for_review": cert.get("eligible_for_live_certification_review"),
+                "live_enabled": False,
+            },
+            "founder_action_required": action,
+            "live_trading_locked": True,
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+
+    def mission_debrief(self, report_date: date | None = None) -> dict[str, Any]:
+        """End-of-day executive debrief (observational, paper only)."""
+        day = report_date or datetime.now(UTC).date()
+        intel = self.daily_report_intelligence(day)
+        day_start = datetime.combine(day, datetime.min.time(), tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+        reviews = list(
+            self.db.scalars(
+                select(PostTradeReview).where(
+                    PostTradeReview.closed_at >= day_start,
+                    PostTradeReview.closed_at < day_end,
+                )
+            )
+        )
+        pnls = [Decimal(str(r.realized_pnl)) for r in reviews]
+        wins = sum(1 for p in pnls if p > 0)
+        net = sum(pnls, Decimal("0"))
+        best = max(reviews, key=lambda r: Decimal(str(r.realized_pnl)), default=None)
+        worst = min(reviews, key=lambda r: Decimal(str(r.realized_pnl)), default=None)
+        cert = self.certification_progress()
+        success = (
+            "Hold"
+            if not reviews
+            else ("Success" if net >= 0 and cert.get("open_critical_incidents", 0) == 0 else "Review")
+        )
+        return {
+            "report_date": day.isoformat(),
+            "mission_success": success,
+            "trades_executed": len(reviews),
+            "win_rate": str(Decimal(wins) / Decimal(len(reviews))) if reviews else None,
+            "net_pnl": str(net),
+            "capital_preservation": "Maintained" if net >= 0 else "Drawdown observed",
+            "best_decision": (
+                f"{best.symbol} ({best.outcome})" if best else "No closed trades"
+            ),
+            "largest_mistake": (
+                f"{worst.symbol} ({worst.outcome})"
+                if worst and Decimal(str(worst.realized_pnl)) < 0
+                else "None recorded"
+            ),
+            "biggest_lesson": (
+                intel.get("market_regime_summary")
+                and f"Regime mix today: {intel.get('market_regime_summary')}"
+            )
+            or "Continue requiring confirmation before entries.",
+            "strongest_market": (intel.get("highest_confidence_trade") or {}).get("symbol"),
+            "weakest_market": (intel.get("lowest_confidence_trade") or {}).get("symbol"),
+            "recommendation": (
+                "Continue paper certification — live remains locked."
+                if not cert.get("eligible_for_live_certification_review")
+                else "Certification criteria met for Founder review only (live still locked)."
+            ),
+            "certification_progress": cert,
+            "live_trading_locked": True,
             "generated_at": datetime.now(UTC).isoformat(),
         }
 

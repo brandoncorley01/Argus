@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ActiveTrades, type PositionSummary } from "@/components/founder/ActiveTrades";
 import { CommandStatusBar } from "@/components/founder/CommandStatusBar";
 import { EndDayButton } from "@/components/founder/EndDayButton";
+import { ExecutiveBriefing } from "@/components/founder/ExecutiveBriefing";
 import { TradingCockpit } from "@/components/founder/TradingCockpit";
 import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
@@ -216,7 +217,18 @@ async function renderTodayPage() {
   const [cockpitInitial, intelligenceBrief] = await Promise.all([
     soft(() => apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit")),
     soft(() =>
-      apiFetch<{ bullets: string[] }>("/api/v1/operations/trading-intelligence/briefing"),
+      apiFetch<{
+        bullets: string[];
+        institution_status?: string;
+        founder_action_required?: string;
+        trading_mission?: Record<string, unknown>;
+        trading_intelligence_summary?: string[];
+        highest_priority_opportunity?: Record<string, unknown> | null;
+        certification_progress?: Record<string, unknown>;
+        watchlist_intelligence?: Record<string, unknown>;
+        thinking?: Array<{ text: string; kind?: string }>;
+        mode?: string;
+      }>("/api/v1/operations/trading-intelligence/briefing"),
     ),
   ]);
 
@@ -351,46 +363,49 @@ async function renderTodayPage() {
         buildId={ARGUS_UI_BUILD}
       />
 
-      <TradingCockpit
-        initial={cockpitInitial}
-        portfolioId={portfolio?.id ?? null}
-        trainingMode={trainingMode}
-        account={{
-          balance: summary?.total_account_value ?? null,
-          cash: summary?.buying_power ?? null,
-          inTrades: summary?.committed_capital ?? null,
-          openCount: summary?.open_position_count ?? 0,
-        }}
-        positionsOpen={summary?.open_position_count ?? 0}
-        totalPnl={closedTrades.length ? totalPnl : null}
+      <ExecutiveBriefing
+        briefing={intelligenceBrief as never}
+        todayPnl={closedTrades.length ? totalPnl : null}
+        openPositions={summary?.open_position_count ?? 0}
+        institutionStatus={picture.status}
       />
-
-      <section className="panel rise" aria-label="Trading Intelligence">
-        <h2 style={{ marginTop: 0 }}>Trading Intelligence</h2>
-        <ul className="ops-confidence-list">
-          {(intelligenceBrief?.bullets ?? []).length > 0 ? (
-            intelligenceBrief!.bullets.slice(0, 5).map((b) => <li key={b}>{b}</li>)
-          ) : (
-            <li className="muted-note">
-              Intelligence updates as paper trades complete. Live trading stays locked.
-            </li>
-          )}
-        </ul>
-      </section>
 
       {/* Open paper trades */}
       <section className="panel rise" aria-label="Open paper trades">
-        <h2 style={{ marginTop: 0 }}>Open paper trades</h2>
+        <h2 style={{ marginTop: 0 }}>Open positions</h2>
         <ActiveTrades
           positions={positions}
           portfolioId={portfolio?.id ?? null}
         />
       </section>
 
+      <details className="panel rise tech-details" aria-label="Trading desk tools">
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          Desk tools (cockpit / scanner)
+        </summary>
+        <p className="muted-note">
+          Optional operational detail. Normal Founder days stay on the Executive Briefing
+          above. Live trading remains locked.
+        </p>
+        <TradingCockpit
+          initial={cockpitInitial}
+          portfolioId={portfolio?.id ?? null}
+          trainingMode={trainingMode}
+          account={{
+            balance: summary?.total_account_value ?? null,
+            cash: summary?.buying_power ?? null,
+            inTrades: summary?.committed_capital ?? null,
+            openCount: summary?.open_position_count ?? 0,
+          }}
+          positionsOpen={summary?.open_position_count ?? 0}
+          totalPnl={closedTrades.length ? totalPnl : null}
+        />
+      </details>
+
       <section className="panel rise" aria-label="End of day">
         <h2 style={{ marginTop: 0 }}>End of day</h2>
         <p className="muted-note">
-          Save today&apos;s paper session summary. This does not unlock live trading.
+          Save today&apos;s paper mission debrief. This does not unlock live trading.
         </p>
         {portfolio ? <EndDayButton /> : null}
       </section>

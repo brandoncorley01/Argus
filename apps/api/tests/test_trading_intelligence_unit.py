@@ -5,15 +5,33 @@ from app.services.trading_intelligence_service import TradingIntelligenceService
 
 def test_score_confidence_refuses_bearish_as_strong() -> None:
     svc = TradingIntelligenceService(db=None)  # type: ignore[arg-type]
-    bull, bull_label = svc.score_confidence(
+    bull, bull_label, bull_factors = svc.score_confidence(
         score=90, bias="Bullish", risk_status="clear", regime="trend_up", stale=False
     )
-    bear, _ = svc.score_confidence(
+    bear, _, bear_factors = svc.score_confidence(
         score=90, bias="Bearish", risk_status="clear", regime="trend_up", stale=False
     )
     assert bull > bear
     assert bull_label in {"High", "Medium", "Low"}
     assert bear < 50
+    assert "scoring_version" in bull_factors
+    assert "non_bullish_bias_penalty" in bear_factors["adjustments"]
+
+
+def test_score_confidence_stale_and_rr_factors() -> None:
+    svc = TradingIntelligenceService(db=None)  # type: ignore[arg-type]
+    conf, _, factors = svc.score_confidence(
+        score=80,
+        bias="Bullish",
+        risk_status="clear",
+        regime="quiet",
+        stale=True,
+        risk_reward=2.5,
+        duplicate_penalty=True,
+    )
+    assert conf < 80
+    assert "stale_data_penalty" in factors["adjustments"]
+    assert "duplicate_signal_penalty" in factors["adjustments"]
 
 
 def test_build_explanation_includes_regime() -> None:
@@ -39,3 +57,11 @@ def test_deterministic_idempotency_key_shapes() -> None:
     key = f"exit:{portfolio}:BTC-USD:stop_loss:none"
     assert "uuid" not in key
     assert key.startswith("exit:")
+
+
+def test_stage_map_covers_founder_pipeline() -> None:
+    from app.services.trading_intelligence_service import STAGE_MAP
+
+    assert STAGE_MAP["Watching"] == "Building Confidence"
+    assert STAGE_MAP["Risk Review"] == "Ready To Trade"
+    assert STAGE_MAP["Entered"] == "Trade Executed"

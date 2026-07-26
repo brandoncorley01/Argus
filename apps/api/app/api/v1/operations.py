@@ -8,6 +8,7 @@ live-trading capability — it observes and reports on existing subsystems.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -237,3 +238,47 @@ def trading_intelligence_learning(
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     return TradingIntelligenceService(db).learning_summary()
+
+
+@router.get("/trading-intelligence/watchlist")
+def trading_intelligence_watchlist(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    return TradingIntelligenceService(db).watchlist_intelligence()
+
+
+@router.get("/trading-intelligence/mission")
+def trading_intelligence_mission(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    return TradingIntelligenceService(db).morning_mission()
+
+
+@router.get("/trading-intelligence/debrief")
+def trading_intelligence_debrief(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    return TradingIntelligenceService(db).mission_debrief()
+
+
+@router.get("/trading-intelligence/case-files/{candidate_id}")
+def trading_intelligence_case_file(
+    candidate_id: uuid.UUID,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    row = TradingIntelligenceService(db).case_file(candidate_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case file not found")
+    return row
