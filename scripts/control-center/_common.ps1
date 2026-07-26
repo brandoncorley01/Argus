@@ -158,7 +158,9 @@ function Stop-PidIfRunning([object]$PidValue, [string]$Label) {
 }
 
 function Start-ArgusWorkerProcess([string]$Root) {
-  $workerLog = Join-Path (Get-ArgusRuntimeDir $Root) "worker.log"
+  $runtime = Get-ArgusRuntimeDir $Root
+  $workerLog = Join-Path $runtime "worker.log"
+  $marketLog = Join-Path $runtime "market-ops-worker.log"
   $py = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
   if (-not (Test-Path $py)) {
     Write-Host "Worker venv python missing at $py - skip worker start"
@@ -173,6 +175,15 @@ Set-Location '$Root'
   $proc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $cmd
   )
+  Write-Host "Starting market ops worker (scan + prices)..."
+  $cmd2 = @"
+Set-Location '$Root'
+`$env:PYTHONPATH = '$Root\apps\api;$Root'
+& '$py' -m arq workers.market_ops.worker.WorkerSettings *> '$marketLog'
+"@
+  Start-Process -FilePath "powershell.exe" -WindowStyle Minimized -ArgumentList @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $cmd2
+  ) | Out-Null
   return $proc.Id
 }
 

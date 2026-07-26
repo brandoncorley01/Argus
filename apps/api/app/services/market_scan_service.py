@@ -209,7 +209,7 @@ class MarketScanService:
             # Keep 1m/5m bars fresh so each minute scan has real short-TF data.
             self._ensure_short_tf_prices(now)
 
-            correlation_id = uuid.uuid4().hex[:16]
+            correlation_id = f"scan-{now.strftime('%Y%m%dT%H%M')}"
             cycle = MarketScanCycle(
                 status="running",
                 timeframe="1m",
@@ -559,6 +559,18 @@ class MarketScanService:
                         take_profit=target_d,
                         detail=detail,
                     )
+                    if stage == "Expired":
+                        try:
+                            from app.services.trading_intelligence_service import (
+                                TradingIntelligenceService,
+                            )
+
+                            with self.db.begin_nested():
+                                TradingIntelligenceService(
+                                    self.db
+                                ).track_missed_opportunity(cand)
+                        except Exception:  # noqa: BLE001
+                            pass
                     if events_emitted < MAX_EVENTS_PER_CYCLE:
                         outcome = (
                             "watching"
@@ -586,7 +598,8 @@ class MarketScanService:
                         cycle,
                         symbol=inst.symbol,
                         timeframe=timeframe or "15m",
-                        bias="Bearish" if exposure == 0 else "Neutral",
+                        # Neutral — not a short thesis (long-only never buys this).
+                        bias="Neutral",
                         stage="Rejected",
                         score=Decimal("20"),
                         risk_status="clear",

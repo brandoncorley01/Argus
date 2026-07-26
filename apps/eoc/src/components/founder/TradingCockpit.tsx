@@ -413,29 +413,20 @@ export function TradingCockpit({
     };
   }, [portfolioId]);
 
-  // Keepalive: if worker lags, Home pulls fresh 1m/5m prices and re-scores.
+  // Keepalive may refresh market data only — never scans or trading logic.
   useEffect(() => {
     let cancelled = false;
     let busy = false;
     const keepAlive = async () => {
       if (cancelled || busy || pending) return;
       const age = ageSeconds(cockpit?.market_data_at, Date.now());
-      const scanDue =
-        cockpit?.next_scan_at != null &&
-        Date.parse(cockpit.next_scan_at) <= Date.now();
-      if ((age == null || age < 60) && !scanDue) return;
+      if (age != null && age < 90) return;
       busy = true;
       try {
-        if (age == null || age >= 60) {
-          const r = await refreshRecentPricesAction();
-          if (!cancelled && r.ok) {
-            setKeepAliveNote("Prices updated");
-            setLastBeatAt(new Date().toISOString());
-          }
-        }
-        if (scanDue || age == null || age >= 60) {
-          const s = await runMarketScanAction(age != null && age >= 120);
-          if (!cancelled && s.ok) setKeepAliveNote("Markets re-scored");
+        const r = await refreshRecentPricesAction();
+        if (!cancelled && r.ok) {
+          setKeepAliveNote("Prices updated");
+          setLastBeatAt(new Date().toISOString());
         }
       } finally {
         busy = false;
@@ -444,14 +435,14 @@ export function TradingCockpit({
         }
       }
     };
-    const boot = window.setTimeout(() => void keepAlive(), 1500);
+    const boot = window.setTimeout(() => void keepAlive(), 2500);
     const id = window.setInterval(() => void keepAlive(), KEEP_ALIVE_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(boot);
       window.clearInterval(id);
     };
-  }, [cockpit?.market_data_at, cockpit?.next_scan_at, pending]);
+  }, [cockpit?.market_data_at, pending]);
 
   useEffect(() => {
     if (!selected) {

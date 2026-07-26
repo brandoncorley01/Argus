@@ -233,10 +233,11 @@ class MarketPriceRefreshService:
                 bars=chunk,
             )
             try:
+                bucket = now.strftime("%Y%m%dT%H%M")
                 result = self.market.ingest_batch(
                     body=body,
                     actor=principal,
-                    idempotency_key=f"price-refresh-{uuid.uuid4().hex}",
+                    idempotency_key=f"price-refresh:{bucket}:{i}",
                     request_id=None,
                 )
                 accepted += int(result.get("records_accepted") or 0)

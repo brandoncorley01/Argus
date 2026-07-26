@@ -443,11 +443,13 @@ def run_scan(
             detail={"code": exc.code, "message": exc.message},
         ) from exc
     # Automatic Practice may open paper trades after a successful scan (paper only).
+    # Failures are audited; scan response still returns.
     try:
         from sqlalchemy import select
 
         from app.models.paper_trading import PaperPortfolio
         from app.services.paper_training_service import PaperTrainingService
+        from app.services.trading_intelligence_service import TradingIntelligenceService
 
         training = PaperTrainingService(db)
         for portfolio in db.scalars(select(PaperPortfolio).limit(5)):
@@ -457,8 +459,22 @@ def run_scan(
             training.evaluate_paper_exits(
                 portfolio_id=portfolio.id, actor=principal
             )
-    except Exception:  # noqa: BLE001 — never fail the scan response on auto-enter
-        pass
+        try:
+            TradingIntelligenceService(db).resolve_pending_misses()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001 — never fail the scan response on auto-enter
+        try:
+            AuditService(db).append(
+                action="paper.training.post_scan_automation_failed",
+                resource_type="market_scan_cycle",
+                resource_id=str(cycle.id),
+                actor_user_id=principal.user.id,
+                payload={"error": str(exc)[:240]},
+            )
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
     return ScanRunResponse(cycle=ScanCycleRead.model_validate(service._cycle_dict(cycle)))
 
 

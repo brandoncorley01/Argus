@@ -210,29 +210,15 @@ async function renderTodayPage() {
       soft(() => apiFetch<ScanStatus>("/api/v1/market/scan/status")),
     ]);
 
-  let scanStatus = scanStatusInitial;
-  if (ready && (!scanStatus?.cycle || scanStatus.scanner_state === "Between Cycles")) {
-    const ageMin =
-      scanStatus?.cycle?.completed_at != null
-        ? (Date.now() - Date.parse(scanStatus.cycle.completed_at)) / 60000
-        : null;
-    if (!scanStatus?.cycle || (ageMin != null && ageMin >= 1)) {
-      await soft(() =>
-        apiFetch("/api/v1/market/scan/run", {
-          method: "POST",
-          searchParams: { force: scanStatus?.cycle ? "false" : "true" },
-          requireCsrf: true,
-        }),
-      );
-      scanStatus =
-        (await soft(() => apiFetch<ScanStatus>("/api/v1/market/scan/status"))) ??
-        scanStatus;
-    }
-  }
+  // Observation only — Home must never trigger scans or trading logic.
+  const scanStatus = scanStatusInitial;
 
-  const cockpitInitial = await soft(() =>
-    apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit"),
-  );
+  const [cockpitInitial, intelligenceBrief] = await Promise.all([
+    soft(() => apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit")),
+    soft(() =>
+      apiFetch<{ bullets: string[] }>("/api/v1/operations/trading-intelligence/briefing"),
+    ),
+  ]);
 
   const portfolio = portfolios?.[0] ?? null;
   let summary: PortfolioSummary | null = null;
@@ -378,6 +364,19 @@ async function renderTodayPage() {
         positionsOpen={summary?.open_position_count ?? 0}
         totalPnl={closedTrades.length ? totalPnl : null}
       />
+
+      <section className="panel rise" aria-label="Trading Intelligence">
+        <h2 style={{ marginTop: 0 }}>Trading Intelligence</h2>
+        <ul className="ops-confidence-list">
+          {(intelligenceBrief?.bullets ?? []).length > 0 ? (
+            intelligenceBrief!.bullets.slice(0, 5).map((b) => <li key={b}>{b}</li>)
+          ) : (
+            <li className="muted-note">
+              Intelligence updates as paper trades complete. Live trading stays locked.
+            </li>
+          )}
+        </ul>
+      </section>
 
       {/* Open paper trades */}
       <section className="panel rise" aria-label="Open paper trades">

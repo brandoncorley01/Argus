@@ -42,7 +42,6 @@ from app.services.daily_trading_report_service import (  # noqa: E402
 )
 from app.services.health_supervisor_service import HealthSupervisorService  # noqa: E402
 from app.services.host_metrics_service import HostMetricsService  # noqa: E402
-from app.services.market_scan_service import MarketScanService  # noqa: E402
 from app.services.operational_log_service import OperationalLogService  # noqa: E402
 
 T = TypeVar("T")
@@ -87,7 +86,8 @@ def _run_logged(
     label: str,
     fn: Callable[[], T],
 ) -> T:
-    correlation_id = str(uuid.uuid4())
+    bucket = datetime.now(UTC).strftime("%Y%m%dT%H%M")
+    correlation_id = f"health:{label.replace(' ', '_')}:{bucket}"
     try:
         return fn()
     except Exception as exc:
@@ -97,6 +97,24 @@ def _run_logged(
             description=f"{label} failed: {exc}",
             correlation_id=correlation_id,
         )
+        try:
+            from app.models import IncidentSeverity
+            from app.services.incident_service import IncidentService
+
+            factory = get_session_factory(ctx["settings"])
+            session = factory()
+            try:
+                IncidentService(session).open_system_incident(
+                    title=f"Autonomous failure: {label}",
+                    description=str(exc)[:2000],
+                    severity=IncidentSeverity.HIGH,
+                    correlation_key=f"autonomous-fail:{label.replace(' ', '_')}",
+                    commit=True,
+                )
+            finally:
+                session.close()
+        except Exception:  # noqa: BLE001
+            pass
         raise
 
 
@@ -208,128 +226,21 @@ async def generate_daily_report_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
-    """Observation-only market scan. Failures are logged; trading is not blocked."""
-
-    def _cycle() -> dict[str, Any]:
-        factory = get_session_factory(ctx["settings"])
-        session = factory()
-        try:
-            service = MarketScanService(session)
-            try:
-                cycle = service.run_scan_cycle(force=False)
-                auto_opened = 0
-                try:
-                    from sqlalchemy import select
-
-                    from app.models.paper_trading import PaperPortfolio
-                    from app.services.paper_training_service import PaperTrainingService
-
-                    training = PaperTrainingService(session)
-                    auto_exits = 0
-                    for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
-                        opened = training.maybe_auto_enter_from_scan(
-                            portfolio_id=portfolio.id, actor=None
-                        )
-                        auto_opened += len(opened)
-                        exits = training.evaluate_paper_exits(
-                            portfolio_id=portfolio.id, actor=None
-                        )
-                        auto_exits += len(exits)
-                except Exception:  # noqa: BLE001
-                    auto_opened = 0
-                    auto_exits = 0
-                return {
-                    "cycle_id": str(cycle.id),
-                    "status": cycle.status,
-                    "symbols_scanned": cycle.symbols_scanned,
-                    "candidates_found": cycle.candidates_found,
-                    "auto_paper_entries": auto_opened,
-                    "auto_paper_exits": auto_exits,
-                }
-            except Exception as exc:  # noqa: BLE001
-                # Never let scanner errors affect trading engine health cycles.
-                return {"ok": False, "error": str(exc)[:240]}
-        finally:
-            session.close()
-
-    return _run_logged(
-        ctx,
-        component=OperationalComponent.MARKET_DATA,
-        label="market scan cycle",
-        fn=_cycle,
-    )
-
-
-async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
-    """Refresh Recent Price History from the public feed. Never invents prices."""
-
-    def _cycle() -> dict[str, Any]:
-        factory = get_session_factory(ctx["settings"])
-        session = factory()
-        try:
-            from app.services.market_price_refresh_service import (
-                MarketPriceRefreshError,
-                MarketPriceRefreshService,
-            )
-
-            try:
-                result = MarketPriceRefreshService(session).refresh_recent_prices(actor=None)
-                auto_exits = 0
-                try:
-                    from sqlalchemy import select
-
-                    from app.models.paper_trading import PaperPortfolio
-                    from app.services.paper_training_service import PaperTrainingService
-
-                    training = PaperTrainingService(session)
-                    for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
-                        auto_exits += len(
-                            training.evaluate_paper_exits(
-                                portfolio_id=portfolio.id, actor=None
-                            )
-                        )
-                except Exception:  # noqa: BLE001
-                    auto_exits = 0
-                return {
-                    "ok": result.get("ok"),
-                    "records_accepted": result.get("records_accepted"),
-                    "failed_count": len(result.get("failed") or []),
-                    "auto_paper_exits": auto_exits,
-                }
-            except MarketPriceRefreshError as exc:
-                return {"ok": False, "code": exc.code, "error": exc.message[:240]}
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": str(exc)[:240]}
-        finally:
-            session.close()
-
-    return _run_logged(
-        ctx,
-        component=OperationalComponent.MARKET_DATA,
-        label="market price refresh",
-        fn=_cycle,
-    )
-
-
 class WorkerSettings:
-    """ARQ worker settings for `arq workers.health_supervisor.worker.WorkerSettings`."""
+    """ARQ worker settings for health / metrics / daily reports only.
+
+    Market scan + price refresh run under `workers.market_ops.worker.WorkerSettings`.
+    """
 
     functions = [
         run_health_supervisor_cycle,
         capture_host_metrics_cycle,
         generate_daily_report_cycle,
-        run_market_scan_cycle,
-        run_market_price_refresh,
     ]
     cron_jobs = [
         cron(run_health_supervisor_cycle, second={0, 30}),
         cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
-        # Short-TF price refresh — 1m/5m charts (scan also refreshes when stale).
-        cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
-        # Continuous opportunity scan — every minute (genuine cycles only).
-        cron(run_market_scan_cycle, minute=set(range(60))),
     ]
     on_startup = startup
     on_shutdown = shutdown

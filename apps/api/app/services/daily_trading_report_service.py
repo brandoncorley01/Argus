@@ -203,6 +203,16 @@ class DailyTradingReportService:
             (abs(p.quantity) * p.average_cost for p in open_positions), Decimal("0")
         )
 
+        intelligence: dict[str, Any] = {}
+        try:
+            from app.services.trading_intelligence_service import TradingIntelligenceService
+
+            intelligence = TradingIntelligenceService(self.db).daily_report_intelligence(
+                report_date
+            )
+        except Exception:  # noqa: BLE001 — report must still generate without intel tables
+            intelligence = {"error": "trading_intelligence_unavailable"}
+
         return {
             "report_date": report_date.isoformat(),
             "provider": "internal_paper",
@@ -226,5 +236,6 @@ class DailyTradingReportService:
             "exposure": str(exposure),
             "risk_events_count": len(risk_breaches_today),
             "incidents_count": len(incidents_today),
+            "trading_intelligence": intelligence,
             "disclaimer": DAILY_REPORT_DISCLAIMER,
         }

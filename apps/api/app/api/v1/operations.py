@@ -191,3 +191,49 @@ def generate_daily_report(
     except DailyTradingReportError as exc:
         raise _http_error(exc) from exc
     return DailyTradingReportRead.model_validate(row)
+
+
+# --- trading intelligence (observational; never enables live) -------------------
+
+
+@router.get("/trading-intelligence/briefing")
+def trading_intelligence_briefing(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    try:
+        return TradingIntelligenceService(db).founder_briefing()
+    except Exception as exc:  # noqa: BLE001 — never blank Home
+        return {
+            "bullets": [
+                "Average confidence: —",
+                "Best strategy today: —",
+                "Largest risk: —",
+                "Largest missed opportunity: —",
+                "Recommendation: Start Argus so intelligence tables migrate",
+            ],
+            "error": str(exc)[:160],
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+
+
+@router.get("/trading-intelligence/certification")
+def trading_intelligence_certification(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    return TradingIntelligenceService(db).certification_progress()
+
+
+@router.get("/trading-intelligence/learning")
+def trading_intelligence_learning(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.trading_intelligence_service import TradingIntelligenceService
+
+    return TradingIntelligenceService(db).learning_summary()

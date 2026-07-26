@@ -1473,3 +1473,17 @@ __all__ += [
     "PaperTradeFeedback",
     "PaperTrainingSettings",
 ]
+
+from app.models.trading_intelligence import (  # noqa: E402
+    FounderCertificationState,
+    MissedOpportunity,
+    PostTradeReview,
+    TradeDecisionSnapshot,
+)
+
+__all__ += [
+    "FounderCertificationState",
+    "MissedOpportunity",
+    "PostTradeReview",
+    "TradeDecisionSnapshot",
+]

@@ -340,12 +340,12 @@ class PaperTradingService:
 
     def _exit_plan_levels(
         self, portfolio_id: uuid.UUID, symbol: str
-    ) -> dict[str, Decimal | None]:
+    ) -> dict[str, Any]:
         """Read stop/target attached when the paper entry was opened (if any)."""
         from app.models.paper_trading import PaperOrderEvent
 
         row = self.db.execute(
-            select(PaperOrderEvent.payload)
+            select(PaperOrderEvent.payload, PaperOrder.id)
             .join(PaperOrder, PaperOrder.id == PaperOrderEvent.order_id)
             .where(
                 PaperOrder.portfolio_id == portfolio_id,
@@ -357,8 +357,9 @@ class PaperTradingService:
             .limit(1)
         ).first()
         if row is None:
-            return {"stop_loss": None, "take_profit": None}
+            return {"stop_loss": None, "take_profit": None, "entry_order_id": None}
         payload = row[0] or {}
+        entry_order_id = row[1]
 
         def _dec(key: str) -> Decimal | None:
             raw = payload.get(key)
@@ -369,7 +370,11 @@ class PaperTradingService:
             except Exception:  # noqa: BLE001
                 return None
 
-        return {"stop_loss": _dec("stop_loss"), "take_profit": _dec("take_profit")}
+        return {
+            "stop_loss": _dec("stop_loss"),
+            "take_profit": _dec("take_profit"),
+            "entry_order_id": entry_order_id,
+        }
 
     def list_closed_trades(
         self, portfolio_id: uuid.UUID, *, limit: int = 5

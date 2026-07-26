@@ -498,6 +498,9 @@ class PaperTrainingService:
         for cand in cands:
             if cand.symbol in open_syms:
                 continue
+            if (cand.bias or "") != "Bullish":
+                # Long-only: never convert bearish/neutral probes into buys.
+                continue
             try:
                 order = self._open_paper_from_candidate(
                     portfolio_id=portfolio_id,
@@ -515,7 +518,17 @@ class PaperTrainingService:
                     actor_user_id=resolved.user.id,
                     payload={"symbol": cand.symbol, "candidate_id": str(cand.id)},
                 )
-            except (PaperTradingError, PaperTrainingError):
+            except (PaperTradingError, PaperTrainingError) as exc:
+                self.audit.append(
+                    action="paper.training.auto_enter_failed",
+                    resource_type="market_scan_candidate",
+                    resource_id=str(cand.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": cand.symbol,
+                        "error": getattr(exc, "message", str(exc))[:240],
+                    },
+                )
                 continue
         if opened:
             self.db.commit()
@@ -564,16 +577,20 @@ class PaperTrainingService:
         qty = (notional / price).quantize(Decimal("0.00000001"))
         if qty <= 0:
             raise PaperTrainingError("qty_zero", "Paper investment size is too small.")
-        side = "buy" if cand.bias != "Bearish" else "buy"  # long-only paper for safety
+        if (cand.bias or "") != "Bullish":
+            raise PaperTrainingError(
+                "long_only_bias",
+                "Long-only paper mode refuses bearish or neutral signals as buys.",
+            )
         order = self.paper.submit_order(
             portfolio_id=portfolio_id,
             actor=actor,
             symbol=cand.symbol,
-            side=side,
+            side="buy",
             order_type="market",
             quantity=qty,
             limit_price=price,
-            idempotency_key=f"train-{cand.id}-{uuid.uuid4().hex[:8]}",
+            idempotency_key=f"train-enter:{cand.id}",
         )
         # Persist planned exit levels on the entry order (paper only).
         self.paper._event(
@@ -590,6 +607,18 @@ class PaperTrainingService:
                 "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else None,
             },
         )
+        try:
+            from app.services.trading_intelligence_service import TradingIntelligenceService
+
+            with self.db.begin_nested():
+                TradingIntelligenceService(self.db).snapshot_for_candidate(
+                    cand,
+                    portfolio_id=portfolio_id,
+                    entry_order_id=order.id,
+                    stale=False,
+                )
+        except Exception:  # noqa: BLE001 — intelligence must never block paper entry
+            pass
         self.db.commit()
         self.db.refresh(order)
         return order
@@ -630,6 +659,8 @@ class PaperTrainingService:
                 reason = "take_profit"
             if reason is None:
                 continue
+            entry_order_id = plan.get("entry_order_id")
+            entry_key = str(entry_order_id) if entry_order_id else "none"
             try:
                 order = self.paper.submit_order(
                     portfolio_id=portfolio_id,
@@ -639,9 +670,39 @@ class PaperTrainingService:
                     order_type="market",
                     quantity=abs(pos.quantity),
                     limit_price=mark,
-                    idempotency_key=f"exit-{reason}-{pos.symbol}-{uuid.uuid4().hex[:8]}",
+                    idempotency_key=(
+                        f"exit:{portfolio_id}:{pos.symbol}:{reason}:{entry_key}"
+                    ),
                 )
-            except PaperTradingError:
+            except PaperTradingError as exc:
+                self.audit.append(
+                    action="paper.training.auto_exit_failed",
+                    resource_type="paper_position",
+                    resource_id=str(pos.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": pos.symbol,
+                        "reason": reason,
+                        "mark": str(mark),
+                        "error": getattr(exc, "message", str(exc))[:240],
+                    },
+                )
+                try:
+                    from app.models import IncidentSeverity
+                    from app.services.incident_service import IncidentService
+
+                    IncidentService(self.db).open_system_incident(
+                        title=f"Paper auto-exit failed for {pos.symbol}",
+                        description=(
+                            f"Automated {reason} exit could not submit. "
+                            f"{getattr(exc, 'message', str(exc))[:240]}"
+                        ),
+                        severity=IncidentSeverity.HIGH,
+                        correlation_key=f"paper-auto-exit:{portfolio_id}:{pos.symbol}",
+                        commit=False,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
             self.paper._event(
                 order,
@@ -666,6 +727,24 @@ class PaperTrainingService:
                     "mark": str(mark),
                 },
             )
+            try:
+                from app.services.trading_intelligence_service import (
+                    TradingIntelligenceService,
+                )
+
+                with self.db.begin_nested():
+                    TradingIntelligenceService(self.db).record_post_trade_review(
+                        portfolio_id=portfolio_id,
+                        symbol=pos.symbol,
+                        exit_order=order,
+                        exit_reason=reason,
+                        entry_order_id=(
+                            uuid.UUID(str(entry_order_id)) if entry_order_id else None
+                        ),
+                        mark=mark,
+                    )
+            except Exception:  # noqa: BLE001 — review must not block exit
+                pass
             closed.append(
                 {
                     "symbol": pos.symbol,
