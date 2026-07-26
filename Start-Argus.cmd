@@ -43,4 +43,6 @@ echo Open this exact address in the browser:
 echo   http://127.0.0.1:3000/today
 echo.
 start "" "http://127.0.0.1:3000/today"
-pause
+echo Window closes in 12 seconds (or press a key)...
+timeout /t 12 >nul
+exit /b 0

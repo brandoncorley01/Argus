@@ -36,6 +36,56 @@ try {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
   }
 
+  # Car model: if Argus is already running, Start must not stall on git sync /
+  # cache wipe / full recycle. Only force a heavy Start when unhealthy or
+  # ARGUS_FORCE_SYNC=1 (explicit refresh from GitHub).
+  $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
+  $apiReadyNow = Test-HttpOk (Get-ArgusApiReadyUrl) 3
+  $eocReadyNow = (Test-HttpOk "http://127.0.0.1:3000/login" 3) -or (Test-HttpOk "http://127.0.0.1:3000/" 3) -or (Test-HttpOk (Get-ArgusDashboardUrl) 3)
+  $workerReadyNow = Test-ArgusWorkerFresh $Root
+  if ($apiReadyNow -and $eocReadyNow -and $workerReadyNow -and -not $forceSync) {
+    Write-Host "Argus is already running — fast Start (no git sync / no cache wipe)."
+    # Collapse duplicate API/worker processes that make crons look stalled.
+    try {
+      $uvs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*uvicorn app.main:app*" })
+      if ($uvs.Count -gt 1) {
+        Write-Host "Removing duplicate API processes..."
+        $uvs | Select-Object -Skip 1 | ForEach-Object {
+          Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+      }
+      $wps = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+          $_.CommandLine -and (
+            $_.CommandLine -like "*workers.health_supervisor.worker*" -or
+            $_.CommandLine -like "*workers.market_ops.worker*"
+          )
+        })
+      if ($wps.Count -gt 1) {
+        Write-Host "Removing duplicate worker processes..."
+        $wps | Select-Object -Skip 1 | ForEach-Object {
+          Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+      }
+    } catch { }
+    $sha = (git rev-parse --short HEAD).Trim()
+    $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
+    $buildId = "command-center"
+    if (Test-Path $buildIdFile) {
+      $m = Select-String -Path $buildIdFile -Pattern 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"' | Select-Object -First 1
+      if ($m) { $buildId = $m.Matches.Groups[1].Value }
+    }
+    Write-Host "Build $buildId @ $sha"
+    if (-not $KeepDashboard) {
+      Start-Process (Get-ArgusDashboardUrl)
+    } else {
+      Write-Host "REFRESH_HOME_SOFT"
+    }
+    Write-Host "=== Argus started ==="
+    exit 0
+  }
+
   # Force GitHub main onto this PC (Founder browser cadence).
   $updated = Sync-ArgusCode $Root
 

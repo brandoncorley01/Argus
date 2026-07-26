@@ -165,6 +165,20 @@ function Start-ArgusWorkerProcess([string]$Root) {
     Write-Host "Worker venv python missing at $py - skip worker start"
     return $null
   }
+  # Never leave duplicate ARQ workers — they queue-delay scans by many minutes.
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.CommandLine -and (
+          $_.CommandLine -like "*workers.health_supervisor.worker*" -or
+          $_.CommandLine -like "*workers.market_ops.worker*"
+        )
+      } |
+      ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+  } catch { }
+  Start-Sleep -Milliseconds 400
   # One process: health + market scan/price (market_ops jobs registered on this worker).
   Write-Host "Starting Argus worker (health + market ops)..."
   $cmd = @"

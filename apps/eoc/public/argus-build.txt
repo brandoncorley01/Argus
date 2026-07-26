@@ -1,1 +1,1 @@
-live-monitor-v1.2 720ba7c
+live-monitor-v1.3 pending
