@@ -166,6 +166,17 @@ class MarketScanService:
             .limit(1)
         )
 
+        # Live open count — do not trust stale cycle.pipeline_counts["positions"].
+        open_positions_live = len(
+            list(
+                self.db.scalars(
+                    select(PaperPosition).where(PaperPosition.quantity != 0)
+                )
+            )
+        )
+        pipeline = dict((cycle.pipeline_counts if cycle else {}) or {})
+        pipeline["positions"] = open_positions_live
+
         return {
             "scanner_state": scanner_state,
             "cycle": self._cycle_dict(cycle) if cycle else None,
@@ -179,7 +190,8 @@ class MarketScanService:
             "kill_switch_active": bool(kill),
             "trading_allowed": not bool(kill) and not bool(pause),
             "last_decision": self._event_dict(last_decision) if last_decision else None,
-            "pipeline_counts": (cycle.pipeline_counts if cycle else {}) or {},
+            "pipeline_counts": pipeline,
+            "open_positions_live": open_positions_live,
             "rejection_counts": (cycle.rejection_counts if cycle else {}) or {},
             "next_scheduled_at": (
                 cycle.next_scheduled_at
@@ -1156,7 +1168,10 @@ class MarketScanService:
             "awaiting_confirmation": len(awaiting),
             "risk_check_count": len(risk_check),
             "open_trades": int(
-                (status.get("pipeline_counts") or {}).get("positions") or 0
+                status.get("open_positions_live")
+                if status.get("open_positions_live") is not None
+                else (status.get("pipeline_counts") or {}).get("positions")
+                or 0
             ),
             "market_data_at": _as_iso(status.get("market_data_at")),
             "market_data_stale": bool(status.get("market_data_stale")),
@@ -1409,7 +1424,12 @@ class MarketScanService:
                 }
             )
 
-        open_n = int((status.get("pipeline_counts") or {}).get("positions") or 0)
+        open_n = int(
+            status.get("open_positions_live")
+            if status.get("open_positions_live") is not None
+            else (status.get("pipeline_counts") or {}).get("positions")
+            or 0
+        )
         if open_n:
             lines.append(
                 {

@@ -91,6 +91,7 @@ def test_doing_lines_are_live_cadence() -> None:
             "symbols_monitored": 10,
             "scan_progress": {"scanned": 10, "total": 10},
             "pipeline_counts": {"positions": 0},
+            "open_positions_live": 0,
             "market_data_stale": False,
         },
         [],
@@ -98,6 +99,22 @@ def test_doing_lines_are_live_cadence() -> None:
     assert lines
     assert "10" in lines[0]["text"]
     assert "next pass" in lines[0]["text"].lower()
+
+
+def test_doing_lines_use_live_open_count_not_stale_pipeline() -> None:
+    svc = MarketScanService(db=None)  # type: ignore[arg-type]
+    lines = svc._doing_lines(
+        {
+            "scanner_state": "Between Cycles",
+            "symbols_monitored": 10,
+            "scan_progress": {"scanned": 10, "total": 10},
+            "pipeline_counts": {"positions": 10},  # stale cycle figure
+            "open_positions_live": 0,
+            "market_data_stale": False,
+        },
+        [],
+    )
+    assert not any("Stops live" in (x.get("text") or "") for x in lines)
 
 
 def test_monitor_rows_sort_focus_first() -> None:

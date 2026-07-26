@@ -108,11 +108,23 @@ try {
     Write-Host "API already responding"
   }
 
-  if (-not (Test-ArgusWorkerFresh $Root)) {
-    $workerPid = Start-ArgusWorkerProcess $Root
-  } else {
-    Write-Host "Worker already running"
-  }
+  # Always recycle the worker on Start so market scan/price jobs load after code sync.
+  # Leaving a stale worker up freezes Live Monitor on "Scan delayed / Next pass 0:00".
+  Write-Host "Recycling Argus worker (health + market ops)..."
+  Stop-PidIfRunning $pids.worker "Worker launcher"
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.CommandLine -and (
+          $_.CommandLine -like "*workers.health_supervisor.worker*" -or
+          $_.CommandLine -like "*workers.market_ops.worker*"
+        )
+      } |
+      ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+  } catch { }
+  $workerPid = Start-ArgusWorkerProcess $Root
 
   $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl) 2)
   if ($KeepDashboard) {

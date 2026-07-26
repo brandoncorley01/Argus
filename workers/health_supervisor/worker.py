@@ -226,21 +226,31 @@ async def generate_daily_report_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-class WorkerSettings:
-    """ARQ worker settings for health / metrics / daily reports only.
+# Market scan/price jobs live in workers.market_ops (separated code), but the
+# Founder Start path runs one ARQ process. Register those jobs here so scans
+# cannot freeze when a second process fails to start.
+from workers.market_ops.worker import (  # noqa: E402
+    run_market_price_refresh,
+    run_market_scan_cycle,
+)
 
-    Market scan + price refresh run under `workers.market_ops.worker.WorkerSettings`.
-    """
+
+class WorkerSettings:
+    """ARQ worker: health + metrics + reports + market ops (single Founder process)."""
 
     functions = [
         run_health_supervisor_cycle,
         capture_host_metrics_cycle,
         generate_daily_report_cycle,
+        run_market_scan_cycle,
+        run_market_price_refresh,
     ]
     cron_jobs = [
         cron(run_health_supervisor_cycle, second={0, 30}),
         cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
+        cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
+        cron(run_market_scan_cycle, minute=set(range(60))),
     ]
     on_startup = startup
     on_shutdown = shutdown

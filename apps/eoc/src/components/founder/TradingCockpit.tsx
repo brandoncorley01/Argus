@@ -1057,12 +1057,23 @@ export function TradingCockpit({
       <section className="panel rise live-monitor-panel" aria-label="Live monitor">
         <div className="cockpit-head">
           <h2 style={{ marginTop: 0 }}>Live monitor</h2>
-          <span className={`status-light ${feedOk ? "ok" : "warn"}`}>
+          <span
+            className={`status-light ${
+              cockpit.scanner_state === "Delayed" || (nextScanSec != null && nextScanSec <= 0 && cockpit.scanner_state !== "Scanning")
+                ? "warn"
+                : feedOk
+                  ? "ok"
+                  : "warn"
+            }`}
+          >
             {cockpit.scanner_state === "Scanning"
               ? `Checking ${cockpit.current_market ?? "…"}`
-              : nextScanSec != null
-                ? `Next pass ${fmtCountdown(nextScanSec)}`
-                : cockpit.scanner_state}
+              : cockpit.scanner_state === "Delayed" ||
+                  (nextScanSec != null && nextScanSec <= 0)
+                ? "Scan overdue — Start Argus"
+                : nextScanSec != null
+                  ? `Next pass ${fmtCountdown(nextScanSec)}`
+                  : cockpit.scanner_state}
           </span>
         </div>
         <div className="status-chip-row live-monitor-strip">
