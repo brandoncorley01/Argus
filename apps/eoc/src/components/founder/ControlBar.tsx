@@ -69,10 +69,10 @@ export function ControlBar({
     status === "Running" ? "Running" : status === "Stopped" ? "Stopped" : "Paused";
   const statusHint =
     status === "Running"
-      ? "Argus is up. Use Stop when you are done."
+      ? "Argus stays Running until you press Stop."
       : status === "Stopped"
-        ? "Press Start Argus."
-        : "Paper trading is paused.";
+        ? "Press Start Argus once. It will keep running until Stop."
+        : "Paper trading is paused. Argus is still up.";
 
   return (
     <section className="control-bar panel home-controls" aria-label="Start and stop Argus">
@@ -92,19 +92,20 @@ export function ControlBar({
       </div>
 
       <div className="control-primary">
-        <ControlButton
-          label="Start Argus"
-          busyLabel="Starting…"
-          className="btn control-btn control-btn-start"
-          run={startArgusAction}
-          onDone={(res) => {
-            if (!res.ok) return;
-            // Pull + dashboard reload can take a few seconds; then hard reload Home.
-            window.setTimeout(() => {
-              window.location.assign("/today");
-            }, 8000);
-          }}
-        />
+        {status === "Stopped" ? (
+          <ControlButton
+            label="Start Argus"
+            busyLabel="Starting…"
+            className="btn control-btn control-btn-start"
+            run={startArgusAction}
+            onDone={(res) => {
+              if (!res.ok) return;
+              window.setTimeout(() => {
+                window.location.assign("/today");
+              }, 3000);
+            }}
+          />
+        ) : null}
         <ControlButton
           label="Stop Argus"
           busyLabel="Stopping…"

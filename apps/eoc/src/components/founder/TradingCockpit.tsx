@@ -510,7 +510,7 @@ export function TradingCockpit({
       <section className="panel rise" aria-label="Trading Cockpit">
         <h2 style={{ marginTop: 0 }}>Live Trading Cockpit</h2>
         <p className="attention-box">
-          Cockpit unavailable. Start Argus, then Update prices.
+          Cockpit unavailable right now. Refresh this page — Argus stays Running until you press Stop.
         </p>
       </section>
     );

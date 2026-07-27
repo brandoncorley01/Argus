@@ -68,6 +68,7 @@ export async function loginAction(
       },
       body: JSON.stringify({ identifier, password }),
       cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
     });
 
     const text = await res.text();

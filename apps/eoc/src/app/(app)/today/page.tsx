@@ -116,7 +116,7 @@ function deriveOperationalPicture(opts: {
     return {
       status: "Stopped",
       explanation:
-        "Argus is not ready. Start Argus, then refresh this page.",
+        "Argus is stopped. Press Start Argus once — it stays Running until you press Stop.",
     };
   }
   if (opts.killSwitch) {

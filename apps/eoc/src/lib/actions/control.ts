@@ -7,6 +7,7 @@ import path from "node:path";
 import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/server/api";
+import { apiBaseUrl } from "@/lib/server/env";
 import { ApiClientError } from "@/lib/types";
 
 export type ActionResult =
@@ -95,6 +96,24 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
 }
 
 export async function startArgusAction(): Promise<ActionResult> {
+  // If already up, do not re-run Start (keeps the "car running" model).
+  try {
+    const ready = await fetch(`${apiBaseUrl()}/ready`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (ready.ok) {
+      revalidatePath("/today");
+      revalidatePath("/control");
+      return {
+        ok: true,
+        message: "Argus is already Running. It stays up until you press Stop.",
+      };
+    }
+  } catch {
+    // Fall through to start script.
+  }
+
   // Single sync path: start-argus.ps1 self-updates from GitHub then force-syncs
   // main. Do not wipe apps/eoc/.next or kill :3000 here — that aborts this
   // server action and leaves Home stuck on Starting…
@@ -110,7 +129,7 @@ export async function startArgusAction(): Promise<ActionResult> {
   }
   return {
     ok: true,
-    message: "Argus started. This page will refresh shortly.",
+    message: "Argus started. It will keep Running until you press Stop.",
     detail: res.detail,
   };
 }
