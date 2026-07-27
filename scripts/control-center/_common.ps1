@@ -97,9 +97,12 @@ function Stop-ArgusPortListeners([int[]]$Ports) {
 
 function Test-HttpOk([string]$Url, [int]$TimeoutSec = 3) {
   try {
-    $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec
-    return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300)
+    # Allow redirects (e.g. /today -> /login) as "up"
+    $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec -MaximumRedirection 5
+    return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400)
   } catch {
+    # Some hosts throw on 3xx; treat as reachable if a response existed
+    if ($_.Exception.Response) { return $true }
     return $false
   }
 }
@@ -225,6 +228,18 @@ function Start-ArgusWorkerProcess([string]$Root) {
 }
 
 function Test-ArgusWorkerFresh([string]$Root) {
+  # Prefer a live ARQ python process over a stale PID file.
+  try {
+    $live = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "python.exe" -and
+        $_.CommandLine -and (
+          $_.CommandLine -like "*workers.health_supervisor.worker*" -or
+          $_.CommandLine -like "*workers.market_ops.worker*"
+        )
+      })
+    if ($live.Count -gt 0) { return $true }
+  } catch { }
   $pids = Read-ArgusPids $Root
   if ($pids.worker) {
     try {
@@ -234,7 +249,6 @@ function Test-ArgusWorkerFresh([string]$Root) {
       return $false
     }
   }
-  # Compose profile fallback
   try {
     $name = docker ps --filter "name=argus-health-supervisor" --format "{{.Names}}" 2>$null
     return [bool]$name

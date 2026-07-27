@@ -43,9 +43,47 @@ try {
   $apiReadyNow = Test-HttpOk (Get-ArgusApiReadyUrl) 3
   $eocReadyNow = (Test-HttpOk "http://127.0.0.1:3000/login" 3) -or (Test-HttpOk "http://127.0.0.1:3000/" 3) -or (Test-HttpOk (Get-ArgusDashboardUrl) 3)
   $workerReadyNow = Test-ArgusWorkerFresh $Root
+
+  # Light repair: API + dashboard up, only worker missing — do NOT git sync.
+  if ($apiReadyNow -and $eocReadyNow -and -not $workerReadyNow -and -not $forceSync) {
+    Write-Host "API + dashboard up; worker down — repairing worker only (no git sync)."
+    $pids = Read-ArgusPids $Root
+    if (-not (Test-HttpOk (Get-ArgusApiReadyUrl) 3)) {
+      $apiPid = Start-ArgusApiProcess $Root
+    } else {
+      $apiPid = $pids.api
+    }
+    $workerPid = Start-ArgusWorkerProcess $Root
+    Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
+    Start-Sleep -Seconds 2
+    Write-Host "OK  Worker repair attempted."
+    if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
+    Write-Host "=== Argus started ==="
+    exit 0
+  }
+
+  # Light repair: dashboard up, API down — restart API only, no git sync.
+  if ($eocReadyNow -and -not $apiReadyNow -and -not $forceSync) {
+    Write-Host "Dashboard up; API down — repairing API only (no git sync)."
+    $pids = Read-ArgusPids $Root
+    $apiPid = Start-ArgusApiProcess $Root
+    if (-not (Test-ArgusWorkerFresh $Root)) {
+      $workerPid = Start-ArgusWorkerProcess $Root
+    } else {
+      $workerPid = $pids.worker
+    }
+    Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
+    $null = Wait-HttpOk (Get-ArgusApiReadyUrl) 60 "API /ready"
+    if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
+    Write-Host "=== Argus started ==="
+    exit 0
+  }
+
   if ($apiReadyNow -and $eocReadyNow -and $workerReadyNow -and -not $forceSync) {
     Write-Host "Argus is already running — fast Start (no git sync / no cache wipe)."
-    # Collapse duplicate API/worker processes that make crons look stalled.
+    $pids = Read-ArgusPids $Root
+    # uvicorn/arq each spawn a child with the same cmdline. Count tree roots only —
+    # never treat parent+child as "duplicates" (that killed the only worker).
     try {
       $uvs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
@@ -53,9 +91,12 @@ try {
           $_.CommandLine -and
           $_.CommandLine -like "*uvicorn app.main:app*"
         })
-      if ($uvs.Count -gt 1) {
-        Write-Host "Removing duplicate API processes..."
-        $uvs | Select-Object -Skip 1 | ForEach-Object {
+      $uvIds = @($uvs | ForEach-Object { $_.ProcessId })
+      $uvRoots = @($uvs | Where-Object { $uvIds -notcontains $_.ParentProcessId } | Sort-Object ProcessId)
+      if ($uvRoots.Count -gt 1) {
+        Write-Host "Removing duplicate API process trees..."
+        $keepApi = $uvRoots[0].ProcessId
+        $uvRoots | Where-Object { $_.ProcessId -ne $keepApi } | ForEach-Object {
           Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         }
       }
@@ -67,11 +108,11 @@ try {
             $_.CommandLine -like "*workers.market_ops.worker*"
           )
         })
-      if ($wps.Count -gt 1) {
-        Write-Host "Removing duplicate worker processes..."
-        $wps | Select-Object -Skip 1 | ForEach-Object {
-          Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        }
+      $wpIds = @($wps | ForEach-Object { $_.ProcessId })
+      $wpRoots = @($wps | Where-Object { $wpIds -notcontains $_.ParentProcessId })
+      if ($wpRoots.Count -gt 1) {
+        Write-Host "Multiple worker trees detected — recycling to a single worker..."
+        $pids.worker = Start-ArgusWorkerProcess $Root
       }
     } catch { }
     # If /ready flipped down during Start, bring API back without a full sync.
@@ -81,6 +122,14 @@ try {
       $pids = Read-ArgusPids $Root
       Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $pids.worker
       $null = Wait-HttpOk (Get-ArgusApiReadyUrl) 60 "API /ready"
+    }
+    # Fast path must never exit with a dead worker.
+    if (-not (Test-ArgusWorkerFresh $Root)) {
+      Write-Host "Worker missing after fast Start — repairing..."
+      $pids = Read-ArgusPids $Root
+      $pids.worker = Start-ArgusWorkerProcess $Root
+      Write-ArgusPids -Root $Root -ApiPid $pids.api -EocPid $pids.eoc -WorkerPid $pids.worker
+      Start-Sleep -Seconds 2
     }
     $sha = (git rev-parse --short HEAD).Trim()
     $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
