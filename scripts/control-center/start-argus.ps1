@@ -48,7 +48,11 @@ try {
     # Collapse duplicate API/worker processes that make crons look stalled.
     try {
       $uvs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*uvicorn app.main:app*" })
+        Where-Object {
+          $_.Name -eq "python.exe" -and
+          $_.CommandLine -and
+          $_.CommandLine -like "*uvicorn app.main:app*"
+        })
       if ($uvs.Count -gt 1) {
         Write-Host "Removing duplicate API processes..."
         $uvs | Select-Object -Skip 1 | ForEach-Object {
@@ -57,6 +61,7 @@ try {
       }
       $wps = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
+          $_.Name -eq "python.exe" -and
           $_.CommandLine -and (
             $_.CommandLine -like "*workers.health_supervisor.worker*" -or
             $_.CommandLine -like "*workers.market_ops.worker*"
@@ -69,6 +74,14 @@ try {
         }
       }
     } catch { }
+    # If /ready flipped down during Start, bring API back without a full sync.
+    if (-not (Test-HttpOk (Get-ArgusApiReadyUrl) 3)) {
+      Write-Host "API became unreachable — restarting detached API..."
+      $apiPid = Start-ArgusApiProcess $Root
+      $pids = Read-ArgusPids $Root
+      Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $pids.worker
+      $null = Wait-HttpOk (Get-ArgusApiReadyUrl) 60 "API /ready"
+    }
     $sha = (git rev-parse --short HEAD).Trim()
     $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
     $buildId = "command-center"
@@ -147,13 +160,7 @@ try {
   $apiPid = $null
 
   if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
-    Write-Host "Starting API on 127.0.0.1:8000..."
-    $apiLog = Join-Path (Get-ArgusRuntimeDir $Root) "api.log"
-    $apiProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-      "Set-Location '$Root\apps\api'; .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 *> '$apiLog'"
-    )
-    $apiPid = $apiProc.Id
+    $apiPid = Start-ArgusApiProcess $Root
   } else {
     Write-Host "API already responding"
   }

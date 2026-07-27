@@ -31,13 +31,7 @@ $eocPid = $pids.eoc
 $workerPid = $pids.worker
 
 if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
-  Write-Host "Starting API..."
-  $apiLog = Join-Path (Get-ArgusRuntimeDir $Root) "api.log"
-  $apiProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-    "Set-Location '$Root\apps\api'; .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 *> '$apiLog'"
-  )
-  $apiPid = $apiProc.Id
+  $apiPid = Start-ArgusApiProcess $Root
 } else {
   Write-Host "API already up"
 }

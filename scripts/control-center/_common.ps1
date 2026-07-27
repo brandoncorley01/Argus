@@ -157,9 +157,43 @@ function Stop-PidIfRunning([object]$PidValue, [string]$Label) {
   }
 }
 
+function Start-ArgusApiProcess([string]$Root) {
+  $runtime = Get-ArgusRuntimeDir $Root
+  $apiLog = Join-Path $runtime "api.log"
+  $apiErr = Join-Path $runtime "api.err.log"
+  $py = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
+  $apiDir = Join-Path $Root "apps\api"
+  if (-not (Test-Path $py)) {
+    Write-Host "API venv python missing at $py - skip API start"
+    return $null
+  }
+  # Kill any existing uvicorn first (python process, not a transient PowerShell wrapper).
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "python.exe" -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*uvicorn app.main:app*"
+      } |
+      ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+  } catch { }
+  Start-Sleep -Milliseconds 500
+  Write-Host "Starting API on 127.0.0.1:8000 (detached python)..."
+  # Launch python.exe directly so killing a PowerShell wrapper cannot take down the API.
+  $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
+    -WorkingDirectory $apiDir `
+    -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
+    -RedirectStandardOutput $apiLog `
+    -RedirectStandardError $apiErr
+  return $proc.Id
+}
+
 function Start-ArgusWorkerProcess([string]$Root) {
   $runtime = Get-ArgusRuntimeDir $Root
   $workerLog = Join-Path $runtime "worker.log"
+  $workerErr = Join-Path $runtime "worker.err.log"
   $py = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
   if (-not (Test-Path $py)) {
     Write-Host "Worker venv python missing at $py - skip worker start"
@@ -169,6 +203,7 @@ function Start-ArgusWorkerProcess([string]$Root) {
   try {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       Where-Object {
+        $_.Name -eq "python.exe" -and
         $_.CommandLine -and (
           $_.CommandLine -like "*workers.health_supervisor.worker*" -or
           $_.CommandLine -like "*workers.market_ops.worker*"
@@ -179,16 +214,13 @@ function Start-ArgusWorkerProcess([string]$Root) {
       }
   } catch { }
   Start-Sleep -Milliseconds 400
-  # One process: health + market scan/price (market_ops jobs registered on this worker).
   Write-Host "Starting Argus worker (health + market ops)..."
-  $cmd = @"
-Set-Location '$Root'
-`$env:PYTHONPATH = '$Root\apps\api;$Root'
-& '$py' -m arq workers.health_supervisor.worker.WorkerSettings *> '$workerLog'
-"@
-  $proc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $cmd
-  )
+  $env:PYTHONPATH = "$Root\apps\api;$Root"
+  $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
+    -WorkingDirectory $Root `
+    -ArgumentList @("-m", "arq", "workers.health_supervisor.worker.WorkerSettings") `
+    -RedirectStandardOutput $workerLog `
+    -RedirectStandardError $workerErr
   return $proc.Id
 }
 
