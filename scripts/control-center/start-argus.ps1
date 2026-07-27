@@ -36,6 +36,12 @@ try {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
   }
 
+  # Login/API cannot work without Docker postgres+redis. Ensure before any
+  # "already running" / repair path so Start never leaves a hung :8000 listener.
+  if (-not (Ensure-ArgusInfra $Root)) {
+    throw "Docker infrastructure is not healthy. Open Docker Desktop and Start again."
+  }
+
   # Car model: if Argus is already running, Start must not stall on git sync /
   # cache wipe / full recycle. Only force a heavy Start when unhealthy or
   # ARGUS_FORCE_SYNC=1 (explicit refresh from GitHub).
@@ -62,9 +68,12 @@ try {
     exit 0
   }
 
-  # Light repair: dashboard up, API down — restart API only, no git sync.
+  # Light repair: dashboard up, API down — restart infra + API, no git sync.
   if ($eocReadyNow -and -not $apiReadyNow -and -not $forceSync) {
-    Write-Host "Dashboard up; API down — repairing API only (no git sync)."
+    Write-Host "Dashboard up; API down — repairing infra + API (no git sync)."
+    if (-not (Ensure-ArgusInfra $Root)) {
+      throw "Docker infrastructure is not healthy. Open Docker Desktop and Start again."
+    }
     $pids = Read-ArgusPids $Root
     $apiPid = Start-ArgusApiProcess $Root
     if (-not (Test-ArgusWorkerFresh $Root)) {
@@ -73,7 +82,9 @@ try {
       $workerPid = $pids.worker
     }
     Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
-    $null = Wait-HttpOk (Get-ArgusApiReadyUrl) 60 "API /ready"
+    if (-not (Wait-HttpOk (Get-ArgusApiReadyUrl) 90 "API /ready")) {
+      throw "API /ready still failing after repair. Check Docker Desktop and Start again."
+    }
     if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
     Write-Host "=== Argus started ==="
     exit 0

@@ -54,8 +54,8 @@ export async function POST(request: Request) {
       {
         ok: false,
         message: timedOut
-          ? "Login timed out reaching the Argus API. Confirm Argus is Running, then try again."
-          : "Unable to reach the Argus API. Confirm Argus is Running.",
+          ? "Argus API timed out. Open Docker Desktop, press Start Argus, then try again."
+          : "Unable to reach the Argus API. Open Docker Desktop if needed, press Start Argus, then try again.",
       },
       { status: 503 },
     );

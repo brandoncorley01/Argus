@@ -120,6 +120,51 @@ function Wait-HttpOk([string]$Url, [int]$TimeoutSec = 90, [string]$Label = "serv
   return $false
 }
 
+function Test-ArgusInfraHealthy {
+  try {
+    $rows = @(docker ps --format "{{.Names}} {{.Status}}" 2>$null)
+    $pg = $false
+    $redis = $false
+    foreach ($row in $rows) {
+      if ($row -match "^argus-postgres\b" -and $row -match "\(healthy\)") { $pg = $true }
+      if ($row -match "^argus-redis\b" -and $row -match "\(healthy\)") { $redis = $true }
+    }
+    return ($pg -and $redis)
+  } catch {
+    return $false
+  }
+}
+
+function Ensure-ArgusInfra([string]$Root) {
+  # Lightweight: start postgres/redis only. Never git-sync here.
+  if (Test-ArgusInfraHealthy) {
+    Write-Host "OK  Postgres + Redis healthy"
+    return $true
+  }
+  Write-Host "Postgres/Redis not healthy — starting Docker infra..."
+  Push-Location $Root
+  try {
+    docker compose up -d postgres redis | Out-Host
+  } catch {
+    Write-Host "FAIL Could not start Docker infra: $($_.Exception.Message)"
+    Write-Host "Open Docker Desktop, then press Start Argus again."
+    Pop-Location
+    return $false
+  }
+  Pop-Location
+  $deadline = (Get-Date).AddSeconds(90)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-ArgusInfraHealthy) {
+      Write-Host "OK  Postgres + Redis healthy"
+      return $true
+    }
+    Start-Sleep -Seconds 2
+  }
+  Write-Host "FAIL Postgres/Redis did not become healthy within 90s"
+  Write-Host "Open Docker Desktop, then press Start Argus again."
+  return $false
+}
+
 function Read-ArgusPids([string]$Root) {
   $path = Get-ArgusPidFile $Root
   if (-not (Test-Path $path)) {
