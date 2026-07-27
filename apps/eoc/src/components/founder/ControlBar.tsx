@@ -24,24 +24,29 @@ function ControlButton({
   className,
   run,
   onDone,
+  disabled = false,
 }: {
   label: string;
   busyLabel: string;
   className: string;
   run: () => Promise<ActionResult>;
   onDone?: (result: ActionResult) => void;
+  disabled?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
+  const blocked = disabled || pending;
 
   return (
     <div className="control-btn-wrap">
       <button
         type="button"
         className={className}
-        disabled={pending}
+        disabled={blocked}
+        title={disabled ? "Argus is already Running." : undefined}
         onClick={() => {
+          if (blocked) return;
           setResult(null);
           startTransition(async () => {
             const res = await run();
@@ -69,10 +74,11 @@ export function ControlBar({
     status === "Running" ? "Running" : status === "Stopped" ? "Stopped" : "Paused";
   const statusHint =
     status === "Running"
-      ? "Argus stays Running until you press Stop."
+      ? "Start is greyed out while Running. Use Stop only when you want Argus off."
       : status === "Stopped"
-        ? "Press Start Argus once. It will keep running until Stop."
+        ? "Press Start Argus. It stays up until you press Stop."
         : "Paper trading is paused. Argus is still up.";
+  const startLabel = status === "Stopped" ? "Start Argus" : "Running";
 
   return (
     <section className="control-bar panel home-controls" aria-label="Start and stop Argus">
@@ -92,24 +98,24 @@ export function ControlBar({
       </div>
 
       <div className="control-primary">
-        {status === "Stopped" ? (
-          <ControlButton
-            label="Start Argus"
-            busyLabel="Starting…"
-            className="btn control-btn control-btn-start"
-            run={startArgusAction}
-            onDone={(res) => {
-              if (!res.ok) return;
-              window.setTimeout(() => {
-                window.location.assign("/today");
-              }, 3000);
-            }}
-          />
-        ) : null}
+        <ControlButton
+          label={startLabel}
+          busyLabel="Starting…"
+          className="btn control-btn control-btn-start"
+          disabled={status !== "Stopped"}
+          run={startArgusAction}
+          onDone={(res) => {
+            if (!res.ok) return;
+            window.setTimeout(() => {
+              window.location.assign("/today");
+            }, 3000);
+          }}
+        />
         <ControlButton
           label="Stop Argus"
           busyLabel="Stopping…"
           className="btn control-btn control-btn-stop"
+          disabled={status === "Stopped"}
           run={stopArgusAction}
         />
       </div>

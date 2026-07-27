@@ -122,20 +122,23 @@ export function CommandStatusBar({
       </div>
 
       <div className="command-actions">
-        {argusStatus === "Stopped" ? (
-          <button
-            type="button"
-            className="btn control-btn control-btn-start"
-            disabled={busy === "start"}
-            onClick={() => run("start", () => startArgusAction(), true)}
-          >
-            {busy === "start" ? "Starting…" : "Start Argus"}
-          </button>
-        ) : (
-          <span className="muted-note" role="status" style={{ alignSelf: "center" }}>
-            Argus stays Running until you press Stop.
-          </span>
-        )}
+        <button
+          type="button"
+          className="btn control-btn control-btn-start"
+          disabled={busy === "start" || argusStatus !== "Stopped"}
+          title={
+            argusStatus === "Stopped"
+              ? "Start Argus"
+              : "Argus is already Running. Press Stop only when you want it off."
+          }
+          onClick={() => run("start", () => startArgusAction(), true)}
+        >
+          {busy === "start"
+            ? "Starting…"
+            : argusStatus === "Stopped"
+              ? "Start Argus"
+              : "Running"}
+        </button>
         <button
           type="button"
           className="btn secondary control-btn"
@@ -166,7 +169,7 @@ export function CommandStatusBar({
       </div>
       {busy === "start" ? (
         <p className="muted-note" role="status">
-          Starting… Argus will stay up until you press Stop.
+          Starting… button will show Running when Argus is up.
         </p>
       ) : null}
       <Feedback result={result} />
