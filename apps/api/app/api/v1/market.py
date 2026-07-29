@@ -445,19 +445,16 @@ def run_scan(
     # Automatic Practice may open paper trades after a successful scan (paper only).
     # Failures are audited; scan response still returns.
     try:
-        from sqlalchemy import select
-
-        from app.models.paper_trading import PaperPortfolio
         from app.services.paper_training_service import PaperTrainingService
         from app.services.trading_intelligence_service import TradingIntelligenceService
 
         training = PaperTrainingService(db)
-        for portfolio in db.scalars(select(PaperPortfolio).limit(5)):
+        for portfolio_id in training.iter_automation_portfolio_ids():
             training.maybe_auto_enter_from_scan(
-                portfolio_id=portfolio.id, actor=principal
+                portfolio_id=portfolio_id, actor=principal
             )
             training.evaluate_paper_exits(
-                portfolio_id=portfolio.id, actor=principal
+                portfolio_id=portfolio_id, actor=principal
             )
         try:
             TradingIntelligenceService(db).resolve_pending_misses()

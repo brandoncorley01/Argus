@@ -171,22 +171,19 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                 auto_opened = 0
                 auto_exits = 0
                 try:
-                    from sqlalchemy import select
-
-                    from app.models.paper_trading import PaperPortfolio
                     from app.services.paper_training_service import PaperTrainingService
                     from app.services.trading_intelligence_service import (
                         TradingIntelligenceService,
                     )
 
                     training = PaperTrainingService(session)
-                    for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
+                    for portfolio_id in training.iter_automation_portfolio_ids():
                         opened = training.maybe_auto_enter_from_scan(
-                            portfolio_id=portfolio.id, actor=None
+                            portfolio_id=portfolio_id, actor=None
                         )
                         auto_opened += len(opened)
                         exits = training.evaluate_paper_exits(
-                            portfolio_id=portfolio.id, actor=None
+                            portfolio_id=portfolio_id, actor=None
                         )
                         auto_exits += len(exits)
                     TradingIntelligenceService(session).resolve_pending_misses()
@@ -240,16 +237,13 @@ async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
                 )
                 auto_exits = 0
                 try:
-                    from sqlalchemy import select
-
-                    from app.models.paper_trading import PaperPortfolio
                     from app.services.paper_training_service import PaperTrainingService
 
                     training = PaperTrainingService(session)
-                    for portfolio in session.scalars(select(PaperPortfolio).limit(5)):
+                    for portfolio_id in training.iter_automation_portfolio_ids():
                         auto_exits += len(
                             training.evaluate_paper_exits(
-                                portfolio_id=portfolio.id, actor=None
+                                portfolio_id=portfolio_id, actor=None
                             )
                         )
                 except Exception as exc:  # noqa: BLE001

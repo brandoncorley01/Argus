@@ -78,8 +78,26 @@ export function ActiveTrades({
           p.mark_price == null ||
           p.unrealized_pnl == null ||
           absurdEntry;
+        const stop = p.stop_loss != null ? Number(p.stop_loss) : null;
+        const target = p.take_profit != null ? Number(p.take_profit) : null;
+        const isLong = p.side === "long" || Number(p.quantity) > 0;
+        const stopBreached =
+          !stale &&
+          mark != null &&
+          stop != null &&
+          Number.isFinite(mark) &&
+          Number.isFinite(stop) &&
+          (isLong ? mark <= stop : mark >= stop);
+        const targetHit =
+          !stale &&
+          !stopBreached &&
+          mark != null &&
+          target != null &&
+          Number.isFinite(mark) &&
+          Number.isFinite(target) &&
+          (isLong ? mark >= target : mark <= target);
         const boughtOrSold =
-          p.side === "long" || Number(p.quantity) > 0 ? "Bought" : "Sold";
+          isLong ? "Bought" : "Sold";
         return (
           <article key={p.id} className="open-trade-card">
             <header className="open-trade-head">
@@ -153,6 +171,17 @@ export function ActiveTrades({
                 Current market price is outdated. Profit/loss cannot be
                 calculated safely. Refresh recent prices, then return here.
               </p>
+            ) : stopBreached ? (
+              <p className="attention-box" role="alert">
+                Stop-loss is breached (price {money(p.mark_price)} vs stop{" "}
+                {money(p.stop_loss)}). Argus should close this paper trade on
+                the next exit pass.
+              </p>
+            ) : targetHit ? (
+              <p className="attention-box" role="status">
+                Profit target reached. Argus should close this paper trade on
+                the next exit pass.
+              </p>
             ) : (
               <p>
                 <strong>What Argus is doing now:</strong> Monitoring this open
@@ -160,9 +189,13 @@ export function ActiveTrades({
               </p>
             )}
             <p className="muted-note">
-              Why Argus is continuing to hold: the exit rules have not been met
-              yet
-              {p.state ? ` (state: ${p.state})` : ""}.
+              {stopBreached
+                ? "Exit rule: stop-loss — overdue until the worker closes it."
+                : targetHit
+                  ? "Exit rule: take-profit — waiting for the worker close."
+                  : `Why Argus is continuing to hold: the exit rules have not been met yet${
+                      p.state ? ` (state: ${p.state})` : ""
+                    }.`}
             </p>
             {portfolioId ? (
               <ClearPaperSymbolButton
