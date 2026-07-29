@@ -55,8 +55,14 @@ Feedback → paper analysis → suggested adjustment → backtest → paper vali
 Statuses: Not Enough Evidence → Early Testing → Needs Improvement →
 Consistent in Paper → Eligible for Formal Live Review.
 
+**There is no hard 10-day cutoff.** Paper training continues until Argus shows
+stable, profitable paper evidence and open defects are resolved. Observation
+progress may show days toward a longer review window (currently 30 calendar
+days with activity), but that never unlocks Live trading.
+
 **Eligible for Formal Live Review does not unlock Live.** Existing micro-live
-authorization remains required.
+authorization remains required. Live trading stays locked until explicit
+Founder certification.
 
 ## Key APIs
 

@@ -429,10 +429,13 @@ class PaperTrainingService:
                 "status": "Not Enough Evidence",
                 "detail": "Complete at least 5 closed paper trades before judging consistency.",
             }
-        if closed_count < 15:
+        if closed_count < 20:
             return {
                 "status": "Early Testing",
-                "detail": "Still early. Keep practicing and recording Founder feedback.",
+                "detail": (
+                    "Paper training continues — no calendar cutoff. Keep practicing "
+                    "until results are consistently profitable and stable. Live stays locked."
+                ),
             }
         issues = []
         if win_rate is not None and win_rate < Decimal("0.4"):
@@ -441,24 +444,35 @@ class PaperTrainingService:
             issues.append("losses outweigh wins")
         if max_dd > Decimal("500"):
             issues.append("drawdown is large for this paper size")
-        if feedback_count < 3:
+        if feedback_count < 5:
             issues.append("few Founder feedback notes")
         if issues:
             return {
                 "status": "Needs Improvement",
-                "detail": "Issues: " + "; ".join(issues) + ".",
+                "detail": "Issues: " + "; ".join(issues) + ". Paper continues until fixed.",
             }
-        if closed_count >= 30 and feedback_count >= 10:
+        if (
+            closed_count >= 40
+            and feedback_count >= 15
+            and profit_factor is not None
+            and profit_factor >= Decimal("1.2")
+            and win_rate is not None
+            and win_rate >= Decimal("0.45")
+        ):
             return {
                 "status": "Eligible for Formal Live Review",
                 "detail": (
-                    "Paper evidence looks substantial. Live trading still requires the "
-                    "existing formal authorization path — this status does not unlock it."
+                    "Paper evidence looks substantial and profitable. Live trading still "
+                    "requires the existing formal authorization path — this status does "
+                    "not unlock it. Paper practice continues until Founder certifies."
                 ),
             }
         return {
             "status": "Consistent in Paper",
-            "detail": "Paper results look steady. Continue coaching and reviews before Live.",
+            "detail": (
+                "Paper results look steadier. Continue Automatic Practice until "
+                "profitability and bug stability are proven. Live remains locked."
+            ),
         }
 
     def iter_automation_portfolio_ids(self) -> list[uuid.UUID]:

@@ -58,12 +58,24 @@ export function ExecutiveBriefing({
   const cert = briefing?.certification_progress;
   const days = cert?.trading_days_counted ?? mission?.certification_progress?.days ?? 0;
   const need =
-    cert?.required_trading_days ?? mission?.certification_progress?.required ?? 10;
+    cert?.required_trading_days ?? mission?.certification_progress?.required ?? 30;
   const summary =
     briefing?.trading_intelligence_summary ?? briefing?.bullets ?? [];
   const top = briefing?.highest_priority_opportunity;
   const watch = briefing?.watchlist_intelligence;
-  const opportunities = (watch?.top_opportunities ?? []).slice(0, 5);
+  const opportunities = (() => {
+    const raw = watch?.top_opportunities ?? [];
+    const seen = new Set<string>();
+    const out: Opportunity[] = [];
+    for (const o of raw) {
+      const key = `${o.symbol}|${o.stage ?? ""}|${o.recommendation ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(o);
+      if (out.length >= 5) break;
+    }
+    return out;
+  })();
 
   return (
     <section className="panel rise executive-briefing" aria-label="Executive Briefing">
@@ -92,10 +104,13 @@ export function ExecutiveBriefing({
           </div>
         </div>
         <div>
-          <div className="metric-label">Certification</div>
+          <div className="metric-label">Paper observation</div>
           <div className="metric-value" style={{ fontSize: "1.15rem" }}>
             {days}/{need} days
           </div>
+          <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
+            Paper continues until profitable &amp; stable. Live locked.
+          </p>
         </div>
       </div>
 
@@ -110,13 +125,13 @@ export function ExecutiveBriefing({
         <h3>Trading intelligence</h3>
         <ul className="ops-confidence-list">
           {summary.length > 0 ? (
-            summary.slice(0, 5).map((b) => <li key={b}>{b}</li>)
+            summary.slice(0, 5).map((b, i) => <li key={`sum-${i}-${b.slice(0, 32)}`}>{b}</li>)
           ) : (
             <li className="muted-note">No closed-paper intelligence yet.</li>
           )}
         </ul>
-        {(briefing?.thinking ?? []).slice(0, 3).map((t) => (
-          <p key={t.text} className="muted-note">
+        {(briefing?.thinking ?? []).slice(0, 3).map((t, i) => (
+          <p key={`think-${i}-${(t.text ?? "").slice(0, 32)}`} className="muted-note">
             {t.text}
           </p>
         ))}
@@ -150,8 +165,8 @@ export function ExecutiveBriefing({
           Watching {watch?.markets_watching ?? 0} · Ready {watch?.markets_ready ?? 0} ·
           Recommendation {watch?.current_recommendation ?? "WAIT"}
         </p>
-        {(watch?.waiting_conditions ?? []).slice(0, 3).map((w) => (
-          <p key={w} className="muted-note">
+        {(watch?.waiting_conditions ?? []).slice(0, 3).map((w, i) => (
+          <p key={`wait-${i}-${w.slice(0, 24)}`} className="muted-note">
             Waiting: {w}
           </p>
         ))}
@@ -159,8 +174,8 @@ export function ExecutiveBriefing({
           <p className="muted-note">No top watchlist opportunities.</p>
         ) : (
           <ul className="ops-confidence-list">
-            {opportunities.map((o) => (
-              <li key={o.symbol}>
+            {opportunities.map((o, i) => (
+              <li key={`${o.symbol}-${o.stage ?? "x"}-${o.recommendation ?? "r"}-${i}`}>
                 {o.symbol} · {o.stage} · {o.confidence_label} · {o.recommendation}
               </li>
             ))}

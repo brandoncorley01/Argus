@@ -5,9 +5,13 @@ import type { CockpitSnapshot } from "@/lib/founder/cockpitTypes";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const data = await apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit");
+    const url = new URL(req.url);
+    const portfolioId = url.searchParams.get("portfolioId");
+    const data = await apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit", {
+      searchParams: portfolioId ? { portfolio_id: portfolioId } : undefined,
+    });
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Cockpit unavailable";

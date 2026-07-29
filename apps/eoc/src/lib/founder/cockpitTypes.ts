@@ -88,6 +88,8 @@ export type CockpitSnapshot = {
   awaiting_confirmation: number;
   risk_check_count: number;
   open_trades: number;
+  open_position_symbols?: string[];
+  focus_symbols?: string[];
   market_data_at: string | null;
   market_data_stale: boolean;
   market_data_age_seconds: number | null;

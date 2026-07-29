@@ -166,14 +166,10 @@ class MarketScanService:
             .limit(1)
         )
 
-        # Live open count — do not trust stale cycle.pipeline_counts["positions"].
-        open_positions_live = len(
-            list(
-                self.db.scalars(
-                    select(PaperPosition).where(PaperPosition.quantity != 0)
-                )
-            )
-        )
+        # Live open count — Founder book only when possible. Never sum fixture
+        # portfolios (that made Live Desk show "11 open" while Active Trades
+        # showed 2 real positions).
+        open_positions_live, _open_syms = self._founder_open_positions()
         pipeline = dict((cycle.pipeline_counts if cycle else {}) or {})
         pipeline["positions"] = open_positions_live
 
@@ -1117,7 +1113,57 @@ class MarketScanService:
             "resistance": float(target) if target is not None else None,
         }
 
-    def cockpit_snapshot(self, *, default_notional: Decimal = Decimal("100")) -> dict[str, Any]:
+    def _founder_open_positions(
+        self, portfolio_id: uuid.UUID | None = None
+    ) -> tuple[int, list[str]]:
+        """Open paper positions for the Founder book (not fixture portfolios).
+
+        Preference: explicit portfolio_id → automatic-mode books → any book with
+        open size excluding absurd test marks (BTC avg cost < 1000, etc.).
+        """
+        from app.models.paper_training import PaperTrainingSettings
+
+        q = select(PaperPosition).where(PaperPosition.quantity != 0)
+        if portfolio_id is not None:
+            rows = list(
+                self.db.scalars(q.where(PaperPosition.portfolio_id == portfolio_id))
+            )
+            syms = sorted({p.symbol for p in rows})
+            return len(rows), syms
+
+        auto_ids = set(
+            self.db.scalars(
+                select(PaperTrainingSettings.portfolio_id).where(
+                    PaperTrainingSettings.mode == "automatic"
+                )
+            ).all()
+        )
+        if auto_ids:
+            rows = list(
+                self.db.scalars(q.where(PaperPosition.portfolio_id.in_(auto_ids)))
+            )
+            syms = sorted({p.symbol for p in rows})
+            return len(rows), syms
+
+        # Fallback: exclude obvious fixture junk (unit-test BTC/ETH at fake prices).
+        rows = []
+        for p in self.db.scalars(q):
+            cost = Decimal(p.average_cost or 0)
+            sym = (p.symbol or "").upper()
+            if sym.startswith("BTC") and cost < Decimal("1000"):
+                continue
+            if sym.startswith("ETH") and cost < Decimal("50"):
+                continue
+            rows.append(p)
+        syms = sorted({p.symbol for p in rows})
+        return len(rows), syms
+
+    def cockpit_snapshot(
+        self,
+        *,
+        default_notional: Decimal = Decimal("100"),
+        portfolio_id: uuid.UUID | None = None,
+    ) -> dict[str, Any]:
         """Aggregated Founder cockpit: wall, watches, gauges — genuine data only."""
         status = self.plain_status_summary()
         now = _utcnow()
@@ -1130,12 +1176,8 @@ class MarketScanService:
         )
         candidates = self.list_candidates(limit=50)
         by_symbol = {c.symbol: c for c in candidates}
-        open_syms = {
-            p.symbol
-            for p in self.db.scalars(
-                select(PaperPosition).where(PaperPosition.quantity != 0)
-            )
-        }
+        open_count, open_position_symbols = self._founder_open_positions(portfolio_id)
+        open_syms = set(open_position_symbols)
         wall: list[dict[str, Any]] = []
         for inst in instruments:
             rows, timeframe, close_time = self._load_bar_rows(inst.id, limit=30)
@@ -1178,9 +1220,19 @@ class MarketScanService:
 
         watches = []
         for cand in candidates:
+            # Active focus stages first; Expired stays visible but must not freeze Live Desk.
             if cand.stage not in {"Watching", "Risk Review", "Evaluating", "Expired"}:
                 continue
             watches.append(self._founder_watch_plan(cand, default_notional=default_notional))
+        # Stable order: active watches before expired so UI rotation prefers live work.
+        watches.sort(
+            key=lambda w: (
+                0
+                if w["stage_raw"] in {"Watching", "Risk Review", "Evaluating"}
+                else 1,
+                w.get("symbol") or "",
+            )
+        )
 
         awaiting = [w for w in watches if w["stage_raw"] == "Watching"]
         risk_check = [w for w in watches if w["stage_raw"] == "Risk Review"]
@@ -1188,6 +1240,16 @@ class MarketScanService:
         doing = self._doing_lines(status, candidates)
         decided = self._decided_lines(limit=24)
         current_market = status.get("current_market")
+        focus_symbols = list(
+            dict.fromkeys(
+                [
+                    *open_position_symbols,
+                    *[w["symbol"] for w in awaiting],
+                    *[w["symbol"] for w in risk_check],
+                    *([current_market] if current_market else []),
+                ]
+            )
+        )
         monitor = self._monitor_rows(
             wall, current_market=current_market, now=now
         )
@@ -1240,12 +1302,9 @@ class MarketScanService:
             "watching_count": len(awaiting),
             "awaiting_confirmation": len(awaiting),
             "risk_check_count": len(risk_check),
-            "open_trades": int(
-                status.get("open_positions_live")
-                if status.get("open_positions_live") is not None
-                else (status.get("pipeline_counts") or {}).get("positions")
-                or 0
-            ),
+            "open_trades": open_count,
+            "open_position_symbols": open_position_symbols,
+            "focus_symbols": focus_symbols,
             "market_data_at": _as_iso(status.get("market_data_at")),
             "market_data_stale": bool(status.get("market_data_stale")),
             "market_data_age_seconds": status.get("market_data_age_seconds"),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -328,6 +330,7 @@ def scan_candidates(
 
 @router.get("/scan/cockpit", response_model=CockpitSnapshotRead)
 def scan_cockpit(
+    portfolio_id: uuid.UUID | None = None,
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     service: MarketScanService = Depends(get_scan_service),
     db: Session = Depends(get_db),
@@ -343,6 +346,7 @@ def scan_cockpit(
     from sqlalchemy import select
 
     from app.models.paper_trading import PaperPortfolio
+    from app.models.paper_training import PaperTrainingSettings
     from app.services.market_scan_service import (
         CANDIDATE_WATCH_TTL,
         SCAN_INTERVAL,
@@ -350,18 +354,35 @@ def scan_cockpit(
     from app.services.paper_training_service import PaperTrainingService
 
     notional = Decimal("100")
+    resolved_portfolio_id = portfolio_id
     try:
-        portfolio = db.scalars(select(PaperPortfolio).limit(1)).first()
-        if portfolio is not None:
+        if resolved_portfolio_id is None:
+            auto = db.scalars(
+                select(PaperTrainingSettings.portfolio_id).where(
+                    PaperTrainingSettings.mode == "automatic"
+                )
+            ).first()
+            if auto is not None:
+                resolved_portfolio_id = auto
+            else:
+                # Prefer newest portfolio (Founder book) over oldest fixture books.
+                newest = db.scalars(
+                    select(PaperPortfolio).order_by(PaperPortfolio.created_at.desc())
+                ).first()
+                if newest is not None:
+                    resolved_portfolio_id = newest.id
+        if resolved_portfolio_id is not None:
             try:
                 settings = PaperTrainingService(db).get_or_create_settings(
-                    portfolio.id
+                    resolved_portfolio_id
                 )
                 notional = settings.default_notional
             except Exception:  # noqa: BLE001 — cockpit works without training tables
                 db.rollback()
                 notional = Decimal("100")
-        snap = service.cockpit_snapshot(default_notional=notional)
+        snap = service.cockpit_snapshot(
+            default_notional=notional, portfolio_id=resolved_portfolio_id
+        )
         return CockpitSnapshotRead.model_validate(snap)
     except Exception as exc:  # noqa: BLE001 — degraded cockpit, never blank Home
         db.rollback()
@@ -383,6 +404,8 @@ def scan_cockpit(
                 "awaiting_confirmation": 0,
                 "risk_check_count": 0,
                 "open_trades": 0,
+                "open_position_symbols": [],
+                "focus_symbols": [],
                 "market_data_at": None,
                 "market_data_stale": True,
                 "market_data_age_seconds": None,

@@ -96,9 +96,18 @@ type PaperPulse = {
   closed_trade_count: number;
   total_realized_pnl: string;
   open_unrealized_pnl?: string;
+  open_positions?: Array<{
+    symbol: string;
+    unrealized_pnl: string | null;
+    mark_price: string | null;
+    stop_loss: string | null;
+    take_profit: string | null;
+  }>;
   mode: "automatic" | "coaching";
   default_notional: string;
 };
+
+const DESK_ROTATE_MS = 8_000;
 
 function Sparkline({
   values,
@@ -318,6 +327,7 @@ export function TradingCockpit({
   const [pending, startTransition] = useTransition();
   const [mode, setMode] = useState<"automatic" | "coaching">(trainingMode);
   const [liveAccount, setLiveAccount] = useState(account);
+  const [openSymbols, setOpenSymbols] = useState<string[]>([]);
   const [closedCount, setClosedCount] = useState(0);
   const [liveTotalPnl, setLiveTotalPnl] = useState<number | null>(totalPnl);
   const [openUnrealized, setOpenUnrealized] = useState<number | null>(null);
@@ -328,6 +338,7 @@ export function TradingCockpit({
   const [keepAliveNote, setKeepAliveNote] = useState<string | null>(null);
   // null until mount — Date.now() in useState breaks hydration vs SSR HTML
   const [now, setNow] = useState<number | null>(null);
+  const [userPinnedUntil, setUserPinnedUntil] = useState(0);
 
   useEffect(() => {
     setNow(Date.now());
@@ -339,7 +350,10 @@ export function TradingCockpit({
     let cancelled = false;
     const poll = async () => {
       try {
-        const res = await fetch("/api/founder/cockpit", { cache: "no-store" });
+        const q = portfolioId
+          ? `?portfolioId=${encodeURIComponent(portfolioId)}`
+          : "";
+        const res = await fetch(`/api/founder/cockpit${q}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as CockpitSnapshot;
         if (cancelled) return;
@@ -373,7 +387,7 @@ export function TradingCockpit({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [portfolioId]);
 
   useEffect(() => {
     if (!portfolioId) return;
@@ -401,6 +415,9 @@ export function TradingCockpit({
           inTrades: data.summary.committed_capital,
           openCount: data.summary.open_position_count,
         });
+        setOpenSymbols(
+          (data.open_positions ?? []).map((p) => p.symbol).filter(Boolean),
+        );
       } catch {
         /* keep last good pulse */
       }
@@ -487,6 +504,42 @@ export function TradingCockpit({
     };
   }, [selected, cockpit?.generated_at]);
 
+  // Rotate Live Desk focus across open positions + active watches (skip Expired).
+  useEffect(() => {
+    const rotate = () => {
+      if (Date.now() < userPinnedUntil) return;
+      const fromCockpit = cockpit?.focus_symbols?.length
+        ? cockpit.focus_symbols
+        : [
+            ...(cockpit?.open_position_symbols ?? []),
+            ...(cockpit?.watches ?? [])
+              .filter((w) =>
+                ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
+              )
+              .map((w) => w.symbol),
+            ...(cockpit?.current_market ? [cockpit.current_market] : []),
+          ];
+      const roster = Array.from(
+        new Set([...openSymbols, ...fromCockpit].filter(Boolean)),
+      );
+      if (roster.length === 0) return;
+      setSelected((prev) => {
+        if (!prev || !roster.includes(prev)) return roster[0] ?? null;
+        const idx = roster.indexOf(prev);
+        return roster[(idx + 1) % roster.length] ?? roster[0] ?? null;
+      });
+    };
+    const id = window.setInterval(rotate, DESK_ROTATE_MS);
+    return () => window.clearInterval(id);
+  }, [
+    cockpit?.focus_symbols,
+    cockpit?.open_position_symbols,
+    cockpit?.watches,
+    cockpit?.current_market,
+    openSymbols,
+    userPinnedUntil,
+  ]);
+
   const nextScanSec = useMemo(() => {
     if (!cockpit?.next_scan_at) return null;
     if (now == null) {
@@ -499,8 +552,15 @@ export function TradingCockpit({
   }, [cockpit?.next_scan_at, cockpit?.generated_at, now]);
 
   const watch: CockpitWatch | null =
+    cockpit?.watches.find(
+      (w) =>
+        w.symbol === selected &&
+        w.stage_raw !== "Expired",
+    ) ??
+    cockpit?.watches.find((w) =>
+      ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
+    ) ??
     cockpit?.watches.find((w) => w.symbol === selected) ??
-    cockpit?.watches[0] ??
     null;
   const tile: CockpitWallTile | null =
     cockpit?.wall.find((w) => w.symbol === selected) ?? null;
@@ -530,7 +590,12 @@ export function TradingCockpit({
   // 1m/5m charts: fresh ≤3m, warn ≤10m
   const feedOk = feedAge != null && feedAge <= 180;
   const feedWarn = feedAge != null && feedAge > 180 && feedAge <= 600;
-  const openCount = cockpit.open_trades || liveAccount.openCount || positionsOpen;
+  const openCount =
+    liveAccount.openCount ||
+    positionsOpen ||
+    (cockpit.open_position_symbols?.length ?? 0) ||
+    cockpit.open_trades ||
+    0;
   const watchingN = cockpit.watching_count;
   const statusChips: Array<{ label: string; tone: "ok" | "warn" | "bad" | "neutral" }> =
     [];
@@ -834,7 +899,10 @@ export function TradingCockpit({
                 className={`wall-tile ${selected === t.symbol ? "is-selected" : ""} ${
                   flash === t.symbol ? "flash" : ""
                 } ${t.stale ? "is-stale" : ""}`}
-                onClick={() => setSelected(t.symbol)}
+                onClick={() => {
+                  setUserPinnedUntil(Date.now() + 45_000);
+                  setSelected(t.symbol);
+                }}
               >
                 <header>
                   <strong>{t.symbol}</strong>
@@ -1122,7 +1190,13 @@ export function TradingCockpit({
                     .slice(0, 10)
                     .map((w) => (
                       <li key={w.id}>
-                        <button type="button" onClick={() => setSelected(w.symbol)}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUserPinnedUntil(Date.now() + 45_000);
+                            setSelected(w.symbol);
+                          }}
+                        >
                           <strong>{w.symbol}</strong>
                           <span>{w.stage_raw}</span>
                           <em>{w.why || w.waiting_for || w.narrative}</em>
@@ -1148,7 +1222,13 @@ export function TradingCockpit({
                 <ul className="live-activity-list">
                   {cockpit.rejected_live!.slice(0, 12).map((r, i) => (
                     <li key={`${r.symbol}-${i}`}>
-                      <button type="button" onClick={() => setSelected(r.symbol)}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserPinnedUntil(Date.now() + 45_000);
+                          setSelected(r.symbol);
+                        }}
+                      >
                         <strong>{r.symbol}</strong>
                         <span>{r.stage}</span>
                         <em>{r.why}</em>
@@ -1194,7 +1274,10 @@ export function TradingCockpit({
                 key={row.symbol}
                 role="listitem"
                 className={`live-monitor-row phase-${row.phase}${row.focus ? " is-focus" : ""}${selected === row.symbol ? " is-selected" : ""}`}
-                onClick={() => setSelected(row.symbol)}
+                onClick={() => {
+                  setUserPinnedUntil(Date.now() + 45_000);
+                  setSelected(row.symbol);
+                }}
               >
                 <header>
                   <strong>{row.symbol}</strong>

@@ -31,7 +31,7 @@ from app.services.plain_language import confidence_from_score, plain_rejection
 STRATEGY_KEY = "sma_crossover"
 STRATEGY_VERSION = "sma_crossover@1"
 CONFIDENCE_SCORING_VERSION = "confidence@2"
-CERT_REQUIRED_DAYS = 10
+CERT_REQUIRED_DAYS = 30
 CERT_MAX_DRAWDOWN = Decimal("500")  # paper dollars observational threshold
 SIMULATED_COST_BPS = Decimal("10")  # 10 bps each way observational haircut
 
@@ -611,7 +611,9 @@ class TradingIntelligenceService:
                 max_dd = max(max_dd, Decimal(str(r.max_drawdown)))
 
         checks = {
-            "ten_consecutive_trading_days": trading_days >= CERT_REQUIRED_DAYS,
+            # Calendar gate is observational only — paper continues until
+            # profitable evidence + stability; never unlocks live trading.
+            "paper_observation_days_met": trading_days >= CERT_REQUIRED_DAYS,
             "no_unresolved_critical_incidents": int(open_critical) == 0,
             "no_duplicate_logical_orders": duplicate_logical == 0,
             "no_reconciliation_failures": True,  # no separate recon failure store yet

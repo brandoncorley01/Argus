@@ -147,6 +147,8 @@ class CockpitSnapshotRead(BaseModel):
     awaiting_confirmation: int
     risk_check_count: int
     open_trades: int
+    open_position_symbols: list[str] = []
+    focus_symbols: list[str] = []
     market_data_at: datetime | None = None
     market_data_stale: bool
     market_data_age_seconds: int | None = None
