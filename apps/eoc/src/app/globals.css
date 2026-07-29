@@ -1840,4 +1840,5 @@ button.action-card:disabled { opacity: 0.55; cursor: not-allowed; }
   .focus-grid { grid-template-columns: 1fr; }
   .decided-list li { grid-template-columns: 1fr; }
   .plan-meters { grid-template-columns: 1fr; }
+  .live-activity-boards { grid-template-columns: 1fr; }
 }

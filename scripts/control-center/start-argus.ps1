@@ -141,6 +141,18 @@ try {
       $pids.worker = Start-ArgusWorkerProcess $Root
       Write-ArgusPids -Root $Root -ApiPid $pids.api -EocPid $pids.eoc -WorkerPid $pids.worker
       Start-Sleep -Seconds 2
+    } else {
+      # Recycle if ARQ backlog is building again (silent starvation risk).
+      try {
+        $arqKeys = @(docker exec argus-redis redis-cli --scan --pattern "arq:*" 2>$null)
+        if ($arqKeys.Count -gt 80) {
+          Write-Host ("ARQ backlog {0} keys — recycling worker..." -f $arqKeys.Count)
+          $pids = Read-ArgusPids $Root
+          $pids.worker = Start-ArgusWorkerProcess $Root
+          Write-ArgusPids -Root $Root -ApiPid $pids.api -EocPid $pids.eoc -WorkerPid $pids.worker
+          Start-Sleep -Seconds 2
+        }
+      } catch { }
     }
     $sha = (git rev-parse --short HEAD).Trim()
     $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
