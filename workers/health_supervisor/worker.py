@@ -255,4 +255,6 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _redis_settings()
-    max_jobs = 1
+    # Allow health, scan, and price refresh to overlap. max_jobs=1 caused
+    # multi-hour cron backlog (1000+ queued jobs) while the UI still said Running.
+    max_jobs = 3

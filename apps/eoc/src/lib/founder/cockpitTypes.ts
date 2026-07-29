@@ -100,6 +100,15 @@ export type CockpitSnapshot = {
   monitor?: CockpitMonitorRow[];
   doing: Array<{ text: string; tone: string }>;
   decided: Array<{ id: string; at: string; text: string; tone: string }>;
+  rejection_summary?: Array<{ code: string; count: number; why: string }>;
+  rejected_live?: Array<{
+    symbol: string;
+    stage: string;
+    reason_code: string | null;
+    why: string;
+    evaluated_at: string | null;
+  }>;
+  last_cycle_completed_at?: string | null;
   scan_interval_seconds: number;
   watch_ttl_seconds: number;
 };

@@ -1,1 +1,1 @@
-live-monitor-v1.6 5285c16
+live-monitor-v1.7 pending

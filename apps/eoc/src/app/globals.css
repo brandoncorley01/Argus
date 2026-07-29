@@ -1701,6 +1701,64 @@ button.action-card:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .live-monitor-panel { border: 2px solid var(--accent); }
 .live-monitor-strip { margin-bottom: 0.65rem; }
+.live-activity-boards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem;
+  margin: 0 0 0.85rem;
+}
+.live-activity-col {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.75rem;
+  background: var(--paper-elevated);
+  min-height: 6rem;
+}
+.live-activity-title {
+  margin: 0 0 0.45rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.live-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+.live-activity-list li button,
+.live-activity-list.rejects-tally li {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 0.2rem 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.55rem;
+  cursor: pointer;
+  color: inherit;
+}
+.live-activity-list.rejects-tally li {
+  cursor: default;
+  grid-template-columns: auto 1fr;
+}
+.live-activity-list strong { font-size: 0.92rem; }
+.live-activity-list span {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.live-activity-list em {
+  grid-column: 1 / -1;
+  font-style: normal;
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  opacity: 0.92;
+}
 .live-monitor-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

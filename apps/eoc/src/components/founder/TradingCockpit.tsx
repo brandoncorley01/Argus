@@ -1094,7 +1094,75 @@ export function TradingCockpit({
           <span className="status-chip tone-neutral">
             Beat {beatCount || 1}
           </span>
+          {mode === "coaching" ? (
+            <span className="status-chip tone-warn" title="Coaching mode does not auto-enter trades">
+              Coaching — no auto entries
+            </span>
+          ) : (
+            <span className="status-chip tone-ok">Automatic Practice</span>
+          )}
         </div>
+
+        {(cockpit.rejection_summary?.length ?? 0) > 0 ||
+        (cockpit.rejected_live?.length ?? 0) > 0 ||
+        (cockpit.watches?.length ?? 0) > 0 ? (
+          <div className="live-activity-boards" aria-label="Live watching and rejects">
+            <div className="live-activity-col">
+              <h3 className="live-activity-title">Watching now</h3>
+              {(cockpit.watches ?? []).filter((w) =>
+                ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
+              ).length === 0 ? (
+                <p className="muted-note">Nothing on watch this pass.</p>
+              ) : (
+                <ul className="live-activity-list">
+                  {(cockpit.watches ?? [])
+                    .filter((w) =>
+                      ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
+                    )
+                    .slice(0, 10)
+                    .map((w) => (
+                      <li key={w.id}>
+                        <button type="button" onClick={() => setSelected(w.symbol)}>
+                          <strong>{w.symbol}</strong>
+                          <span>{w.stage_raw}</span>
+                          <em>{w.why || w.waiting_for || w.narrative}</em>
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+            <div className="live-activity-col">
+              <h3 className="live-activity-title">Rejected this pass — why</h3>
+              {(cockpit.rejection_summary?.length ?? 0) > 0 ? (
+                <ul className="live-activity-list rejects-tally">
+                  {cockpit.rejection_summary!.map((r) => (
+                    <li key={r.code}>
+                      <strong>{r.count}×</strong>
+                      <em>{r.why}</em>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {(cockpit.rejected_live?.length ?? 0) > 0 ? (
+                <ul className="live-activity-list">
+                  {cockpit.rejected_live!.slice(0, 12).map((r, i) => (
+                    <li key={`${r.symbol}-${i}`}>
+                      <button type="button" onClick={() => setSelected(r.symbol)}>
+                        <strong>{r.symbol}</strong>
+                        <span>{r.stage}</span>
+                        <em>{r.why}</em>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (cockpit.rejection_summary?.length ?? 0) === 0 ? (
+                <p className="muted-note">No rejects logged for the latest pass yet.</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         <div className="live-monitor-grid" role="list">
           {(cockpit.monitor?.length ? cockpit.monitor : cockpit.wall.map((t) => ({
             symbol: t.symbol,
@@ -1164,13 +1232,13 @@ export function TradingCockpit({
       <section className="panel rise" aria-label="Decided">
         <div className="cockpit-head">
           <h2 style={{ marginTop: 0 }}>Decided</h2>
-          <span className="muted-note">Latest verified calls</span>
+          <span className="muted-note">Live stream — watching, rejects, entries</span>
         </div>
         <ul className="decided-list">
           {cockpit.decided.length === 0 ? (
-            <li className="muted-note">None yet</li>
+            <li className="muted-note">None yet this session</li>
           ) : (
-            cockpit.decided.slice(0, 8).map((d) => (
+            cockpit.decided.slice(0, 16).map((d) => (
               <li key={d.id} className={`tone-${d.tone}`}>
                 <time dateTime={d.at}>{formatTimestamp(d.at)}</time>
                 <span>{d.text}</span>

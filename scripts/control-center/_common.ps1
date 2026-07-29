@@ -238,6 +238,27 @@ function Start-ArgusApiProcess([string]$Root) {
   return $proc.Id
 }
 
+function Clear-ArgusArqBacklog {
+  # Drop stale ARQ jobs so minute scans are not buried under multi-hour backlog.
+  try {
+    $keys = @(docker exec argus-redis redis-cli --scan --pattern "arq:*" 2>$null)
+    if ($keys.Count -eq 0) {
+      Write-Host "OK  ARQ queue empty"
+      return
+    }
+    Write-Host ("Clearing {0} ARQ redis keys (stale job backlog)..." -f $keys.Count)
+    foreach ($batch in (0..([math]::Ceiling($keys.Count / 100) - 1))) {
+      $slice = $keys[($batch * 100)..([math]::Min(($batch + 1) * 100 - 1, $keys.Count - 1))]
+      if ($slice) {
+        docker exec argus-redis redis-cli DEL @slice 2>$null | Out-Null
+      }
+    }
+    Write-Host "OK  ARQ backlog cleared"
+  } catch {
+    Write-Host "WARN: could not clear ARQ backlog: $($_.Exception.Message)"
+  }
+}
+
 function Start-ArgusWorkerProcess([string]$Root) {
   $runtime = Get-ArgusRuntimeDir $Root
   $workerLog = Join-Path $runtime "worker.log"
@@ -262,7 +283,8 @@ function Start-ArgusWorkerProcess([string]$Root) {
       }
   } catch { }
   Start-Sleep -Milliseconds 400
-  Write-Host "Starting Argus worker (health + market ops)..."
+  Clear-ArgusArqBacklog
+  Write-Host "Starting Argus worker (health + market ops, max_jobs=3)..."
   $env:PYTHONPATH = "$Root\apps\api;$Root"
   $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
     -WorkingDirectory $Root `

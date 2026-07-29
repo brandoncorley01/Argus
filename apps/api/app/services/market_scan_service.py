@@ -1186,11 +1186,45 @@ class MarketScanService:
         risk_check = [w for w in watches if w["stage_raw"] == "Risk Review"]
 
         doing = self._doing_lines(status, candidates)
-        decided = self._decided_lines(limit=12)
+        decided = self._decided_lines(limit=24)
         current_market = status.get("current_market")
         monitor = self._monitor_rows(
             wall, current_market=current_market, now=now
         )
+
+        # Plain-language rejection strip for this pass (not a frozen snapshot essay).
+        from app.services.plain_language import plain_rejection
+
+        rej_raw = status.get("rejection_counts") or {}
+        rejection_summary = [
+            {
+                "code": str(code),
+                "count": int(n),
+                "why": plain_rejection(str(code)),
+            }
+            for code, n in sorted(
+                ((k, int(v)) for k, v in rej_raw.items() if int(v or 0) > 0),
+                key=lambda kv: -kv[1],
+            )[:8]
+        ]
+        # Latest rejected candidates with symbol + why (live teach stream).
+        rejected_live = []
+        for cand in candidates:
+            if cand.stage not in {"Rejected", "Expired"}:
+                continue
+            rejected_live.append(
+                {
+                    "symbol": cand.symbol,
+                    "stage": cand.stage,
+                    "reason_code": cand.reason_code,
+                    "why": plain_rejection(cand.reason_code, cand.reason_text),
+                    "evaluated_at": cand.evaluated_at.isoformat()
+                    if cand.evaluated_at
+                    else None,
+                }
+            )
+            if len(rejected_live) >= 16:
+                break
 
         scanned = int((status.get("scan_progress") or {}).get("scanned") or 0)
         total = int((status.get("scan_progress") or {}).get("total") or 0)
@@ -1230,6 +1264,11 @@ class MarketScanService:
                 }
                 for d in decided
             ],
+            "rejection_summary": rejection_summary,
+            "rejected_live": rejected_live,
+            "last_cycle_completed_at": _as_iso(
+                (status.get("cycle") or {}).get("completed_at")
+            ),
             "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
             "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
         }
@@ -1484,9 +1523,28 @@ class MarketScanService:
             )
         if status.get("market_data_stale"):
             lines.append({"text": "Feed stale — Update prices", "tone": "warn"})
+
+        # Surface this-pass rejection tallies so Live Monitor is not a green blink.
+        from app.services.plain_language import plain_rejection
+
+        rej = status.get("rejection_counts") or {}
+        if isinstance(rej, dict) and rej:
+            top = sorted(
+                ((str(k), int(v)) for k, v in rej.items() if int(v or 0) > 0),
+                key=lambda kv: -kv[1],
+            )[:3]
+            for code, n in top:
+                short = plain_rejection(code).split(".")[0]
+                lines.append(
+                    {
+                        "text": f"Rejected {n}× — {short}",
+                        "tone": "bad",
+                    }
+                )
+
         if not lines:
             lines.append({"text": "Standing by for next scan", "tone": "wait"})
-        return lines[:6]
+        return lines[:8]
 
     def _monitor_rows(
         self,
