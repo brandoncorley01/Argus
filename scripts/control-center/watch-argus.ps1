@@ -7,8 +7,19 @@ Set-Location $Root
 
 Write-Host "=== Argus operational watch ==="
 
+$desired = Read-ArgusDesiredState $Root
+if ($desired.running -and -not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
+  Write-Host "API down while desired=Running — invoking keepalive recovery..."
+  & "$PSScriptRoot\keep-argus-alive.ps1"
+}
+
 if (-not (Test-HttpOk (Get-ArgusApiHealthUrl))) {
-  Show-ArgusNotification -Title "Argus critical health issue" -Message "API health endpoint is down." -Level "critical"
+  $msg = if ($desired.running) {
+    "API health endpoint is down (keepalive could not restore it)."
+  } else {
+    "API health endpoint is down (Argus desired state is Stopped)."
+  }
+  Show-ArgusNotification -Title "Argus critical health issue" -Message $msg -Level "critical"
   Write-Host "API down - notified"
   exit 1
 }

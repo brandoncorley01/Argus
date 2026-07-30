@@ -35,6 +35,14 @@ New-ArgusShortcut "Generate Argus Daily Report" "generate-daily-report.ps1" "ARG
 New-ArgusShortcut "Open Argus Dashboard" "open-dashboard.ps1" "ARGUS DAILY - Open Home (alias)"
 
 Write-Host ""
+Write-Host "Installing Argus keepalive scheduled task..."
+try {
+  & "$PSScriptRoot\install-keepalive-task.ps1"
+} catch {
+  Write-Host "WARN: keepalive task not registered: $($_.Exception.Message)"
+}
+
+Write-Host ""
 Write-Host "Desktop shortcuts installed."
 Write-Host "Daily: Start / Open / End Trading Day / Stop"
 Write-Host "Tools: Status / Restart / Backup / Generate Report"

@@ -9,11 +9,17 @@ $apiUp = Test-HttpOk (Get-ArgusApiHealthUrl)
 $readyUp = Test-HttpOk (Get-ArgusApiReadyUrl)
 $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl))
 $workerUp = Test-ArgusWorkerFresh $Root
+$desired = Read-ArgusDesiredState $Root
+$infraUp = Test-ArgusInfraHealthy
+$dockerUp = Test-DockerEngineReady
 
-$running = if ($apiUp -or $eocUp) { "Running" } else { "Stopped" }
+$running = if ($apiUp -and $readyUp) { "Running" } elseif ($desired.running) { "Degraded (desired Running)" } elseif ($eocUp) { "Stopped (dashboard only)" } else { "Stopped" }
 
 Write-Host "=== Argus Status ==="
 Write-Host ("State:            {0}" -f $running)
+Write-Host ("Desired:          {0}" -f ($(if ($desired.running) { "Running" } else { "Stopped" })))
+Write-Host ("Docker engine:    {0}" -f ($(if ($dockerUp) { "up" } else { "down" })))
+Write-Host ("Postgres/Redis:   {0}" -f ($(if ($infraUp) { "healthy" } else { "down" })))
 Write-Host ("API health:       {0}" -f ($(if ($apiUp) { "up" } else { "down" })))
 Write-Host ("API ready:        {0}" -f ($(if ($readyUp) { "up" } else { "down" })))
 Write-Host ("EOC:              {0}" -f ($(if ($eocUp) { "up" } else { "down" })))

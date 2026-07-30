@@ -1,20 +1,46 @@
 ﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Home.
 $ErrorActionPreference = "Continue"
 
-# Self-update from GitHub first so browser Start cannot stay stuck on a stale script.
+# Optional self-update of THIS script only. Never overwrites a dirty local copy
+# unless ARGUS_FORCE_SYNC=1. Full-tree resets are gated the same way in Sync-ArgusCode.
 if (-not $env:ARGUS_START_SELF_UPDATED) {
   $env:ARGUS_START_SELF_UPDATED = "1"
   $self = $MyInvocation.MyCommand.Path
   if (-not $self) { $self = Join-Path $PSScriptRoot "start-argus.ps1" }
-  $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/start-argus.ps1"
+  $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
+  $skipSelfUpdate = $env:ARGUS_SKIP_START_SELF_UPDATE -eq "1"
+  $localDirty = $false
   try {
-    Write-Host "Downloading latest Start script from GitHub..."
-    Invoke-WebRequest -Uri "$url?$(Get-Random)" -OutFile $self -UseBasicParsing -TimeoutSec 30
-    Write-Host "Re-running updated Start script..."
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self @args
-    exit $LASTEXITCODE
-  } catch {
-    Write-Host "WARN: could not self-update Start script: $($_.Exception.Message)"
+    Push-Location (Split-Path $self -Parent)
+    $st = git status --porcelain -- "start-argus.ps1" 2>$null
+    if ($LASTEXITCODE -eq 0 -and "$st".Trim()) { $localDirty = $true }
+  } catch { } finally {
+    Pop-Location -ErrorAction SilentlyContinue
+  }
+  if ($skipSelfUpdate) {
+    Write-Host "Skipping Start script self-update (ARGUS_SKIP_START_SELF_UPDATE=1)."
+  } elseif ($localDirty -and -not $forceSync) {
+    Write-Host "Local start-argus.ps1 has uncommitted edits — skipping self-update (set ARGUS_FORCE_SYNC=1 to overwrite)."
+  } else {
+    $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/start-argus.ps1"
+    $tmp = Join-Path $env:TEMP ("argus-start-argus-{0}.ps1" -f [guid]::NewGuid().ToString("N"))
+    try {
+      Write-Host "Downloading latest Start script from GitHub..."
+      Invoke-WebRequest -Uri "$url?$(Get-Random)" -OutFile $tmp -UseBasicParsing -TimeoutSec 30
+      $remote = Get-Content -Raw $tmp
+      $local = if (Test-Path $self) { Get-Content -Raw $self } else { "" }
+      if ($remote -and ($forceSync -or $remote -ne $local)) {
+        Copy-Item -LiteralPath $tmp -Destination $self -Force
+        Write-Host "Re-running updated Start script..."
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self @args
+        exit $LASTEXITCODE
+      }
+      Write-Host "Start script already current."
+    } catch {
+      Write-Host "WARN: could not self-update Start script: $($_.Exception.Message)"
+    } finally {
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 
@@ -34,6 +60,15 @@ $KeepDashboard = $env:ARGUS_KEEP_DASHBOARD -eq "1"
 try {
   if (-not (Test-Path (Join-Path $Root ".env"))) {
     throw "Missing .env. Copy .env.paper.example or .env.example to .env first."
+  }
+
+  # Founder intent: Argus should stay up until Stop. Persist before repair so
+  # keepalive can recover Docker sleep / API crash without another click.
+  Write-ArgusDesiredState -Root $Root -Running $true
+  try {
+    & "$PSScriptRoot\install-keepalive-task.ps1"
+  } catch {
+    Write-Host "WARN: keepalive task not registered: $($_.Exception.Message)"
   }
 
   # Login/API cannot work without Docker postgres+redis. Ensure before any
@@ -171,18 +206,9 @@ try {
     exit 0
   }
 
-  # Force GitHub main onto this PC (Founder browser cadence).
+  # Pull GitHub main only when the tree is clean (or ARGUS_FORCE_SYNC=1).
+  # Never silently hard-reset local work — that wiped keepalive/login fixes before.
   $updated = Sync-ArgusCode $Root
-
-  # Also force-reset even if Sync helper returned false on a dirty tree.
-  try {
-    git fetch origin 2>&1 | Out-Host
-    git checkout -f -B main origin/main 2>&1 | Out-Host
-    git reset --hard origin/main 2>&1 | Out-Host
-    $updated = $true
-  } catch {
-    Write-Host "WARN: extra force-sync skipped: $($_.Exception.Message)"
-  }
 
   $sha = (git rev-parse --short HEAD).Trim()
   $buildMarker = Join-Path $Root "apps\eoc\public\argus-build.txt"
