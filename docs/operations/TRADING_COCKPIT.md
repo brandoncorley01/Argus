@@ -1,10 +1,13 @@
 # Live Trading Cockpit
 
-Build id: `trading-cockpit-v1.7`.
+Build id: `alive-unattended-v3.0`.
 
 Home is a live **Trading Cockpit** with heartbeat dials driven by verified scan,
 price, and paper-account updates. Motion reflects real poll ages and mark
 changes — Argus does not invent heartbeats, prices, or P&L.
+
+See also [`UNATTENDED_RUNTIME.md`](UNATTENDED_RUNTIME.md) for keep-awake and
+wake catch-up (Argus stays Running until Stop; automatic sleep is blocked).
 
 ## Eastern time
 
@@ -19,8 +22,10 @@ a fixed zone so server HTML matches the browser.
 - **Update prices** (feed) vs **Re-score now** (brain) are separate action cards
 - Practice mode toggle: **You approve** / **Auto enter**
 - Market wall tiles show a freshness dot; focus panel uses check glyphs and plan meters
-- Home keepalive every ~20s: if the 1m/5m feed is ≥60s old or a scan is due, Home
-  pulls prices and re-scores (worker still owns the primary cadence)
+- Home keepalive every ~30s: if the 1m/5m feed is ≥90s old, Home pulls prices
+  (worker still owns the primary cadence); wake/visibility also triggers catch-up
+- Live Eastern clock + Decided ages tick every second
+- Cockpit / paper pulse poll about every **4s**
 - Watch window is **8 minutes** on short-TF setups so watches do not pile up
 
 ## Short-timeframe scanning
@@ -35,12 +40,13 @@ Argus evaluates opportunities on **1m and 5m** charts (not 15m-first):
 - Bars older than **5 minutes** are stale for short-TF practice
 - Watch window is **8 minutes**
 
-If the feed looks old, press **Update prices**, confirm the worker is up
-(`status-argus` / worker.log), and leave Home open so keepalive can catch up.
+If the feed looks old, wait briefly for automatic catch-up, or press
+**Update prices**. Confirm the worker and keep-awake are up (`status-argus` /
+worker.log / keep-awake.log).
 
 ## Heartbeat dials
 
-Polled every **5 seconds**:
+Polled every **4 seconds**:
 
 - Argus pulse (cockpit fetch age)
 - Price feed age

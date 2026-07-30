@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { LiveClock } from "@/components/founder/LiveClock";
 import {
   startArgusAction,
   stopArgusAction,
@@ -88,6 +89,14 @@ export function CommandStatusBar({
 
   return (
     <section className="panel command-status-bar" aria-label="Argus command status">
+      <div className="command-status-top">
+        <LiveClock className="argus-live-clock" />
+        {argusStatus === "Running" ? (
+          <span className="muted-note command-unattended">
+            Stays awake until Stop — automatic sleep blocked
+          </span>
+        ) : null}
+      </div>
       <div className="status-chip-row" aria-label="System status">
         <span
           className={`status-chip tone-${

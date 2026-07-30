@@ -161,13 +161,15 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
+    force = bool(ctx.pop("force_scan", False))
+
     def _cycle() -> dict[str, Any]:
         factory = get_session_factory(ctx["settings"])
         session = factory()
         try:
             service = MarketScanService(session)
             try:
-                cycle = service.run_scan_cycle(force=False)
+                cycle = service.run_scan_cycle(force=force)
                 auto_opened = 0
                 auto_exits = 0
                 try:
@@ -287,10 +289,26 @@ async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def run_runtime_catch_up(ctx: dict[str, Any]) -> dict[str, Any]:
+    """After host sleep/startup: refresh prices, then force a scan + exits/entries."""
+    reason = str(ctx.pop("catch_up_reason", "downtime"))
+    gap_seconds = ctx.pop("catch_up_gap_seconds", None)
+    prices = await run_market_price_refresh(ctx)
+    ctx["force_scan"] = True
+    scan = await run_market_scan_cycle(ctx)
+    return {
+        "ok": True,
+        "reason": reason,
+        "gap_seconds": gap_seconds,
+        "prices": prices,
+        "scan": scan,
+    }
+
+
 class WorkerSettings:
     """ARQ worker settings for market ops."""
 
-    functions = [run_market_scan_cycle, run_market_price_refresh]
+    functions = [run_market_scan_cycle, run_market_price_refresh, run_runtime_catch_up]
     cron_jobs = [
         cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
         cron(run_market_scan_cycle, minute=set(range(60))),

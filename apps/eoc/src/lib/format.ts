@@ -20,6 +20,39 @@ export function formatTimestamp(value: string | null | undefined): string {
   });
 }
 
+/** Compact live clock for the Home header / status bar (ticks every second). */
+export function formatLiveClock(ms: number | Date): string {
+  const d = typeof ms === "number" ? new Date(ms) : ms;
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    timeZone: ARGUS_DISPLAY_TIMEZONE,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  });
+}
+
+/** Relative age that updates every second — “12s ago”, “3m ago”. */
+export function formatAgeLabel(
+  iso: string | null | undefined,
+  nowMs: number | null,
+): string {
+  if (!iso || nowMs == null) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  const age = Math.max(0, Math.floor((nowMs - t) / 1000));
+  if (age < 60) return `${age}s ago`;
+  if (age < 3600) return `${Math.floor(age / 60)}m ${age % 60}s ago`;
+  const h = Math.floor(age / 3600);
+  const m = Math.floor((age % 3600) / 60);
+  return `${h}h ${m}m ago`;
+}
+
 export function healthTone(
   status: HealthStatus | string | null | undefined,
 ): "ok" | "warn" | "bad" | "muted" {

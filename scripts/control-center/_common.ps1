@@ -323,3 +323,67 @@ function Test-ArgusWorkerFresh([string]$Root) {
     return $false
   }
 }
+
+function Get-ArgusKeepAwakePidFile([string]$Root) {
+  return Join-Path (Get-ArgusRuntimeDir $Root) "keep-awake.pid"
+}
+
+function Stop-ArgusKeepAwake([string]$Root) {
+  # Release OS stay-awake request and stop the helper process.
+  $pidPath = Get-ArgusKeepAwakePidFile $Root
+  if (Test-Path $pidPath) {
+    try {
+      $keepPid = [int](Get-Content -Path $pidPath -ErrorAction Stop | Select-Object -First 1)
+      if ($keepPid -gt 0) {
+        Stop-Process -Id $keepPid -Force -ErrorAction SilentlyContinue
+        Write-Host "Stopped keep-awake (PID $keepPid)"
+      }
+    } catch {
+      Write-Host "Keep-awake PID file unreadable — sweeping by command line"
+    }
+    Remove-Item -Path $pidPath -Force -ErrorAction SilentlyContinue
+  }
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "powershell.exe" -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*keep-awake-argus.ps1*"
+      } |
+      ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+  } catch { }
+}
+
+function Start-ArgusKeepAwake([string]$Root) {
+  # One helper process: prevents automatic sleep/hibernate while Argus is Running.
+  Stop-ArgusKeepAwake $Root
+  $script = Join-Path $PSScriptRoot "keep-awake-argus.ps1"
+  if (-not (Test-Path $script)) {
+    Write-Host "WARN: keep-awake script missing at $script"
+    return $null
+  }
+  Write-Host "Starting Argus keep-awake (blocks automatic sleep/hibernate until Stop)..."
+  # Script appends its own keep-awake.log — do not redirect stdout onto that file.
+  $proc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script
+  )
+  # PID file is also written by the script; seed it immediately for Stop races.
+  try {
+    $proc.Id | Set-Content -Path (Get-ArgusKeepAwakePidFile $Root) -Encoding utf8
+  } catch { }
+  return $proc.Id
+}
+
+function Test-ArgusKeepAwakeAlive([string]$Root) {
+  $pidPath = Get-ArgusKeepAwakePidFile $Root
+  if (-not (Test-Path $pidPath)) { return $false }
+  try {
+    $keepPid = [int](Get-Content -Path $pidPath -ErrorAction Stop | Select-Object -First 1)
+    $null = Get-Process -Id $keepPid -ErrorAction Stop
+    return $true
+  } catch {
+    return $false
+  }
+}

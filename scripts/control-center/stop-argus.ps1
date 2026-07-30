@@ -10,6 +10,9 @@ Write-Host "Stopping API and worker. Dashboard stays open."
 Write-Host "Preserving Postgres/Redis volumes (paper state)."
 Write-Host "Live trading remains DISABLED."
 
+# Release stay-awake first so the host may sleep again after Stop.
+Stop-ArgusKeepAwake $Root
+
 $pids = Read-ArgusPids $Root
 Stop-PidIfRunning $pids.api "API launcher"
 Stop-PidIfRunning $pids.worker "Worker launcher"

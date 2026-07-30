@@ -9,6 +9,7 @@ $apiUp = Test-HttpOk (Get-ArgusApiHealthUrl)
 $readyUp = Test-HttpOk (Get-ArgusApiReadyUrl)
 $eocUp = (Test-HttpOk "http://127.0.0.1:3000/login") -or (Test-HttpOk "http://127.0.0.1:3000/") -or (Test-HttpOk (Get-ArgusDashboardUrl))
 $workerUp = Test-ArgusWorkerFresh $Root
+$keepAwakeUp = Test-ArgusKeepAwakeAlive $Root
 
 $running = if ($apiUp -or $eocUp) { "Running" } else { "Stopped" }
 
@@ -18,6 +19,7 @@ Write-Host ("API health:       {0}" -f ($(if ($apiUp) { "up" } else { "down" }))
 Write-Host ("API ready:        {0}" -f ($(if ($readyUp) { "up" } else { "down" })))
 Write-Host ("EOC:              {0}" -f ($(if ($eocUp) { "up" } else { "down" })))
 Write-Host ("Worker:           {0}" -f ($(if ($workerUp) { "up" } else { "down" })))
+Write-Host ("Keep-awake:       {0}" -f ($(if ($keepAwakeUp) { "up (blocks automatic sleep)" } else { "down" })))
 Write-Host "Provider:         internal_paper (default / certified paper)"
 Write-Host "Live trading:     DISABLED (not certified)"
 Write-Host ("Dashboard URL:    {0}" -f (Get-ArgusDashboardUrl))

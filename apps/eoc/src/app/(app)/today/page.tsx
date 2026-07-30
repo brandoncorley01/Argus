@@ -152,7 +152,7 @@ function deriveOperationalPicture(opts: {
     return {
       status: "Stopped",
       explanation:
-        "Argus is stopped. Press Start Argus once — it stays Running until you press Stop.",
+        "Argus is stopped. Press Start Argus once — it stays Running (and blocks automatic sleep) until you press Stop.",
       fix: "Press Start Argus.",
     };
   }
@@ -183,8 +183,8 @@ function deriveOperationalPicture(opts: {
     return {
       status: "Warning",
       explanation:
-        "Market prices are outdated. Profit/loss may be unsafe to trust until prices refresh.",
-      fix: "On Home Live Desk, press Refresh recent prices. If that fails, Stop then Start Argus.",
+        "Market prices are outdated — Argus is catching up automatically. Profit/loss may be unsafe until the feed is fresh.",
+      fix: "Wait a few seconds for automatic catch-up, or press Update prices on Live Desk.",
     };
   }
   if (opts.marksIncomplete) {
@@ -209,7 +209,8 @@ function deriveOperationalPicture(opts: {
   }
   return {
     status: "Running",
-    explanation: "Argus is running correctly for paper practice.",
+    explanation:
+      "Argus is running paper practice on its own — scanning, watching, and deciding until you press Stop. Automatic sleep is blocked while Running.",
     fix: null,
   };
 }
@@ -377,7 +378,7 @@ async function renderTodayPage() {
         <div>
           <h1>Argus</h1>
           <p className="muted-note">
-            Paper desk · EST ·{" "}
+            Paper desk · live Eastern clock below ·{" "}
             <Link href="/paper-training">Training</Link>
           </p>
         </div>

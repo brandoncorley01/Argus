@@ -15,12 +15,14 @@ import type {
   CockpitWatch,
 } from "@/lib/founder/cockpitTypes";
 import { money, moneyPnl } from "@/lib/founder/simple";
-import { formatTimestamp } from "@/lib/format";
+import { formatAgeLabel, formatLiveClock, formatTimestamp } from "@/lib/format";
 import { usePaperLiveOptional } from "@/components/founder/PaperLiveProvider";
 
-const COCKPIT_POLL_MS = 12_000;
-const PULSE_POLL_MS = 10_000;
-const KEEP_ALIVE_MS = 60_000;
+const COCKPIT_POLL_MS = 4_000;
+const PULSE_POLL_MS = 5_000;
+const KEEP_ALIVE_MS = 30_000;
+/** Interval fire delayed this much ⇒ host likely slept; force catch-up poll. */
+const WAKE_GAP_MS = 10_000;
 
 function fmtCountdown(totalSec: number | null | undefined): string {
   if (totalSec == null || !Number.isFinite(totalSec)) return "—";
@@ -359,6 +361,7 @@ export function TradingCockpit({
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
+    let lastTick = Date.now();
     const poll = async () => {
       if (inFlight) return;
       inFlight = true;
@@ -397,13 +400,25 @@ export function TradingCockpit({
         /* keep last good snapshot */
       } finally {
         inFlight = false;
+        lastTick = Date.now();
       }
     };
     void poll();
-    const id = window.setInterval(poll, COCKPIT_POLL_MS);
+    const id = window.setInterval(() => {
+      const gap = Date.now() - lastTick;
+      void poll();
+      if (gap > WAKE_GAP_MS + COCKPIT_POLL_MS) void poll();
+    }, COCKPIT_POLL_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [portfolioId]);
 
@@ -455,18 +470,22 @@ export function TradingCockpit({
   }, [portfolioId, hasSharedLive]);
 
   // Keepalive may refresh market data only — never scans or trading logic.
+  // Also fires on tab/host wake so the desk recovers without Founder attention.
   useEffect(() => {
     let cancelled = false;
     let busy = false;
-    const keepAlive = async () => {
+    const keepAlive = async (reason: "interval" | "wake" = "interval") => {
       if (cancelled || busy || pending) return;
       const age = ageSeconds(cockpit?.market_data_at, Date.now());
-      if (age != null && age < 90) return;
+      if (reason === "interval" && age != null && age < 90) return;
+      if (reason === "wake" && age != null && age < 45) return;
       busy = true;
       try {
         const r = await refreshRecentPricesAction();
         if (!cancelled && r.ok) {
-          setKeepAliveNote("Prices updated");
+          setKeepAliveNote(
+            reason === "wake" ? "Caught up after pause" : "Prices updated",
+          );
           setLastBeatAt(new Date().toISOString());
         }
       } finally {
@@ -477,11 +496,16 @@ export function TradingCockpit({
       }
     };
     const boot = window.setTimeout(() => void keepAlive(), 2500);
-    const id = window.setInterval(() => void keepAlive(), KEEP_ALIVE_MS);
+    const id = window.setInterval(() => void keepAlive("interval"), KEEP_ALIVE_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void keepAlive("wake");
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       window.clearTimeout(boot);
       window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [cockpit?.market_data_at, pending]);
 
@@ -694,7 +718,16 @@ export function TradingCockpit({
     <div className="trading-cockpit">
       <section className="panel rise heartbeat-panel" aria-label="Argus live desk">
         <div className="cockpit-head">
-          <h2 style={{ marginTop: 0 }}>Live desk</h2>
+          <div>
+            <h2 style={{ marginTop: 0 }}>Live desk</h2>
+            <time
+              className="argus-live-clock cockpit-clock"
+              dateTime={now == null ? undefined : new Date(now).toISOString()}
+              aria-live="polite"
+            >
+              {now == null ? "—" : formatLiveClock(now)}
+            </time>
+          </div>
           <span className={`status-light ${beatFresh && feedOk ? "ok" : "warn"}`}>
             {beatFresh && feedOk
               ? `Live · ${beatCount || 1}`
@@ -1341,10 +1374,18 @@ export function TradingCockpit({
         </div>
       </section>
 
-      <section className="panel rise" aria-label="Decided">
+      <section className="panel rise decision-live-pane" aria-label="Decided">
         <div className="cockpit-head">
           <h2 style={{ marginTop: 0 }}>Decided</h2>
-          <span className="muted-note">Live stream — watching, rejects, entries</span>
+          <div className="decision-live-meta">
+            <span className={`status-chip ${beatFresh ? "tone-ok" : "tone-warn"}`}>
+              <i aria-hidden />
+              {beatFresh ? "Live" : "Catching up"}
+            </span>
+            <span className="muted-note countdown">
+              Ages tick every second
+            </span>
+          </div>
         </div>
         <ul className="decided-list">
           {cockpit.decided.length === 0 ? (
@@ -1352,7 +1393,14 @@ export function TradingCockpit({
           ) : (
             cockpit.decided.slice(0, 16).map((d) => (
               <li key={d.id} className={`tone-${d.tone}`}>
-                <time dateTime={d.at}>{formatTimestamp(d.at)}</time>
+                <div className="decision-when-stack">
+                  <span className="countdown decision-age" title={formatTimestamp(d.at)}>
+                    {formatAgeLabel(d.at, now)}
+                  </span>
+                  <time dateTime={d.at} className="decision-when-abs">
+                    {formatTimestamp(d.at)}
+                  </time>
+                </div>
                 <span>{d.text}</span>
               </li>
             ))
