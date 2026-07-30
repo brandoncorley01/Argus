@@ -1,10 +1,14 @@
 # Unattended runtime (keep-awake + catch-up)
 
-Build id: `live-monitor-v2.11`.
+Build id: `live-monitor-v2.12`.
 
 Argus is local-first on the Founder PC. While **Start Argus** has left the
 system Running, Argus should keep working without babysitting until **Stop
 Argus** or a real loss of connection (Docker/API/worker down).
+
+Companion: [`ARGUS_KEEPALIVE.md`](ARGUS_KEEPALIVE.md) covers reboot recovery
+(Docker/API/worker restart via scheduled task). This doc covers **host sleep
+prevention** and **wake catch-up**.
 
 ## Keep-awake (blocks automatic sleep)
 

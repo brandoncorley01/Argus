@@ -1,6 +1,11 @@
 # Argus local infrastructure foundation
 # Postgres 16 + Redis 7. Optional Phase 8 health supervisor worker (profile: workers).
 # The FastAPI API continues to run locally with uvicorn (not containerized here).
+#
+# restart: unless-stopped keeps containers up across Docker Desktop restarts.
+# An intentional `docker compose stop` (Stop Argus) exits with code 0 and will
+# NOT auto-restart until Start Argus / keepalive brings them back while
+# desired-state.json has running=true.
 
 name: argus
 

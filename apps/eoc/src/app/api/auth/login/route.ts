@@ -50,15 +50,22 @@ export async function POST(request: Request) {
     const timedOut =
       err instanceof Error &&
       (err.name === "TimeoutError" || err.name === "AbortError");
-    return NextResponse.json(
-      {
-        ok: false,
-        message: timedOut
-          ? "Argus API timed out. Open Docker Desktop, press Start Argus, then try again."
-          : "Unable to reach the Argus API. Open Docker Desktop if needed, press Start Argus, then try again.",
-      },
-      { status: 503 },
-    );
+    // Probe real deps so the login UI can show which layer failed.
+    let detail =
+      "Unable to reach the Argus API. Open Docker Desktop if needed, press Start Argus, then try again.";
+    try {
+      const { probeReachability } = await import("@/lib/server/reachability");
+      const report = await probeReachability();
+      detail = timedOut
+        ? `Argus API timed out. ${report.message}`
+        : report.message;
+    } catch {
+      if (timedOut) {
+        detail =
+          "Argus API timed out. Open Docker Desktop, press Start Argus, then try again.";
+      }
+    }
+    return NextResponse.json({ ok: false, message: detail }, { status: 503 });
   }
 
   const text = await upstream.text();

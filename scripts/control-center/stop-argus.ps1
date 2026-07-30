@@ -10,7 +10,10 @@ Write-Host "Stopping API and worker. Dashboard stays open."
 Write-Host "Preserving Postgres/Redis volumes (paper state)."
 Write-Host "Live trading remains DISABLED."
 
-# Release stay-awake first so the host may sleep again after Stop.
+# Mark Stopped first so the keepalive scheduled task does not fight Stop.
+Write-ArgusDesiredState -Root $Root -Running $false
+
+# Release stay-awake so the host may sleep again after Stop.
 Stop-ArgusKeepAwake $Root
 
 $pids = Read-ArgusPids $Root

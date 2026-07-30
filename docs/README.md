@@ -9,6 +9,7 @@ Durable documentation for Argus. Application code stays under `apps/` and `worke
 | [`ARGUS_HEADQUARTERS.md`](ARGUS_HEADQUARTERS.md) | GitHub as source of truth; responsibilities; how Argus runs without Cursor |
 | [`development/DEVELOPMENT_WORKFLOW.md`](development/DEVELOPMENT_WORKFLOW.md) | Branch → PR → CI workflow |
 | [`operations/ARGUS_OPERATIONS_MODEL.md`](operations/ARGUS_OPERATIONS_MODEL.md) | DEVELOPMENT / PAPER / LIVE environments |
+| [`operations/ARGUS_KEEPALIVE.md`](operations/ARGUS_KEEPALIVE.md) | Docker/API recovery after reboot / Stop |
 | [`releases/RELEASE_MANAGEMENT.md`](releases/RELEASE_MANAGEMENT.md) | Tags, RC criteria, rollback |
 | [`operations/PHASE15_HANDOFF_STATUS.md`](operations/PHASE15_HANDOFF_STATUS.md) | Phase 15 WIP classification |
 

@@ -20,6 +20,84 @@ function Get-ArgusPidFile([string]$Root) {
   return Join-Path (Get-ArgusRuntimeDir $Root) "pids.json"
 }
 
+function Get-ArgusDesiredStatePath([string]$Root) {
+  return Join-Path (Get-ArgusRuntimeDir $Root) "desired-state.json"
+}
+
+function Read-ArgusDesiredState([string]$Root) {
+  $path = Get-ArgusDesiredStatePath $Root
+  if (-not (Test-Path $path)) {
+    return [pscustomobject]@{ running = $false; updated_at = $null }
+  }
+  try {
+    $obj = Get-Content -Raw $path | ConvertFrom-Json
+    $running = $false
+    if ($null -ne $obj.running) { $running = [bool]$obj.running }
+    return [pscustomobject]@{
+      running = $running
+      updated_at = $obj.updated_at
+    }
+  } catch {
+    return [pscustomobject]@{ running = $false; updated_at = $null }
+  }
+}
+
+function Write-ArgusDesiredState([string]$Root, [bool]$Running) {
+  $path = Get-ArgusDesiredStatePath $Root
+  $obj = [ordered]@{
+    running = $Running
+    updated_at = (Get-Date).ToUniversalTime().ToString("o")
+  }
+  ($obj | ConvertTo-Json) | Set-Content -Path $path -Encoding utf8
+}
+
+function Test-DockerEngineReady {
+  try {
+    $null = docker info 2>$null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
+function Ensure-DockerEngine {
+  # Start Docker Desktop if the engine is down; wait until `docker info` works.
+  if (Test-DockerEngineReady) {
+    Write-Host "OK  Docker engine ready"
+    return $true
+  }
+
+  $candidates = @(
+    (Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Docker\Docker\Docker Desktop.exe"),
+    (Join-Path $env:LOCALAPPDATA "Docker\Docker Desktop.exe")
+  ) | Where-Object { $_ -and (Test-Path $_) }
+
+  if ($candidates.Count -eq 0) {
+    Write-Host "FAIL Docker Desktop not found. Install Docker Desktop, then Start Argus again."
+    return $false
+  }
+
+  Write-Host "Docker engine not ready — launching Docker Desktop..."
+  try {
+    Start-Process -FilePath $candidates[0] -ErrorAction SilentlyContinue | Out-Null
+  } catch {
+    Write-Host "WARN: could not launch Docker Desktop: $($_.Exception.Message)"
+  }
+
+  $deadline = (Get-Date).AddSeconds(180)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-DockerEngineReady) {
+      Write-Host "OK  Docker engine ready"
+      return $true
+    }
+    Start-Sleep -Seconds 3
+  }
+  Write-Host "FAIL Docker engine did not become ready within 180s"
+  Write-Host "Open Docker Desktop (sign in if prompted), wait until it says Running, then Start Argus again."
+  return $false
+}
+
 function Get-ArgusDashboardUrl {
   return "http://127.0.0.1:3000/today"
 }
@@ -32,10 +110,28 @@ function Get-ArgusApiReadyUrl {
   return "http://127.0.0.1:8000/ready"
 }
 
+function Test-ArgusGitDirty([string]$Root) {
+  Push-Location $Root
+  try {
+    $porcelain = @(git status --porcelain 2>$null)
+    return ($LASTEXITCODE -eq 0 -and $porcelain.Count -gt 0)
+  } catch {
+    return $false
+  } finally {
+    Pop-Location
+  }
+}
+
 function Sync-ArgusCode([string]$Root) {
   # Founder cadence: Start Argus pulls GitHub main. Returns $true only when SHA changed.
+  # Never hard-resets a dirty tree unless ARGUS_FORCE_SYNC=1 (explicit wipe).
   if (-not (Test-Path (Join-Path $Root ".git"))) {
     Write-Host "Code update skipped (not a git checkout)."
+    return $false
+  }
+  $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
+  if (-not $forceSync -and (Test-ArgusGitDirty $Root)) {
+    Write-Host "WARN: local git changes present — skipping GitHub sync (set ARGUS_FORCE_SYNC=1 to overwrite)."
     return $false
   }
   Write-Host "Updating Argus from GitHub main..."
@@ -52,15 +148,27 @@ function Sync-ArgusCode([string]$Root) {
       Write-Host "WARN: could not reach GitHub - continuing with local files."
       return $false
     }
-    git checkout -f -B main "origin/main" 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: could not checkout origin/main - continuing with local files."
-      return $false
-    }
-    git reset --hard "origin/main" 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: could not reset to origin/main - continuing with local files."
-      return $false
+    if ($forceSync) {
+      git checkout -f -B main "origin/main" 2>&1 | Out-Host
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARN: could not checkout origin/main - continuing with local files."
+        return $false
+      }
+      git reset --hard "origin/main" 2>&1 | Out-Host
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARN: could not reset to origin/main - continuing with local files."
+        return $false
+      }
+    } else {
+      git checkout main 2>&1 | Out-Host
+      if ($LASTEXITCODE -ne 0) {
+        git checkout -B main "origin/main" 2>&1 | Out-Host
+      }
+      git merge --ff-only "origin/main" 2>&1 | Out-Host
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARN: could not fast-forward to origin/main - continuing with local files."
+        return $false
+      }
     }
     $after = (git rev-parse HEAD).Trim()
     $sha = (git rev-parse --short HEAD).Trim()
@@ -136,7 +244,10 @@ function Test-ArgusInfraHealthy {
 }
 
 function Ensure-ArgusInfra([string]$Root) {
-  # Lightweight: start postgres/redis only. Never git-sync here.
+  # Lightweight: Docker engine + postgres/redis only. Never git-sync here.
+  if (-not (Ensure-DockerEngine)) {
+    return $false
+  }
   if (Test-ArgusInfraHealthy) {
     Write-Host "OK  Postgres + Redis healthy"
     return $true
@@ -144,7 +255,12 @@ function Ensure-ArgusInfra([string]$Root) {
   Write-Host "Postgres/Redis not healthy — starting Docker infra..."
   Push-Location $Root
   try {
+    # Explicit start recovers containers left Exited after Stop / engine sleep.
     docker compose up -d postgres redis | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: compose up exited $LASTEXITCODE — retrying start..."
+      docker start argus-postgres argus-redis 2>$null | Out-Host
+    }
   } catch {
     Write-Host "FAIL Could not start Docker infra: $($_.Exception.Message)"
     Write-Host "Open Docker Desktop, then press Start Argus again."
@@ -163,6 +279,51 @@ function Ensure-ArgusInfra([string]$Root) {
   Write-Host "FAIL Postgres/Redis did not become healthy within 90s"
   Write-Host "Open Docker Desktop, then press Start Argus again."
   return $false
+}
+
+function Test-ArgusApiProcessLive {
+  try {
+    $live = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "python.exe" -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*uvicorn app.main:app*"
+      })
+    return ($live.Count -gt 0)
+  } catch {
+    return $false
+  }
+}
+
+function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
+  # Bring infra + API (+ optional worker) back without git sync.
+  if (-not (Ensure-ArgusInfra $Root)) {
+    return $false
+  }
+  $pids = Read-ArgusPids $Root
+  $apiPid = $pids.api
+  $workerPid = $pids.worker
+  $apiReady = Test-HttpOk (Get-ArgusApiReadyUrl) 3
+  if (-not $apiReady) {
+    Write-Host "API not ready — starting detached uvicorn..."
+    $apiPid = Start-ArgusApiProcess $Root
+    if (-not (Wait-HttpOk (Get-ArgusApiReadyUrl) 90 "API /ready")) {
+      Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
+      return $false
+    }
+  } elseif (-not (Test-ArgusApiProcessLive)) {
+    # Rare: something else answering on :8000 — leave it, still record readiness.
+    Write-Host "OK  API /ready responding"
+  }
+  if ($IncludeWorker) {
+    if (-not (Test-ArgusWorkerFresh $Root)) {
+      Write-Host "Worker missing — starting health supervisor / market ops..."
+      $workerPid = Start-ArgusWorkerProcess $Root
+      Start-Sleep -Seconds 2
+    }
+  }
+  Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
+  return (Test-HttpOk (Get-ArgusApiReadyUrl) 3)
 }
 
 function Read-ArgusPids([string]$Root) {
