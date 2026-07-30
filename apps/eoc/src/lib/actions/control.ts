@@ -15,7 +15,27 @@ export type ActionResult =
   | { ok: false; message: string; detail?: string };
 
 function repoRoot(): string {
-  if (process.env.ARGUS_REPO_ROOT) return process.env.ARGUS_REPO_ROOT;
+  if (process.env.ARGUS_REPO_ROOT) {
+    const envRoot = process.env.ARGUS_REPO_ROOT;
+    if (
+      fs.existsSync(path.join(envRoot, "docker-compose.yml")) &&
+      fs.existsSync(path.join(envRoot, "scripts", "control-center"))
+    ) {
+      return envRoot;
+    }
+  }
+  let cur = path.resolve(process.cwd());
+  for (let i = 0; i < 6; i++) {
+    if (
+      fs.existsSync(path.join(cur, "docker-compose.yml")) &&
+      fs.existsSync(path.join(cur, "scripts", "control-center"))
+    ) {
+      return cur;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
   return path.resolve(process.cwd(), "..", "..");
 }
 

@@ -17,8 +17,26 @@ export type ReachabilityReport = {
   recovering?: boolean;
 };
 
+function looksLikeRepoRoot(dir: string): boolean {
+  return (
+    fs.existsSync(path.join(dir, "docker-compose.yml")) &&
+    fs.existsSync(path.join(dir, "scripts", "control-center"))
+  );
+}
+
 function repoRoot(): string {
-  if (process.env.ARGUS_REPO_ROOT) return process.env.ARGUS_REPO_ROOT;
+  if (process.env.ARGUS_REPO_ROOT && looksLikeRepoRoot(process.env.ARGUS_REPO_ROOT)) {
+    return process.env.ARGUS_REPO_ROOT;
+  }
+  // Walk up from cwd — Next may run with cwd=apps/eoc or monorepo root.
+  let cur = path.resolve(process.cwd());
+  for (let i = 0; i < 6; i++) {
+    if (looksLikeRepoRoot(cur)) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  // Last resort: historical apps/eoc -> ../..
   return path.resolve(process.cwd(), "..", "..");
 }
 
@@ -28,7 +46,8 @@ function desiredStatePath(): string {
 
 export function readDesiredRunning(): boolean {
   try {
-    const raw = fs.readFileSync(desiredStatePath(), "utf8");
+    // PowerShell Set-Content -Encoding utf8 writes a BOM; JSON.parse rejects it.
+    const raw = fs.readFileSync(desiredStatePath(), "utf8").replace(/^\uFEFF/, "");
     const obj = JSON.parse(raw) as { running?: unknown };
     return Boolean(obj.running);
   } catch {
@@ -64,23 +83,50 @@ async function probeHttp(url: string, timeoutMs = 3000): Promise<boolean> {
 }
 
 function probeDockerEngine(): Promise<boolean> {
+  const dockerBins = [
+    "docker",
+    path.join(
+      process.env.ProgramFiles || "C:\\Program Files",
+      "Docker",
+      "Docker",
+      "resources",
+      "bin",
+      "docker.exe",
+    ),
+  ];
   return new Promise((resolve) => {
-    const child = spawn("docker", ["info"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve(false);
-    }, 4000);
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve(code === 0);
-    });
+    let index = 0;
+    const tryNext = () => {
+      if (index >= dockerBins.length) {
+        resolve(false);
+        return;
+      }
+      const bin = dockerBins[index++];
+      // `docker version` is faster than `docker info` on Desktop cold starts.
+      const child = spawn(bin, ["version", "--format", "{{.Server.Version}}"], {
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"],
+        env: process.env,
+      });
+      let out = "";
+      const timer = setTimeout(() => {
+        child.kill();
+        tryNext();
+      }, 8_000);
+      child.stdout?.on("data", (c: Buffer) => {
+        out += c.toString();
+      });
+      child.on("error", () => {
+        clearTimeout(timer);
+        tryNext();
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0 && out.trim().length > 0) resolve(true);
+        else tryNext();
+      });
+    };
+    tryNext();
   });
 }
 
@@ -94,6 +140,10 @@ export async function probeReachability(): Promise<ReachabilityReport> {
     probeHttp(`${apiBaseUrl()}/ready`),
   ]);
 
+  // If postgres/redis answer on loopback, the engine is effectively up even when
+  // `docker version` is slow/unavailable from the Node PATH.
+  const dockerOk = docker_engine || (postgres && redis);
+
   let blocking: ReachabilityReport["blocking"] = "none";
   let message = "Argus API is reachable.";
 
@@ -105,8 +155,8 @@ export async function probeReachability(): Promise<ReachabilityReport> {
   } else if (!desired_running) {
     blocking = "stopped";
     message =
-      "Argus is Stopped. Use the Start Argus desktop shortcut (or Start on Home after a prior session), wait until Ready, then sign in.";
-  } else if (!docker_engine) {
+      "Argus is Stopped. Press Start Argus on this page (or the desktop shortcut), wait until Ready, then sign in.";
+  } else if (!dockerOk) {
     blocking = "docker";
     message =
       "Docker Desktop is not ready. Opening recovery — if prompted, finish Docker sign-in, then wait.";
@@ -123,7 +173,7 @@ export async function probeReachability(): Promise<ReachabilityReport> {
 
   return {
     desired_running,
-    docker_engine,
+    docker_engine: dockerOk,
     postgres,
     redis,
     api_health,
@@ -203,6 +253,8 @@ export function triggerStartArgus(): Promise<{ ok: boolean; detail: string }> {
           ARGUS_KEEP_DASHBOARD: "1",
           // Avoid nested self-update wipe while recovering from login.
           ARGUS_START_SELF_UPDATED: "1",
+          // Never hard-reset the tree from a login recovery path.
+          ARGUS_SKIP_START_SELF_UPDATE: "1",
         },
       },
     );

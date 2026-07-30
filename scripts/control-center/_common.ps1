@@ -30,7 +30,12 @@ function Read-ArgusDesiredState([string]$Root) {
     return [pscustomobject]@{ running = $false; updated_at = $null }
   }
   try {
-    $obj = Get-Content -Raw $path | ConvertFrom-Json
+    # Strip UTF-8 BOM if an older writer left one (Node JSON.parse rejects BOM).
+    $raw = [System.IO.File]::ReadAllText($path)
+    if ($raw.Length -gt 0 -and [int][char]$raw[0] -eq 0xFEFF) {
+      $raw = $raw.Substring(1)
+    }
+    $obj = $raw | ConvertFrom-Json
     $running = $false
     if ($null -ne $obj.running) { $running = [bool]$obj.running }
     return [pscustomobject]@{
@@ -48,7 +53,9 @@ function Write-ArgusDesiredState([string]$Root, [bool]$Running) {
     running = $Running
     updated_at = (Get-Date).ToUniversalTime().ToString("o")
   }
-  ($obj | ConvertTo-Json) | Set-Content -Path $path -Encoding utf8
+  # UTF-8 without BOM so Node JSON.parse on the login page does not fail.
+  $json = ($obj | ConvertTo-Json)
+  [System.IO.File]::WriteAllText($path, $json + "`n", [System.Text.UTF8Encoding]::new($false))
 }
 
 function Test-DockerEngineReady {
