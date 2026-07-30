@@ -5,6 +5,12 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ## [Unreleased]
 
+### Fixed
+
+- Unattended runtime: Start Argus launches a Windows keep-awake helper so automatic sleep/hibernate does not silently stop paper scans; Stop releases it
+- Worker wake catch-up: health supervisor detects ≥90s wall-clock gaps (and startup) and forces price refresh + scan so automation resumes without Founder clicks
+- Live desk feel: Eastern live clock, Decided pane ages ticking every second, faster Home polls, and visibility/wake refresh so Argus feels alive without constant attention
+
 ### Added
 
 - Phase 5 authentication: Argon2id passwords, PostgreSQL server-side sessions, CSRF, login lockout, Founder bootstrap CLI

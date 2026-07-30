@@ -3,6 +3,9 @@
 Argus keeps the **dashboard (EOC)** up independently of the **API**. After Stop,
 or after a reboot, login fails until Postgres/Redis + the local API are up again.
 
+For **automatic sleep/hibernate prevention** while Running and wake catch-up,
+see [`UNATTENDED_RUNTIME.md`](UNATTENDED_RUNTIME.md).
+
 ## What is automatic
 
 1. **Start Argus** writes `runtime/control-center/desired-state.json` with

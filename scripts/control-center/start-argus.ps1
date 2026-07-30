@@ -98,6 +98,7 @@ try {
     Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
     Start-Sleep -Seconds 2
     Write-Host "OK  Worker repair attempted."
+    $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
     Write-Host "=== Argus started ==="
     exit 0
@@ -120,6 +121,7 @@ try {
     if (-not (Wait-HttpOk (Get-ArgusApiReadyUrl) 90 "API /ready")) {
       throw "API /ready still failing after repair. Check Docker Desktop and Start again."
     }
+    $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
     Write-Host "=== Argus started ==="
     exit 0
@@ -197,6 +199,7 @@ try {
       if ($m) { $buildId = $m.Matches.Groups[1].Value }
     }
     Write-Host "Build $buildId @ $sha"
+    $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) {
       Start-Process (Get-ArgusDashboardUrl)
     } else {
@@ -328,6 +331,8 @@ try {
   } elseif (-not ($okApi -and $okEoc)) {
     throw "Argus did not become healthy. Check runtime\control-center\*.log"
   }
+
+  $null = Start-ArgusKeepAwake $Root
 
   if (-not $KeepDashboard) {
     $dash = Get-ArgusDashboardUrl

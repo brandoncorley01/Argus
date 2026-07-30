@@ -13,6 +13,9 @@ Write-Host "Live trading remains DISABLED."
 # Mark Stopped first so the keepalive scheduled task does not fight Stop.
 Write-ArgusDesiredState -Root $Root -Running $false
 
+# Release stay-awake so the host may sleep again after Stop.
+Stop-ArgusKeepAwake $Root
+
 $pids = Read-ArgusPids $Root
 Stop-PidIfRunning $pids.api "API launcher"
 Stop-PidIfRunning $pids.worker "Worker launcher"

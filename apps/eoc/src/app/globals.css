@@ -457,6 +457,63 @@ table.data th {
   border: 2px solid var(--accent);
   background: var(--accent-soft);
 }
+.command-status-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.35rem;
+}
+.argus-live-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+.cockpit-clock {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+.command-unattended {
+  font-size: 0.82rem;
+}
+.decision-live-pane .decision-live-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+.decision-when-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.decision-age {
+  font-weight: 700;
+  color: var(--ink);
+}
+.decision-when-abs,
+.activity-when .decision-when-abs {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.activity-when {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .decision-live-pane.is-live .decision-age,
+  .heartbeat-panel .argus-live-clock {
+    animation: fresh-pulse 2.4s ease-in-out infinite;
+  }
+}
 
 .command-status-why {
   margin: 0.55rem 0 0.35rem;
@@ -1677,8 +1734,9 @@ table.data th {
 }
 .decided-list li {
   display: grid;
-  grid-template-columns: 7rem 1fr;
+  grid-template-columns: 8.5rem 1fr;
   gap: 0.5rem;
+  align-items: start;
 }
 .tone-wait { color: var(--warn); }
 .tone-warn { color: var(--warn); }

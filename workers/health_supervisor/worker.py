@@ -140,6 +140,11 @@ async def startup(ctx: dict[str, Any]) -> None:
         ctx["instance_key"] = instance_key
     finally:
         session.close()
+    # First health cycle after (re)start always catch-up — covers cold start
+    # and resume after a hard kill while the host was asleep.
+    ctx["last_wall_clock"] = utcnow()
+    ctx["catch_up_pending"] = True
+    ctx["catch_up_reason"] = "worker_startup"
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -156,6 +161,14 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 async def run_health_supervisor_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
+    now = utcnow()
+    previous = ctx.get("last_wall_clock")
+    gap = wall_clock_gap(previous, now)
+    ctx["last_wall_clock"] = now
+    sleep_gap = should_catch_up_after_gap(gap)
+    pending = bool(ctx.pop("catch_up_pending", False))
+    reason = str(ctx.pop("catch_up_reason", "host_sleep_or_suspend"))
+
     def _cycle() -> dict[str, Any]:
         factory = get_session_factory(ctx["settings"])
         session = factory()
@@ -168,9 +181,42 @@ async def run_health_supervisor_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
         finally:
             session.close()
 
-    return _run_logged(
-        ctx, component=OperationalComponent.WORKER, label="health supervisor cycle", fn=_cycle
-    )
+    health_error: Exception | None = None
+    try:
+        result = _run_logged(
+            ctx,
+            component=OperationalComponent.WORKER,
+            label="health supervisor cycle",
+            fn=_cycle,
+        )
+    except Exception as exc:  # noqa: BLE001 — still attempt catch-up after downtime
+        health_error = exc
+        result = {"ok": False, "error": str(exc)[:240]}
+
+    if pending or sleep_gap:
+        catch_reason = "worker_startup" if pending and not sleep_gap else reason
+        if sleep_gap:
+            catch_reason = "host_sleep_or_suspend"
+        try:
+            ctx["catch_up_reason"] = catch_reason
+            ctx["catch_up_gap_seconds"] = format_gap_seconds(gap)
+            catch_up = await run_runtime_catch_up(ctx)
+            result = {**result, "catch_up": catch_up}
+            print(
+                f"runtime_continuity: catch-up ok reason={catch_reason} "
+                f"gap_seconds={format_gap_seconds(gap)}",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — health cycle must still surface
+            result = {
+                **result,
+                "catch_up": {"ok": False, "error": str(exc)[:240], "reason": catch_reason},
+            }
+            print(f"runtime_continuity: catch-up failed: {exc}", flush=True)
+
+    if health_error is not None:
+        raise health_error
+    return result
 
 
 async def capture_host_metrics_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -229,9 +275,16 @@ async def generate_daily_report_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
 # Market scan/price jobs live in workers.market_ops (separated code), but the
 # Founder Start path runs one ARQ process. Register those jobs here so scans
 # cannot freeze when a second process fails to start.
+from app.services.runtime_continuity import (  # noqa: E402
+    format_gap_seconds,
+    should_catch_up_after_gap,
+    utcnow,
+    wall_clock_gap,
+)
 from workers.market_ops.worker import (  # noqa: E402
     run_market_price_refresh,
     run_market_scan_cycle,
+    run_runtime_catch_up,
 )
 
 
@@ -244,6 +297,7 @@ class WorkerSettings:
         generate_daily_report_cycle,
         run_market_scan_cycle,
         run_market_price_refresh,
+        run_runtime_catch_up,
     ]
     cron_jobs = [
         cron(run_health_supervisor_cycle, second={0, 30}),
