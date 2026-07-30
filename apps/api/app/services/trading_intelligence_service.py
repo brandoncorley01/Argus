@@ -155,10 +155,10 @@ class TradingIntelligenceService:
             base *= 0.85
             factors["adjustments"].append("regime_volatile_penalty")
         elif regime == "trend_down":
-            base *= 0.55
+            base *= 0.7
             factors["adjustments"].append("regime_trend_down_penalty")
         elif regime == "insufficient_data":
-            base *= 0.5
+            base *= 0.75
             factors["adjustments"].append("insufficient_data_penalty")
         conf = Decimal(str(round(base, 2)))
         factors["final_score"] = float(conf)
@@ -838,7 +838,13 @@ class TradingIntelligenceService:
     ) -> str:
         if cand.bias != "Bullish":
             return "AVOID"
-        if cand.stage == "Risk Review" and conf >= 70 and cand.risk_status == "clear":
+        # Paper Automatic Practice enters from Watching when risk is clear.
+        # Require moderate confidence — not only Risk Review (pause path).
+        if (
+            cand.stage in {"Watching", "Risk Review", "Approved"}
+            and cand.risk_status == "clear"
+            and conf >= 55
+        ):
             return "EXECUTE"
         if cand.stage in {"Rejected", "Expired"}:
             return "AVOID"
@@ -1012,8 +1018,13 @@ class TradingIntelligenceService:
         regime = learning.get("strongest_conditions") or "insufficient_data"
         top = watch.get("highest_confidence_opportunity")
         action = "None — observe and preserve capital."
+        # Stale critical incidents must not freeze paper desks forever when the
+        # control plane is healthy again — health supervisor auto-closes them.
         if cert.get("open_critical_incidents", 0) > 0:
-            action = "Resolve critical system issues before new paper entries."
+            action = (
+                "Critical system issues are open — Argus still paper-trades, but "
+                "review Issues and confirm API/worker health before trusting new entries."
+            )
         elif watch.get("current_recommendation") == "EXECUTE" and top:
             action = f"Review Ready opportunity on {top.get('symbol')} (paper only)."
         elif open_pos:

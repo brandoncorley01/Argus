@@ -1699,7 +1699,22 @@ button.action-card:disabled { opacity: 0.55; cursor: not-allowed; }
 .plan-compact { margin-top: 0.25rem; }
 .wall-tile header { align-items: center; }
 
-.live-monitor-panel { border: 2px solid var(--accent); }
+.executive-briefing-toggle {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.executive-briefing-toggle:hover .muted-note {
+  color: var(--accent);
+}
 .live-monitor-strip { margin-bottom: 0.65rem; }
 .live-activity-boards {
   display: grid;

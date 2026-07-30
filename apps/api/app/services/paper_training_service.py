@@ -515,9 +515,15 @@ class PaperTrainingService:
                     MarketScanCandidate.risk_status == "clear",
                 )
                 .order_by(desc(MarketScanCandidate.score))
-                .limit(3)
+                .limit(5)
             )
         )
+        # Prefer freshest Watching candidates with usable score.
+        cands = [
+            c
+            for c in cands
+            if float(c.score or 0) >= 55.0
+        ] or cands
         open_syms = {
             p.symbol
             for p in self.db.scalars(

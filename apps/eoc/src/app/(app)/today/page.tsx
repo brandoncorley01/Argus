@@ -370,6 +370,20 @@ async function renderTodayPage() {
         institutionStatus={picture.status}
       />
 
+      <TradingCockpit
+        initial={cockpitInitial}
+        portfolioId={portfolio?.id ?? null}
+        trainingMode={trainingMode}
+        account={{
+          balance: summary?.total_account_value ?? null,
+          cash: summary?.buying_power ?? null,
+          inTrades: summary?.committed_capital ?? null,
+          openCount: summary?.open_position_count ?? 0,
+        }}
+        positionsOpen={summary?.open_position_count ?? 0}
+        totalPnl={closedTrades.length ? totalPnl : null}
+      />
+
       {/* Open paper trades */}
       <section className="panel rise" aria-label="Open paper trades">
         <h2 style={{ marginTop: 0 }}>Open positions</h2>
@@ -378,29 +392,6 @@ async function renderTodayPage() {
           portfolioId={portfolio?.id ?? null}
         />
       </section>
-
-      <details className="panel rise tech-details" aria-label="Trading desk tools">
-        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-          Desk tools (cockpit / scanner)
-        </summary>
-        <p className="muted-note">
-          Optional operational detail. Normal Founder days stay on the Executive Briefing
-          above. Live trading remains locked.
-        </p>
-        <TradingCockpit
-          initial={cockpitInitial}
-          portfolioId={portfolio?.id ?? null}
-          trainingMode={trainingMode}
-          account={{
-            balance: summary?.total_account_value ?? null,
-            cash: summary?.buying_power ?? null,
-            inTrades: summary?.committed_capital ?? null,
-            openCount: summary?.open_position_count ?? 0,
-          }}
-          positionsOpen={summary?.open_position_count ?? 0}
-          totalPnl={closedTrades.length ? totalPnl : null}
-        />
-      </details>
 
       <section className="panel rise" aria-label="End of day">
         <h2 style={{ marginTop: 0 }}>End of day</h2>

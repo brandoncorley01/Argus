@@ -30,7 +30,7 @@ STRATEGY_KEY = "sma_crossover"
 # Prefer 1m/5m charts so Argus re-evaluates often (not stuck on 15m closes).
 TIMEFRAME_PREF = ("1m", "5m", "15m")
 # Server-side watch window — short for 1m/5m cadence (was 20m; felt stuck).
-CANDIDATE_WATCH_TTL = timedelta(minutes=8)
+CANDIDATE_WATCH_TTL = timedelta(minutes=20)
 # Default candle length when timeframe is unknown.
 CANDLE_LENGTH = timedelta(minutes=1)
 
@@ -480,7 +480,7 @@ class MarketScanService:
                 i = len(bars) - 1
                 try:
                     exposure = strategy.target_exposure(
-                        bars, i, {"fast": 5, "slow": 20}
+                        bars, i, {"fast": 5, "slow": 12}
                     )
                 except Exception as exc:  # noqa: BLE001 — record and continue
                     rejection_counts["weak_signal"] = rejection_counts.get("weak_signal", 0) + 1

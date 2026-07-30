@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 import { logoutAction } from "@/lib/actions/auth";
@@ -42,11 +43,12 @@ function current(pathname: string, href: string) {
 
 export function SideNav({
   user,
-  pathname,
 }: {
   user: CurrentUser;
-  pathname: string;
+  /** @deprecated server pathname ignored — client usePathname is authoritative */
+  pathname?: string;
 }) {
+  const pathname = usePathname() || "/today";
   const [menuOpen, setMenuOpen] = useState(true);
   const onAdvancedRoute = !PRIMARY.some((p) => current(pathname, p.href));
   const [showAdvanced, setShowAdvanced] = useState(onAdvancedRoute);
@@ -80,6 +82,7 @@ export function SideNav({
               <Link
                 href={item.href}
                 className="nav-link"
+                prefetch
                 aria-current={current(pathname, item.href) ? "page" : undefined}
                 onClick={() => setMenuOpen(false)}
               >
@@ -109,6 +112,7 @@ export function SideNav({
                   <Link
                     href={item.href}
                     className="nav-link"
+                    prefetch
                     aria-current={current(pathname, item.href) ? "page" : undefined}
                     onClick={() => setMenuOpen(false)}
                   >

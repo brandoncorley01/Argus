@@ -11,25 +11,6 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/today/:path*",
-    "/trading/:path*",
-    "/portfolio/:path*",
-    "/reports/:path*",
-    "/settings/:path*",
-    "/overview/:path*",
-    "/operations/:path*",
-    "/system-health/:path*",
-    "/services/:path*",
-    "/workers/:path*",
-    "/incidents/:path*",
-    "/market/:path*",
-    "/strategies/:path*",
-    "/paper/:path*",
-    "/micro-live/:path*",
-    "/treasury/:path*",
-    "/audit/:path*",
-    "/configurations/:path*",
-    "/policies/:path*",
-    "/administration/:path*",
+    "/((?!_next/static|_next/image|favicon.ico|argus-build.txt|api/).*)",
   ],
 };

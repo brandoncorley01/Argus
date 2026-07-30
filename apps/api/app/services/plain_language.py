@@ -47,9 +47,9 @@ def plain_rejection(code: str | None, fallback: str | None = None) -> str:
 
 
 def confidence_from_score(score: float) -> str:
-    if score >= 80:
+    if score >= 70:
         return "High"
-    if score >= 50:
+    if score >= 45:
         return "Medium"
     return "Low"
 
