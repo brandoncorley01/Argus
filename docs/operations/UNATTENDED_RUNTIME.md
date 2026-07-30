@@ -1,6 +1,6 @@
 # Unattended runtime (keep-awake + catch-up)
 
-Build id: `alive-unattended-v3.0`.
+Build id: `alive-unattended-v3.1`.
 
 Argus is local-first on the Founder PC. While **Start Argus** has left the
 system Running, Argus should keep working without babysitting until **Stop

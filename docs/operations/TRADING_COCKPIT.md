@@ -1,6 +1,6 @@
 # Live Trading Cockpit
 
-Build id: `alive-unattended-v3.0`.
+Build id: `alive-unattended-v3.1`.
 
 Home is a live **Trading Cockpit** with heartbeat dials driven by verified scan,
 price, and paper-account updates. Motion reflects real poll ages and mark
