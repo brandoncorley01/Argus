@@ -34,6 +34,13 @@ from app.services.plain_language import (
 )
 
 MIN_BARS = 25
+# Match anticipated live connected-account size for Founder learning.
+LEARNING_STARTING_CASH = Decimal("300")
+LEARNING_DEFAULT_NOTIONAL = Decimal("30")  # ~10% of $300 book per practice entry
+# Take-profit must clear at least this reward:risk multiple of stop distance.
+MIN_TAKE_PROFIT_R = Decimal("2")
+# Do not take-profit a brand-new entry in the same automation pass.
+TAKE_PROFIT_MIN_HOLD_SECONDS = 120
 FEEDBACK_CODES = {
     "good_decision",
     "bad_decision",
@@ -74,7 +81,7 @@ class PaperTrainingService:
         row = PaperTrainingSettings(
             portfolio_id=portfolio_id,
             mode="coaching",
-            default_notional=Decimal("100"),
+            default_notional=LEARNING_DEFAULT_NOTIONAL,
         )
         self.db.add(row)
         self.db.commit()
@@ -496,6 +503,27 @@ class PaperTrainingService:
         )
         return list(open_ids | auto_ids)
 
+    def iter_automation_portfolio_ids(self) -> list[uuid.UUID]:
+        """Portfolios that must receive stop/target exits and/or auto-entry.
+
+        Never use ``select(PaperPortfolio).limit(N)`` — fixture books created
+        earlier starve the Founder's live paper book from automation (stops
+        never fire; automatic mode never enters).
+        """
+        open_ids = set(
+            self.db.scalars(
+                select(PaperPosition.portfolio_id).where(PaperPosition.quantity != 0)
+            ).all()
+        )
+        auto_ids = set(
+            self.db.scalars(
+                select(PaperTrainingSettings.portfolio_id).where(
+                    PaperTrainingSettings.mode == "automatic"
+                )
+            ).all()
+        )
+        return list(open_ids | auto_ids)
+
     def maybe_auto_enter_from_scan(
         self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None
     ) -> list[dict[str, Any]]:
@@ -533,11 +561,17 @@ class PaperTrainingService:
                 )
             )
         }
+        # Cool-off after exit so the same symbol is not flipped every minute.
+        recently_exited = self._symbols_exited_since(
+            portfolio_id, within_seconds=600
+        )
         resolved = self._resolve_actor(actor, portfolio)
         if resolved is None:
             return []
         for cand in cands:
             if cand.symbol in open_syms:
+                continue
+            if cand.symbol in recently_exited:
                 continue
             if (cand.bias or "") != "Bullish":
                 # Long-only: never convert bearish/neutral probes into buys.
@@ -558,6 +592,16 @@ class PaperTrainingService:
                     resource_id=str(order.id),
                     actor_user_id=resolved.user.id,
                     payload={"symbol": cand.symbol, "candidate_id": str(cand.id)},
+                )
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="entered",
+                    title=f"Entered {cand.symbol}",
+                    detail=(
+                        f"Opened a ${settings.default_notional} paper long. "
+                        f"Stop {cand.stop_loss}; target {cand.take_profit}."
+                    ),
+                    reason_code="auto_enter",
                 )
             except (PaperTradingError, PaperTrainingError) as exc:
                 self.audit.append(
@@ -623,6 +667,15 @@ class PaperTrainingService:
                 "long_only_bias",
                 "Long-only paper mode refuses bearish or neutral signals as buys.",
             )
+        stop = cand.stop_loss
+        target = cand.take_profit
+        if stop is None or stop >= price:
+            stop = price * (Decimal("1") - Decimal("0.01"))
+        if target is None or target <= price:
+            risk = price - stop
+            if risk <= 0:
+                risk = price * Decimal("0.01")
+            target = price + (risk * MIN_TAKE_PROFIT_R)
         order = self.paper.submit_order(
             portfolio_id=portfolio_id,
             actor=actor,
@@ -641,11 +694,9 @@ class PaperTrainingService:
             order.status,
             {
                 "candidate_id": str(cand.id),
-                "stop_loss": str(cand.stop_loss) if cand.stop_loss is not None else None,
-                "take_profit": (
-                    str(cand.take_profit) if cand.take_profit is not None else None
-                ),
-                "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else None,
+                "stop_loss": str(stop),
+                "take_profit": str(target),
+                "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else str(price),
             },
         )
         try:
@@ -688,6 +739,14 @@ class PaperTrainingService:
             plan = self.paper._exit_plan_levels(portfolio_id, pos.symbol)
             stop = plan.get("stop_loss")
             target = plan.get("take_profit")
+            if (
+                target is None
+                and stop is not None
+                and pos.average_cost
+                and pos.average_cost > stop
+            ):
+                risk = pos.average_cost - stop
+                target = pos.average_cost + (risk * MIN_TAKE_PROFIT_R)
             if stop is None and target is None:
                 continue
             mark, _mark_at = self.paper._latest_mark(pos.symbol)
@@ -697,7 +756,13 @@ class PaperTrainingService:
             if stop is not None and mark <= stop:
                 reason = "stop_loss"
             elif target is not None and mark >= target:
-                reason = "take_profit"
+                # Ultra-tight targets were closing entries in the same scan pass.
+                # Stop-loss still fires immediately; take-profit needs a minimum hold.
+                held_ok = self._position_held_seconds(portfolio_id, pos.symbol) >= (
+                    TAKE_PROFIT_MIN_HOLD_SECONDS
+                )
+                if held_ok:
+                    reason = "take_profit"
             if reason is None:
                 continue
             entry_order_id = plan.get("entry_order_id")
@@ -771,6 +836,18 @@ class PaperTrainingService:
                     "mark": str(mark),
                 },
             )
+            why = (
+                f"Stop-loss hit at {mark} (stop {stop})."
+                if reason == "stop_loss"
+                else f"Take-profit hit at {mark} (target {target})."
+            )
+            self._emit_decision_event(
+                symbol=pos.symbol,
+                outcome="exited",
+                title=f"Exited {pos.symbol} ({reason.replace('_', ' ')})",
+                detail=why,
+                reason_code=reason,
+            )
             try:
                 from app.services.trading_intelligence_service import (
                     TradingIntelligenceService,
@@ -800,6 +877,149 @@ class PaperTrainingService:
         if closed:
             self.db.commit()
         return closed
+
+    def _position_held_seconds(self, portfolio_id: uuid.UUID, symbol: str) -> float:
+        """Seconds since the latest buy fill for this open symbol."""
+        from app.models.paper_trading import PaperFill
+
+        filled_at = self.db.scalar(
+            select(PaperFill.filled_at)
+            .where(
+                PaperFill.portfolio_id == portfolio_id,
+                PaperFill.symbol == symbol.upper(),
+                PaperFill.side == "buy",
+            )
+            .order_by(PaperFill.filled_at.desc())
+            .limit(1)
+        )
+        if filled_at is None or not isinstance(filled_at, datetime):
+            return 0.0
+        if filled_at.tzinfo is None:
+            filled_at = filled_at.replace(tzinfo=UTC)
+        return max(0.0, (datetime.now(UTC) - filled_at).total_seconds())
+
+    def _symbols_exited_since(
+        self, portfolio_id: uuid.UUID, *, within_seconds: int
+    ) -> set[str]:
+        """Symbols with a paper sell fill inside the cool-off window."""
+        from app.models.paper_trading import PaperFill
+
+        cutoff = datetime.now(UTC).timestamp() - within_seconds
+        cutoff_dt = datetime.fromtimestamp(cutoff, tz=UTC)
+        rows = self.db.scalars(
+            select(PaperFill.symbol)
+            .where(
+                PaperFill.portfolio_id == portfolio_id,
+                PaperFill.side == "sell",
+                PaperFill.filled_at >= cutoff_dt,
+            )
+            .distinct()
+        )
+        return {str(s).upper() for s in rows}
+
+    def _emit_decision_event(
+        self,
+        *,
+        symbol: str,
+        outcome: str,
+        title: str,
+        detail: str,
+        reason_code: str,
+    ) -> None:
+        """Write enter/exit into market_scan_events so the Decided pane can show why."""
+        try:
+            from app.models.market_scan import MarketScanEvent
+
+            self.db.add(
+                MarketScanEvent(
+                    cycle_id=None,
+                    candidate_id=None,
+                    component="paper_training",
+                    symbol=symbol,
+                    stage="Entered" if outcome == "entered" else "Exited",
+                    outcome=outcome,
+                    reason_code=reason_code,
+                    title=title,
+                    detail=detail[:500],
+                    strategy_key="sma_crossover",
+                    correlation_id=f"paper-{outcome}-{symbol}-{uuid.uuid4().hex[:10]}",
+                    occurred_at=datetime.now(UTC),
+                    payload={},
+                )
+            )
+        except Exception:  # noqa: BLE001 — UI stream must never block trading
+            pass
+
+    def reseed_learning_desk(
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        actor: AuthenticatedPrincipal,
+        starting_cash: Decimal = LEARNING_STARTING_CASH,
+        default_notional: Decimal = LEARNING_DEFAULT_NOTIONAL,
+    ) -> dict[str, Any]:
+        """Flatten open paper risk and reset cash to the learning starting size.
+
+        Live trading remains locked. Used so Founder practice mirrors ~$300 live.
+        Preserves trade history (does not delete orders) so audit stays intact.
+        """
+        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        if portfolio is None:
+            raise PaperTrainingError("portfolio_not_found", str(portfolio_id))
+        cleared: list[str] = []
+        for pos in list(self.paper.list_positions(portfolio_id)):
+            if not pos.quantity or pos.quantity == 0:
+                continue
+            # Flat without deleting order history (FK-safe).
+            pos.quantity = Decimal("0")
+            cleared.append(pos.symbol)
+        portfolio = self.paper.get_portfolio(portfolio_id)
+        portfolio.reserved_cash = Decimal("0")
+        delta = starting_cash - portfolio.cash_balance
+        portfolio.cash_balance = starting_cash
+        if delta != 0 or cleared:
+            from app.models.paper_trading import PaperCashLedger
+
+            self.db.add(
+                PaperCashLedger(
+                    portfolio_id=portfolio.id,
+                    entry_type="learning_reseed",
+                    amount=delta,
+                    balance_after=starting_cash,
+                    note=(
+                        f"Founder learning desk reseeded to ${starting_cash} "
+                        f"(cleared {', '.join(cleared) or 'none'}; paper only; live locked)."
+                    ),
+                )
+            )
+        try:
+            from app.execution.providers.paper import PaperExecutionProvider
+
+            runtime = PaperExecutionProvider(self.db)
+            runtime.ensure_account(portfolio.id, cash=starting_cash)
+        except Exception:  # noqa: BLE001 — DB cash is source of truth for UI
+            pass
+        settings = self.get_or_create_settings(portfolio_id)
+        settings.mode = "automatic"
+        settings.default_notional = default_notional
+        self.audit.append(
+            action="paper.training.learning_reseed",
+            resource_type="paper_portfolio",
+            resource_id=str(portfolio_id),
+            actor_user_id=actor.user.id,
+            payload={
+                "starting_cash": str(starting_cash),
+                "default_notional": str(default_notional),
+                "cleared_symbols": cleared,
+            },
+        )
+        self.db.commit()
+        return {
+            "portfolio_id": str(portfolio_id),
+            "cash_balance": str(starting_cash),
+            "default_notional": str(default_notional),
+            "cleared_symbols": cleared,
+        }
 
     def trade_lesson_for_candidate(self, cand: MarketScanCandidate) -> dict[str, Any]:
         return {

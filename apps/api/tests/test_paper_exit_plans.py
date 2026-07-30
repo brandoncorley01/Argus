@@ -35,6 +35,7 @@ def test_evaluate_paper_exits_take_profit_triggers_sell() -> None:
     svc._resolve_actor = MagicMock(  # type: ignore[method-assign]
         return_value=SimpleNamespace(user=SimpleNamespace(id="u1"))
     )
+    svc._position_held_seconds = MagicMock(return_value=180.0)  # type: ignore[method-assign]
     svc.audit.append = MagicMock()  # type: ignore[method-assign]
 
     out = svc.evaluate_paper_exits(portfolio_id=portfolio.id, actor=None)

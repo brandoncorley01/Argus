@@ -16,10 +16,11 @@ import type {
 } from "@/lib/founder/cockpitTypes";
 import { money, moneyPnl } from "@/lib/founder/simple";
 import { formatTimestamp } from "@/lib/format";
+import { usePaperLiveOptional } from "@/components/founder/PaperLiveProvider";
 
-const COCKPIT_POLL_MS = 3_000;
-const PULSE_POLL_MS = 5_000;
-const KEEP_ALIVE_MS = 20_000;
+const COCKPIT_POLL_MS = 12_000;
+const PULSE_POLL_MS = 10_000;
+const KEEP_ALIVE_MS = 60_000;
 
 function fmtCountdown(totalSec: number | null | undefined): string {
   if (totalSec == null || !Number.isFinite(totalSec)) return "—";
@@ -331,6 +332,15 @@ export function TradingCockpit({
   const [closedCount, setClosedCount] = useState(0);
   const [liveTotalPnl, setLiveTotalPnl] = useState<number | null>(totalPnl);
   const [openUnrealized, setOpenUnrealized] = useState<number | null>(null);
+  const sharedLive = usePaperLiveOptional();
+  const hasSharedLive = sharedLive != null;
+  const displayAccount = sharedLive?.account ?? liveAccount;
+  const displayOpenSymbols =
+    sharedLive?.positions.map((p) => p.symbol).filter(Boolean) ?? openSymbols;
+  const displayClosedCount = sharedLive?.closedTradeCount ?? closedCount;
+  const displayTotalPnl = sharedLive?.totalRealizedPnl ?? liveTotalPnl;
+  const displayOpenUnrealized = sharedLive?.openUnrealizedPnl ?? openUnrealized;
+  const displayMode = sharedLive?.mode ?? mode;
   const [lastBeatAt, setLastBeatAt] = useState<string | null>(
     initial?.generated_at ?? null,
   );
@@ -348,12 +358,18 @@ export function TradingCockpit({
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const q = portfolioId
           ? `?portfolioId=${encodeURIComponent(portfolioId)}`
           : "";
-        const res = await fetch(`/api/founder/cockpit${q}`, { cache: "no-store" });
+        const res = await fetch(`/api/founder/cockpit${q}`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(20_000),
+        });
         if (!res.ok) return;
         const data = (await res.json()) as CockpitSnapshot;
         if (cancelled) return;
@@ -379,6 +395,8 @@ export function TradingCockpit({
         });
       } catch {
         /* keep last good snapshot */
+      } finally {
+        inFlight = false;
       }
     };
     void poll();
@@ -390,13 +408,17 @@ export function TradingCockpit({
   }, [portfolioId]);
 
   useEffect(() => {
-    if (!portfolioId) return;
+    // Shared PaperLiveProvider already polls — avoid a second competing pulse.
+    if (hasSharedLive || !portfolioId) return;
     let cancelled = false;
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const res = await fetch(
           `/api/founder/paper-pulse?portfolioId=${encodeURIComponent(portfolioId)}`,
-          { cache: "no-store" },
+          { cache: "no-store", signal: AbortSignal.timeout(12_000) },
         );
         if (!res.ok) return;
         const data = (await res.json()) as PaperPulse;
@@ -420,6 +442,8 @@ export function TradingCockpit({
         );
       } catch {
         /* keep last good pulse */
+      } finally {
+        inFlight = false;
       }
     };
     void poll();
@@ -428,7 +452,7 @@ export function TradingCockpit({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [portfolioId]);
+  }, [portfolioId, hasSharedLive]);
 
   // Keepalive may refresh market data only — never scans or trading logic.
   useEffect(() => {
@@ -520,7 +544,7 @@ export function TradingCockpit({
             ...(cockpit?.current_market ? [cockpit.current_market] : []),
           ];
       const roster = Array.from(
-        new Set([...openSymbols, ...fromCockpit].filter(Boolean)),
+        new Set([...displayOpenSymbols, ...fromCockpit].filter(Boolean)),
       );
       if (roster.length === 0) return;
       setSelected((prev) => {
@@ -536,7 +560,7 @@ export function TradingCockpit({
     cockpit?.open_position_symbols,
     cockpit?.watches,
     cockpit?.current_market,
-    openSymbols,
+    displayOpenSymbols,
     userPinnedUntil,
   ]);
 
@@ -591,7 +615,7 @@ export function TradingCockpit({
   const feedOk = feedAge != null && feedAge <= 180;
   const feedWarn = feedAge != null && feedAge > 180 && feedAge <= 600;
   const openCount =
-    liveAccount.openCount ||
+    displayAccount.openCount ||
     positionsOpen ||
     (cockpit.open_position_symbols?.length ?? 0) ||
     cockpit.open_trades ||
@@ -600,8 +624,8 @@ export function TradingCockpit({
   const statusChips: Array<{ label: string; tone: "ok" | "warn" | "bad" | "neutral" }> =
     [];
   statusChips.push({
-    label: mode === "automatic" ? "Auto enter" : "Coaching",
-    tone: mode === "automatic" ? "ok" : "warn",
+    label: displayMode === "automatic" ? "Auto enter" : "Coaching",
+    tone: displayMode === "automatic" ? "ok" : "warn",
   });
   statusChips.push({
     label: feedOk ? "Feed live" : feedWarn ? "Feed aging" : "Feed stale",
@@ -746,19 +770,19 @@ export function TradingCockpit({
           <Dial
             label="Open P&L"
             valueLabel={
-              openCount === 0 || openUnrealized == null
+              openCount === 0 || displayOpenUnrealized == null
                 ? "—"
-                : moneyPnl(String(openUnrealized))
+                : moneyPnl(String(displayOpenUnrealized))
             }
             pct={
-              openCount === 0 || openUnrealized == null
+              openCount === 0 || displayOpenUnrealized == null
                 ? 5
-                : Math.min(100, 50 + Math.abs(openUnrealized))
+                : Math.min(100, 50 + Math.abs(displayOpenUnrealized))
             }
             tone={
-              openCount === 0 || openUnrealized == null
+              openCount === 0 || displayOpenUnrealized == null
                 ? "neutral"
-                : openUnrealized >= 0
+                : displayOpenUnrealized >= 0
                   ? "ok"
                   : "bad"
             }
@@ -767,20 +791,25 @@ export function TradingCockpit({
           <Dial
             label="Closed P&L"
             valueLabel={
-              closedCount === 0
+              displayClosedCount === 0
                 ? "—"
-                : liveTotalPnl != null && Number.isFinite(liveTotalPnl)
-                  ? moneyPnl(String(liveTotalPnl))
+                : displayTotalPnl != null && Number.isFinite(displayTotalPnl)
+                  ? moneyPnl(String(displayTotalPnl))
                   : "—"
             }
-            pct={closedCount === 0 ? 5 : Math.min(100, 40 + closedCount * 10)}
+            pct={
+              displayClosedCount === 0
+                ? 5
+                : Math.min(100, 40 + displayClosedCount * 10)
+            }
             tone={
-              closedCount === 0
+              displayClosedCount === 0
                 ? "neutral"
-                : (liveTotalPnl ?? 0) >= 0
+                : (displayTotalPnl ?? 0) >= 0
                   ? "ok"
                   : "bad"
             }
+            beating={displayClosedCount > 0}
           />
         </div>
 
@@ -1347,7 +1376,7 @@ export function TradingCockpit({
             {cockpit.trading_allowed ? "Entries open" : "Entries blocked"}
           </span>
           <span className="status-chip tone-neutral">
-            At risk {account.inTrades != null ? money(account.inTrades) : "—"}
+            At risk {displayAccount.inTrades != null ? money(displayAccount.inTrades) : "—"}
           </span>
         </div>
         <details className="developer-info">

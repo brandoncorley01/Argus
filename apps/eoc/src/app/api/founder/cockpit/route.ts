@@ -11,6 +11,7 @@ export async function GET(req: Request) {
     const portfolioId = url.searchParams.get("portfolioId");
     const data = await apiFetch<CockpitSnapshot>("/api/v1/market/scan/cockpit", {
       searchParams: portfolioId ? { portfolio_id: portfolioId } : undefined,
+      timeoutMs: 15_000,
     });
     return NextResponse.json(data);
   } catch (err) {

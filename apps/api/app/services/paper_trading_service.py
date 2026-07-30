@@ -137,8 +137,23 @@ class PaperTradingService:
         return portfolio
 
     def list_portfolios(self) -> list[PaperPortfolio]:
+        """Prefer Founder desks with open paper risk over empty fixture books."""
+        open_qty = (
+            select(func.coalesce(func.sum(func.abs(PaperPosition.quantity)), 0))
+            .where(
+                PaperPosition.portfolio_id == PaperPortfolio.id,
+                PaperPosition.quantity != 0,
+            )
+            .correlate(PaperPortfolio)
+            .scalar_subquery()
+        )
         return list(
-            self.db.scalars(select(PaperPortfolio).order_by(PaperPortfolio.created_at.desc()))
+            self.db.scalars(
+                select(PaperPortfolio).order_by(
+                    open_qty.desc(),
+                    PaperPortfolio.created_at.desc(),
+                )
+            )
         )
 
     def get_portfolio(self, portfolio_id: uuid.UUID) -> PaperPortfolio:
@@ -283,6 +298,17 @@ class PaperTradingService:
                 .order_by(PaperFill.filled_at.asc())
                 .limit(1)
             )
+            # Current open leg start = most recent buy fill (not first-ever fill).
+            open_leg_fill = self.db.scalar(
+                select(PaperFill)
+                .where(
+                    PaperFill.portfolio_id == portfolio_id,
+                    PaperFill.symbol == pos.symbol,
+                    PaperFill.side == "buy",
+                )
+                .order_by(PaperFill.filled_at.desc())
+                .limit(1)
+            )
             last_order = self.db.scalar(
                 select(PaperOrder)
                 .where(
@@ -294,6 +320,18 @@ class PaperTradingService:
             )
             mark, mark_at = self._latest_mark(pos.symbol)
             plan = self._exit_plan_levels(portfolio_id, pos.symbol)
+            stop_level = plan.get("stop_loss")
+            target_level = plan.get("take_profit")
+            # If entry stored a null target (pre-fix or range-high edge),
+            # synthesize a 2R target from entry + stop so exits can still fire.
+            if (
+                target_level is None
+                and stop_level is not None
+                and pos.average_cost
+                and pos.average_cost > stop_level
+            ):
+                risk = pos.average_cost - stop_level
+                target_level = pos.average_cost + (risk * Decimal("2"))
             market_value: Decimal | None = None
             unrealized: Decimal | None = None
             pnl_pct: Decimal | None = None
@@ -323,12 +361,16 @@ class PaperTradingService:
                     "mark_price": mark,
                     "pnl_percent": pnl_pct,
                     "price_status": price_status,
-                    "opened_at": first_fill.filled_at if first_fill else None,
+                    "opened_at": (
+                        open_leg_fill.filled_at
+                        if open_leg_fill is not None
+                        else (first_fill.filled_at if first_fill else None)
+                    ),
                     "strategy_version_id": (
                         last_order.strategy_version_id if last_order else None
                     ),
-                    "stop_loss": plan.get("stop_loss"),
-                    "take_profit": plan.get("take_profit"),
+                    "stop_loss": stop_level,
+                    "take_profit": target_level,
                     "state": (
                         "Holding"
                         if price_status == "live"
@@ -381,7 +423,7 @@ class PaperTradingService:
     ) -> list[dict[str, Any]]:
         """Recent sell fills with realized P&L from chronological replay."""
         _ = self.get_portfolio(portfolio_id)
-        safe = min(max(limit, 1), 50)
+        safe = min(max(limit, 1), 500)
         all_fills = list(
             self.db.scalars(
                 select(PaperFill)
@@ -432,6 +474,45 @@ class PaperTradingService:
                     st["opened_at"] = None
         closed.reverse()
         return closed[:safe]
+
+    def day_realized_pnl(
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        tz_name: str = "America/New_York",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Realized paper P&L for the Founder learning day: 12:00 AM → 12:00 AM.
+
+        Day boundaries use America/New_York so Home "Today's P&L" matches the
+        desk clock. Does not invent fills; sums closed sell legs only.
+        """
+        from datetime import time, timedelta
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(tz_name)
+        moment = now.astimezone(tz) if now is not None else datetime.now(tz)
+        day_start = datetime.combine(moment.date(), time.min, tzinfo=tz)
+        day_end = day_start + timedelta(days=1)
+        total = Decimal("0")
+        count = 0
+        for trade in self.list_closed_trades(portfolio_id, limit=500):
+            filled_at = trade.get("filled_at")
+            if filled_at is None:
+                continue
+            if filled_at.tzinfo is None:
+                filled_at = filled_at.replace(tzinfo=UTC)
+            local = filled_at.astimezone(tz)
+            if day_start <= local < day_end:
+                total += Decimal(str(trade["realized_pnl"]))
+                count += 1
+        return {
+            "today_realized_pnl": total,
+            "today_closed_trade_count": count,
+            "day_start": day_start.isoformat(),
+            "day_end": day_end.isoformat(),
+            "timezone": tz_name,
+        }
 
     def _is_new_entry_order(
         self, portfolio_id: uuid.UUID, *, symbol: str, side: str, quantity: Decimal

@@ -16,6 +16,8 @@ export type ProxyOptions = {
   /** Optional raw Cookie header override (e.g. login response capture). */
   cookieHeader?: string;
   captureSetCookies?: (cookies: { name: string; value: string }[]) => void;
+  /** Abort after this many ms (default 12s). */
+  timeoutMs?: number;
 };
 
 function buildUrl(path: string, searchParams?: ProxyOptions["searchParams"]): string {
@@ -70,11 +72,13 @@ export async function apiFetch<T>(
     headers["Content-Type"] = "application/json";
   }
 
+  const timeoutMs = options.timeoutMs ?? 12_000;
   const res = await fetch(buildUrl(path, options.searchParams), {
     method,
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (options.captureSetCookies) {

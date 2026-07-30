@@ -24,6 +24,7 @@ type Busy = "start" | "stop" | "pause" | null;
 export function CommandStatusBar({
   argusStatus,
   statusExplanation,
+  statusFix,
   tradingMode,
   connectionLabel,
   connectionOk,
@@ -38,6 +39,7 @@ export function CommandStatusBar({
 }: {
   argusStatus: "Running" | "Paused" | "Stopped" | "Warning";
   statusExplanation: string;
+  statusFix?: string | null;
   tradingMode: "Paper" | "Live";
   connectionLabel: string;
   connectionOk: boolean;
@@ -120,6 +122,15 @@ export function CommandStatusBar({
         </span>
         <span className="status-chip tone-neutral">Build {buildId}</span>
       </div>
+
+      <p className="command-status-why" role="status">
+        {statusExplanation}
+      </p>
+      {statusFix ? (
+        <p className="command-status-fix" role="status">
+          {statusFix}
+        </p>
+      ) : null}
 
       <div className="command-actions">
         <button

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
@@ -79,15 +78,15 @@ export function SideNav({
         <ul className="nav-list">
           {PRIMARY.map((item) => (
             <li key={item.href}>
-              <Link
+              {/* Full document navigation — avoids soft-nav starvation under cockpit load. */}
+              <a
                 href={item.href}
                 className="nav-link"
-                prefetch
                 aria-current={current(pathname, item.href) ? "page" : undefined}
                 onClick={() => setMenuOpen(false)}
               >
                 {item.label}
-              </Link>
+              </a>
             </li>
           ))}
           <li>
@@ -109,25 +108,24 @@ export function SideNav({
                 (i) => !("founderOnly" in i && i.founderOnly) || isFounder,
               ).map((item) => (
                 <li key={item.href}>
-                  <Link
+                  <a
                     href={item.href}
                     className="nav-link"
-                    prefetch
                     aria-current={current(pathname, item.href) ? "page" : undefined}
                     onClick={() => setMenuOpen(false)}
                   >
                     {item.label}
-                  </Link>
+                  </a>
                 </li>
               ))}
             </ul>
-            <Link
+            <a
               href="/today"
               className="btn secondary nav-back"
               onClick={() => setMenuOpen(false)}
             >
               Back to Home
-            </Link>
+            </a>
           </>
         ) : null}
 

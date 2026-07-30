@@ -534,14 +534,22 @@ class MarketScanService:
                             "Argus is watching for one more confirming candle."
                         )
 
-                    # Simple structural levels from recent range (not invented targets).
+                    # Structural stop/target with a minimum 2R take-profit so
+                    # entries are not closed on the next tick when price sits
+                    # near the recent range high.
                     window = bars[-20:]
                     low = min(b.low for b in window)
                     high = max(b.high for b in window)
                     stop = Decimal(str(low))
-                    target = Decimal(str(high))
                     stop_d = stop if stop < price else None
-                    target_d = target if target > price else None
+                    risk = (price - stop_d) if stop_d is not None else (price * Decimal("0.01"))
+                    if risk <= 0:
+                        risk = price * Decimal("0.01")
+                    min_target = price + (risk * Decimal("2"))
+                    range_high = Decimal(str(high))
+                    target_d = range_high if range_high > min_target else min_target
+                    if target_d <= price:
+                        target_d = min_target
                     # Expire watch if prior watch for this symbol already timed out.
                     prior = self._prior_watch_meta(inst.symbol)
                     watching_since = prior.get("watching_since") or _utcnow()
@@ -1675,9 +1683,26 @@ class MarketScanService:
     def _decided_lines(self, *, limit: int = 12) -> list[dict[str, Any]]:
         from app.services.plain_language import plain_rejection
 
-        events = self.list_events(limit=40)
+        events = self.list_events(limit=80)
         out: list[dict[str, Any]] = []
         for e in events:
+            outcome = (e.outcome or "").lower()
+            # Always surface paper enter/exit explanations.
+            if outcome in {"entered", "exited"}:
+                text = e.title if e.title else (e.detail or outcome)
+                if e.detail and e.detail not in text:
+                    text = f"{text} — {e.detail}"
+                out.append(
+                    {
+                        "id": str(e.id),
+                        "at": e.occurred_at,
+                        "text": text[:280],
+                        "tone": "ok" if outcome == "entered" else "warn",
+                    }
+                )
+                if len(out) >= limit:
+                    break
+                continue
             if e.component not in {"strategy_evaluator", "market_scanner", "paper_training"}:
                 # Keep teaching / evaluator decisions; skip pure health noise.
                 if e.outcome not in {"watching", "rejected", "interested", "not_interested"}:

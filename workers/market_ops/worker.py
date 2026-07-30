@@ -178,14 +178,15 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
 
                     training = PaperTrainingService(session)
                     for portfolio_id in training.iter_automation_portfolio_ids():
-                        opened = training.maybe_auto_enter_from_scan(
-                            portfolio_id=portfolio_id, actor=None
-                        )
-                        auto_opened += len(opened)
+                        # Exits first so new entries are not closed in the same pass.
                         exits = training.evaluate_paper_exits(
                             portfolio_id=portfolio_id, actor=None
                         )
                         auto_exits += len(exits)
+                        opened = training.maybe_auto_enter_from_scan(
+                            portfolio_id=portfolio_id, actor=None
+                        )
+                        auto_opened += len(opened)
                     TradingIntelligenceService(session).resolve_pending_misses()
                 except Exception as exc:  # noqa: BLE001
                     _open_failure_incident(

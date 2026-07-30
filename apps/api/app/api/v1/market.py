@@ -473,10 +473,10 @@ def run_scan(
 
         training = PaperTrainingService(db)
         for portfolio_id in training.iter_automation_portfolio_ids():
-            training.maybe_auto_enter_from_scan(
+            training.evaluate_paper_exits(
                 portfolio_id=portfolio_id, actor=principal
             )
-            training.evaluate_paper_exits(
+            training.maybe_auto_enter_from_scan(
                 portfolio_id=portfolio_id, actor=principal
             )
         try:

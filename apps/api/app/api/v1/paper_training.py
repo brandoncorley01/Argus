@@ -194,3 +194,27 @@ def auto_enter(
             else "No automatic paper entries were taken."
         ),
     }
+
+
+@router.post("/{portfolio_id}/reseed-learning")
+def reseed_learning(
+    portfolio_id: uuid.UUID,
+    principal: AuthenticatedPrincipal = Depends(RequireFounder),
+    service: PaperTrainingService = Depends(get_service),
+) -> dict[str, object]:
+    """Flatten paper risk and reset the learning desk to $300 starting cash.
+
+    Live trading stays locked. Default practice size becomes $30 (~10% of book).
+    """
+    try:
+        result = service.reseed_learning_desk(portfolio_id, actor=principal)
+    except PaperTrainingError as exc:
+        raise _http(exc) from exc
+    return {
+        "ok": True,
+        "message": (
+            f"Learning desk reset to ${result['cash_balance']} with "
+            f"${result['default_notional']} per practice entry."
+        ),
+        **result,
+    }

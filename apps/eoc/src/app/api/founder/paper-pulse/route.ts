@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { sumTodayRealizedPnl } from "@/lib/founder/todayPnl";
 import { apiFetch } from "@/lib/server/api";
 
 export const dynamic = "force-dynamic";
@@ -25,11 +26,23 @@ type ClosedTrade = {
 };
 
 type PositionSummary = {
+  id: string;
   symbol: string;
+  quantity: string;
+  side: string;
+  average_cost: string;
+  committed_capital: string;
+  market_value?: string | null;
+  realized_pnl: string;
   unrealized_pnl: string | null;
   mark_price: string | null;
+  pnl_percent: string | null;
+  price_status?: string;
+  opened_at: string | null;
+  strategy_version_id: string | null;
   stop_loss: string | null;
   take_profit: string | null;
+  state: string;
 };
 
 type TrainingSettings = {
@@ -38,7 +51,7 @@ type TrainingSettings = {
 };
 
 /**
- * Live paper-account pulse for Home dials — genuine portfolio figures only.
+ * Single Home pulse — capital + full open positions + today's Eastern P&L.
  */
 export async function GET(req: NextRequest) {
   const portfolioId = req.nextUrl.searchParams.get("portfolioId");
@@ -49,25 +62,26 @@ export async function GET(req: NextRequest) {
     );
   }
   try {
+    const pulseMs = 10_000;
     const [summary, closed, settings, positions] = await Promise.all([
       apiFetch<PortfolioSummary>(
         `/api/v1/paper/portfolios/${portfolioId}/summary`,
+        { timeoutMs: pulseMs },
       ),
       apiFetch<ClosedTrade[]>(
         `/api/v1/paper/portfolios/${portfolioId}/closed-trades`,
-        { searchParams: { limit: 8 } },
+        { searchParams: { limit: 200 }, timeoutMs: pulseMs },
       ),
       apiFetch<TrainingSettings>(
         `/api/v1/paper/training/${portfolioId}/settings`,
+        { timeoutMs: pulseMs },
       ),
       apiFetch<PositionSummary[]>(
         `/api/v1/paper/portfolios/${portfolioId}/position-summaries`,
+        { timeoutMs: pulseMs },
       ),
     ]);
-    const totalPnl = closed.reduce(
-      (sum, t) => sum + (Number(t.realized_pnl) || 0),
-      0,
-    );
+    const today = sumTodayRealizedPnl(closed);
     const openUnrealized = positions.reduce((sum, p) => {
       const n = Number(p.unrealized_pnl);
       return sum + (Number.isFinite(n) ? n : 0);
@@ -75,10 +89,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       fetched_at: new Date().toISOString(),
       summary,
-      closed_trade_count: closed.length,
+      closed_trade_count: today.count,
       recent_closed: closed.slice(0, 5),
-      total_realized_pnl: String(totalPnl),
+      /** Realized P&L for the Eastern calendar day (12 AM → 12 AM). */
+      today_realized_pnl: String(today.pnl),
+      today_day_key: today.dayKey,
+      today_closed_trade_count: today.count,
+      /** Backward-compatible alias used by Live Desk closed P&L dial. */
+      total_realized_pnl: String(today.pnl),
       open_unrealized_pnl: String(openUnrealized),
+      positions,
       open_positions: positions.map((p) => ({
         symbol: p.symbol,
         unrealized_pnl: p.unrealized_pnl,

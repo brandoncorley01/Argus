@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 
+import { usePaperLiveOptional } from "@/components/founder/PaperLiveProvider";
+import { moneyPnl, pnlClass } from "@/lib/founder/simple";
+import { todayPnlWindowLabel } from "@/lib/founder/todayPnl";
+
 type Opportunity = {
   symbol: string;
   stage?: string;
@@ -42,16 +46,37 @@ type Briefing = {
   mode?: string;
 };
 
+function statusMeaning(status: string): string {
+  switch (status) {
+    case "Running":
+      return "Paper desk is operating normally.";
+    case "Paused":
+      return "New paper entries are paused; open trades can still be monitored.";
+    case "Stopped":
+      return "Argus control plane is not ready — Start Argus to resume.";
+    case "Warning":
+      return "Something needs attention before trusting new paper entries.";
+    default:
+      return "Status detail unavailable.";
+  }
+}
+
 export function ExecutiveBriefing({
   briefing,
   todayPnl,
   openPositions,
   institutionStatus,
+  institutionExplanation,
+  institutionFix,
 }: {
   briefing: Briefing | null;
   todayPnl: number | null;
   openPositions: number;
   institutionStatus: string;
+  /** Plain-language why for Running / Warning / Paused / Stopped. */
+  institutionExplanation?: string | null;
+  /** Concrete next step when status is not healthy. */
+  institutionFix?: string | null;
 }) {
   const [open, setOpen] = useState(true);
   const [intelOpen, setIntelOpen] = useState(false);
@@ -64,6 +89,14 @@ export function ExecutiveBriefing({
     briefing?.trading_intelligence_summary ?? briefing?.bullets ?? [];
   const top = briefing?.highest_priority_opportunity;
   const watch = briefing?.watchlist_intelligence;
+  const statusWhy =
+    (institutionExplanation && institutionExplanation.trim()) ||
+    statusMeaning(institutionStatus);
+  const statusFix = institutionFix?.trim() || null;
+  const live = usePaperLiveOptional();
+  const liveOpen = live?.account.openCount ?? openPositions;
+  const livePnl =
+    live?.totalRealizedPnl != null ? live.totalRealizedPnl : todayPnl;
   const opportunities = (() => {
     const raw = watch?.top_opportunities ?? [];
     const seen = new Set<string>();
@@ -92,6 +125,12 @@ export function ExecutiveBriefing({
       <p className="muted-note" style={{ marginTop: "0.35rem" }}>
         {briefing?.institution_status ?? institutionStatus} · PROVE mode · Live locked
       </p>
+      <p className="institution-status-why" style={{ marginTop: "0.35rem" }}>
+        {statusWhy}
+      </p>
+      {statusFix ? (
+        <p className="institution-status-fix">{statusFix}</p>
+      ) : null}
 
       {open ? (
         <>
@@ -101,17 +140,31 @@ export function ExecutiveBriefing({
               <div className="metric-value" style={{ fontSize: "1.15rem" }}>
                 {institutionStatus}
               </div>
+              <p className="muted-note institution-status-detail" style={{ margin: "0.35rem 0 0" }}>
+                {statusWhy}
+              </p>
+              {statusFix ? (
+                <p className="institution-status-fix" style={{ marginTop: "0.45rem" }}>
+                  {statusFix}
+                </p>
+              ) : null}
             </div>
             <div>
               <div className="metric-label">Today&apos;s P&amp;L</div>
-              <div className="metric-value" style={{ fontSize: "1.15rem" }}>
-                {todayPnl == null ? "Unavailable" : todayPnl.toFixed(2)}
+              <div
+                className={`metric-value ${pnlClass(livePnl)}`}
+                style={{ fontSize: "1.15rem" }}
+              >
+                {livePnl == null ? "Unavailable" : moneyPnl(livePnl)}
               </div>
+              <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
+                {todayPnlWindowLabel()} · $300 learning desk
+              </p>
             </div>
             <div>
               <div className="metric-label">Open positions</div>
               <div className="metric-value" style={{ fontSize: "1.15rem" }}>
-                {openPositions}
+                {liveOpen}
               </div>
             </div>
             <div>
