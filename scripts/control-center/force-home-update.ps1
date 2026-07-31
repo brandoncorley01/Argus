@@ -3,7 +3,7 @@
 $ErrorActionPreference = "Continue"
 
 Write-Host "=== Force Argus Home update ==="
-Write-Host "Script revision: force-home-update-v4"
+Write-Host "Script revision: force-home-update-v5"
 
 $candidates = @(
   (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),

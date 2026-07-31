@@ -1,18 +1,21 @@
 ﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Home.
 $ErrorActionPreference = "Continue"
 
-# Optional self-update of THIS script only. Never overwrites a dirty local copy
-# unless ARGUS_FORCE_SYNC=1. Full-tree resets are gated the same way in Sync-ArgusCode.
+# Optional self-update of Start scripts from GitHub main BEFORE sourcing
+# _common.ps1 — otherwise a stale local _common cannot provide new helpers
+# (behind-main detection) and Founder stays stuck on old build stamps.
+# Never overwrites dirty local copies unless ARGUS_FORCE_SYNC=1.
 if (-not $env:ARGUS_START_SELF_UPDATED) {
   $env:ARGUS_START_SELF_UPDATED = "1"
   $self = $MyInvocation.MyCommand.Path
   if (-not $self) { $self = Join-Path $PSScriptRoot "start-argus.ps1" }
+  $scriptDir = Split-Path $self -Parent
   $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
   $skipSelfUpdate = $env:ARGUS_SKIP_START_SELF_UPDATE -eq "1"
   $localDirty = $false
   try {
-    Push-Location (Split-Path $self -Parent)
-    $st = git status --porcelain -- "start-argus.ps1" 2>$null
+    Push-Location $scriptDir
+    $st = git status --porcelain -- "start-argus.ps1" "_common.ps1" "recycle-eoc.ps1" 2>$null
     if ($LASTEXITCODE -eq 0 -and "$st".Trim()) { $localDirty = $true }
   } catch { } finally {
     Pop-Location -ErrorAction SilentlyContinue
@@ -20,26 +23,44 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
   if ($skipSelfUpdate) {
     Write-Host "Skipping Start script self-update (ARGUS_SKIP_START_SELF_UPDATE=1)."
   } elseif ($localDirty -and -not $forceSync) {
-    Write-Host "Local start-argus.ps1 has uncommitted edits — skipping self-update (set ARGUS_FORCE_SYNC=1 to overwrite)."
+    Write-Host "Local Start scripts have uncommitted edits — skipping self-update (set ARGUS_FORCE_SYNC=1 to overwrite)."
   } else {
-    $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/start-argus.ps1"
-    $tmp = Join-Path $env:TEMP ("argus-start-argus-{0}.ps1" -f [guid]::NewGuid().ToString("N"))
+    $baseUrl = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center"
+    $files = @(
+      @{ Name = "start-argus.ps1"; Required = $true },
+      @{ Name = "_common.ps1"; Required = $true },
+      @{ Name = "recycle-eoc.ps1"; Required = $false }
+    )
+    $changed = $false
     try {
-      Write-Host "Downloading latest Start script from GitHub..."
-      Invoke-WebRequest -Uri "$url?$(Get-Random)" -OutFile $tmp -UseBasicParsing -TimeoutSec 30
-      $remote = Get-Content -Raw $tmp
-      $local = if (Test-Path $self) { Get-Content -Raw $self } else { "" }
-      if ($remote -and ($forceSync -or $remote -ne $local)) {
-        Copy-Item -LiteralPath $tmp -Destination $self -Force
+      Write-Host "Downloading latest Start scripts from GitHub..."
+      foreach ($f in $files) {
+        $dest = Join-Path $scriptDir $f.Name
+        $tmp = Join-Path $env:TEMP ("argus-{0}-{1}" -f $f.Name, [guid]::NewGuid().ToString("N"))
+        try {
+          Invoke-WebRequest -Uri ("{0}/{1}?{2}" -f $baseUrl, $f.Name, (Get-Random)) -OutFile $tmp -UseBasicParsing -TimeoutSec 30
+          $remote = Get-Content -Raw $tmp
+          $local = if (Test-Path $dest) { Get-Content -Raw $dest } else { "" }
+          if ($remote -and ($forceSync -or $remote -ne $local)) {
+            Copy-Item -LiteralPath $tmp -Destination $dest -Force
+            $changed = $true
+            Write-Host ("Updated {0}" -f $f.Name)
+          }
+        } catch {
+          if ($f.Required) { throw }
+          Write-Host ("WARN: optional {0} not downloaded: {1}" -f $f.Name, $_.Exception.Message)
+        } finally {
+          Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+      }
+      if ($changed) {
         Write-Host "Re-running updated Start script..."
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self @args
         exit $LASTEXITCODE
       }
-      Write-Host "Start script already current."
+      Write-Host "Start scripts already current."
     } catch {
-      Write-Host "WARN: could not self-update Start script: $($_.Exception.Message)"
-    } finally {
-      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+      Write-Host "WARN: could not self-update Start scripts: $($_.Exception.Message)"
     }
   }
 }
@@ -78,9 +99,33 @@ try {
   }
 
   # Car model: if Argus is already running, Start must not stall on git sync /
-  # cache wipe / full recycle. Only force a heavy Start when unhealthy or
-  # ARGUS_FORCE_SYNC=1 (explicit refresh from GitHub).
+  # cache wipe / full recycle — UNLESS GitHub main is ahead of this PC.
+  # Founder was stuck on stale build stamps (e.g. v2.11) because Fast Start
+  # skipped sync while services were healthy.
   $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
+  $localBuild = Get-ArgusLocalBuildId $Root
+  if (-not $forceSync) {
+    try {
+      if (Test-ArgusBehindOriginMain $Root) {
+        $remoteBuildText = ""
+        try {
+          Push-Location $Root
+          $remoteBuildText = git show "origin/main:apps/eoc/src/lib/build.ts" 2>$null
+        } finally {
+          Pop-Location -ErrorAction SilentlyContinue
+        }
+        $remoteBuild = Get-ArgusBuildIdFromText "$remoteBuildText"
+        Write-Host ("This PC is behind GitHub main (local build {0}; remote {1}) — forcing code refresh." -f $(if ($localBuild) { $localBuild } else { "?" }), $(if ($remoteBuild) { $remoteBuild } else { "?" }))
+        $forceSync = $true
+        $env:ARGUS_FORCE_SYNC = "1"
+      } else {
+        Write-Host ("Code matches GitHub main (build {0})." -f $(if ($localBuild) { $localBuild } else { "?" }))
+      }
+    } catch {
+      Write-Host "WARN: could not compare to GitHub main: $($_.Exception.Message)"
+    }
+  }
+
   $apiReadyNow = Test-HttpOk (Get-ArgusApiReadyUrl) 3
   $eocReadyNow = (Test-HttpOk "http://127.0.0.1:3000/login" 3) -or (Test-HttpOk "http://127.0.0.1:3000/" 3) -or (Test-HttpOk (Get-ArgusDashboardUrl) 3)
   $workerReadyNow = Test-ArgusWorkerFresh $Root
@@ -341,8 +386,17 @@ try {
     Write-Host "Opening Home: $dash"
     Start-Process $dash
   } else {
-    # Browser Start: leave :3000 alone. Killing EOC here aborts the in-flight
-    # Start action and leaves Home stuck on "Working…".
+    # Browser Start: leave :3000 alone during the in-flight action. If code
+    # updated, schedule a delayed dashboard recycle so the new build stamp appears.
+    if ($updated) {
+      $recycle = Join-Path $PSScriptRoot "recycle-eoc.ps1"
+      try {
+        Start-ArgusHiddenPowerShell -ScriptPath $recycle -WorkingDirectory $Root -ExtraArgs @("8")
+        Write-Host "Scheduled dashboard recycle so Home picks up the new build stamp."
+      } catch {
+        Write-Host "WARN: could not schedule dashboard recycle: $($_.Exception.Message)"
+      }
+    }
     Write-Host "Browser Start complete — dashboard left running for soft reload."
     Write-Host "REFRESH_HOME_SOFT"
   }
