@@ -328,6 +328,12 @@ function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
       $workerPid = Start-ArgusWorkerProcess $Root
       Start-Sleep -Seconds 2
     }
+    # Keep-awake is the only guard against the host sleeping mid-session, and
+    # nothing else restarts it once it exits.
+    if (-not (Test-ArgusKeepAwakeAlive $Root)) {
+      Write-Host "Keep-awake missing - restoring sleep protection..."
+      $null = Start-ArgusKeepAwake $Root
+    }
   }
   Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
   return (Test-HttpOk (Get-ArgusApiReadyUrl) 3)
@@ -538,9 +544,21 @@ function Start-ArgusKeepAwake([string]$Root) {
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script
   )
   # PID file is also written by the script; seed it immediately for Stop races.
+  $pidPath = Get-ArgusKeepAwakePidFile $Root
   try {
-    $proc.Id | Set-Content -Path (Get-ArgusKeepAwakePidFile $Root) -Encoding utf8
+    $proc.Id | Set-Content -Path $pidPath -Encoding utf8
   } catch { }
+
+  # A parse error or a failed Add-Type kills the helper before it writes its own
+  # log, so the only reliable signal is whether the process is still alive.
+  Start-Sleep -Seconds 3
+  if (-not (Test-ArgusKeepAwakeAlive $Root)) {
+    Remove-Item -Path $pidPath -Force -ErrorAction SilentlyContinue
+    Write-Host "WARN: keep-awake exited immediately - automatic sleep is NOT blocked."
+    Write-Host "      Diagnose with: powershell -NoProfile -ExecutionPolicy Bypass -File `"$script`""
+    Show-ArgusNotification -Title "Argus sleep protection failed" -Message "The keep-awake helper could not start. Windows may sleep and pause scanning." -Level "critical"
+    return $null
+  }
   return $proc.Id
 }
 

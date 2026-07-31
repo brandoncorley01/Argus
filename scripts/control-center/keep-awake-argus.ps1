@@ -1,6 +1,9 @@
 # Prevent Windows automatic sleep/hibernate while Argus is Running.
 # Pulses SetThreadExecutionState so the host stays awake until Stop Argus
 # (or the API/worker processes disappear). Display may still dim.
+#
+# Keep this file ASCII-only: it has no UTF-8 BOM, so Windows PowerShell 5.1
+# decodes it as cp1252 and any non-ASCII byte can terminate a string early.
 $ErrorActionPreference = "Continue"
 . "$PSScriptRoot\_common.ps1"
 
@@ -35,7 +38,7 @@ function Request-KeepAwake {
   $flags = [ArgusKeepAwake]::ES_CONTINUOUS -bor [ArgusKeepAwake]::ES_SYSTEM_REQUIRED -bor [ArgusKeepAwake]::ES_AWAYMODE_REQUIRED
   $result = [ArgusKeepAwake]::SetThreadExecutionState($flags)
   if ($result -eq 0) {
-    # Away mode unsupported on some hosts — still block automatic sleep.
+    # Away mode unsupported on some hosts - still block automatic sleep.
     $flags = [ArgusKeepAwake]::ES_CONTINUOUS -bor [ArgusKeepAwake]::ES_SYSTEM_REQUIRED
     [void][ArgusKeepAwake]::SetThreadExecutionState($flags)
   }
@@ -54,7 +57,7 @@ try {
 
   while ($true) {
     if (-not (Test-ArgusTradingAlive $Root)) {
-      Write-KeepAwakeLog "Argus not alive — releasing keep-awake"
+      Write-KeepAwakeLog "Argus not alive - releasing keep-awake"
       break
     }
     Request-KeepAwake

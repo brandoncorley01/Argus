@@ -125,9 +125,11 @@ export async function requireUser(): Promise<CurrentUser> {
     return await apiFetch<CurrentUser>("/api/v1/auth/me");
   } catch (err) {
     if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
-      redirect("/login");
+      redirect("/login?reason=expired");
     }
-    redirect("/login");
+    // Losing the control plane is not the same as being signed out; saying so
+    // keeps the sign-in page from blaming the wrong thing.
+    redirect("/login?reason=unreachable");
   }
 }
 

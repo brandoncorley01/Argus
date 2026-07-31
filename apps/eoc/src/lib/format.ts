@@ -37,6 +37,16 @@ export function formatLiveClock(ms: number | Date): string {
   });
 }
 
+/** Elapsed duration — “12s”, “3m 4s”, “2h 5m”. */
+export function formatDurationLabel(ms: number): string {
+  const secs = Math.max(0, Math.floor(ms / 1000));
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
 /** Relative age that updates every second — “12s ago”, “3m ago”. */
 export function formatAgeLabel(
   iso: string | null | undefined,
@@ -45,12 +55,7 @@ export function formatAgeLabel(
   if (!iso || nowMs == null) return "—";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "—";
-  const age = Math.max(0, Math.floor((nowMs - t) / 1000));
-  if (age < 60) return `${age}s ago`;
-  if (age < 3600) return `${Math.floor(age / 60)}m ${age % 60}s ago`;
-  const h = Math.floor(age / 3600);
-  const m = Math.floor((age % 3600) / 60);
-  return `${h}h ${m}m ago`;
+  return `${formatDurationLabel(nowMs - t)} ago`;
 }
 
 export function healthTone(

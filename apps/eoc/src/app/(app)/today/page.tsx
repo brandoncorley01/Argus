@@ -12,6 +12,7 @@ import { TradingCockpit } from "@/components/founder/TradingCockpit";
 import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
 import { explainHealthWarning } from "@/lib/founder/institutionStatus";
+import { pickPrimaryPortfolio } from "@/lib/founder/learningDesk";
 import { sumTodayRealizedPnl } from "@/lib/founder/todayPnl";
 import { formatTimestamp } from "@/lib/format";
 import { apiFetch } from "@/lib/server/api";
@@ -252,10 +253,16 @@ async function renderTodayPage() {
   await requireUser();
 
   // Fast path only — heavy cockpit / intelligence load client-side.
-  const [ready, microLive, portfolios, providers, health, scanStatus] =
+  // Ensure the $300 Founder learning desk exists, then list books (desk sorts first).
+  const [ready, microLive, learningDesk, portfolios, providers, health, scanStatus] =
     await Promise.all([
       soft(getProcessReady),
       soft(getMicroLiveStatus),
+      soft(() =>
+        apiFetch<Portfolio>("/api/v1/paper/training/learning-desk", {
+          timeoutMs: FAST_MS,
+        }),
+      ),
       soft(() =>
         apiFetch<Portfolio[]>("/api/v1/paper/portfolios", { timeoutMs: FAST_MS }),
       ),
@@ -272,8 +279,9 @@ async function renderTodayPage() {
       ),
     ]);
 
-  // Backend orders by open risk; first book is the active Founder desk.
-  const portfolio = portfolios?.[0] ?? null;
+  // Prefer the canonical $300 learning desk over fixture / test books.
+  const portfolio =
+    learningDesk ?? pickPrimaryPortfolio(portfolios) ?? null;
   let summary: PortfolioSummary | null = null;
   let positions: PositionSummary[] = [];
   let closedTrades: ClosedTrade[] = [];
@@ -411,6 +419,7 @@ async function renderTodayPage() {
         portfolioId={portfolio?.id ?? null}
         pauseNewEntries={pauseNewEntries}
         buildId={ARGUS_UI_BUILD}
+        renderedAt={new Date().toISOString()}
       />
 
       <PaperLiveProvider

@@ -396,6 +396,17 @@ table.data th {
   color: var(--muted);
 }
 
+.login-notice {
+  margin: 0 0 1.2rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-radius: 8px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .alert {
   padding: 0.7rem 0.85rem;
   border-radius: 8px;

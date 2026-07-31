@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { LiveClock } from "@/components/founder/LiveClock";
 import {
@@ -10,6 +10,14 @@ import {
   type ActionResult,
 } from "@/lib/actions/control";
 import { pauseNewEntriesAction } from "@/lib/actions/paper";
+import { formatDurationLabel } from "@/lib/format";
+
+/** Home is server-rendered, so only a refresh can move these timestamps. */
+const REFRESH_MS = 30_000;
+/** Two missed refreshes: never present frozen readings as if they were live. */
+const STALE_AFTER_MS = 90_000;
+/** Home SSR takes several seconds; let a returning tab catch up before warning. */
+const CATCH_UP_MS = 15_000;
 
 function Feedback({ result }: { result: ActionResult | null }) {
   if (!result) return null;
@@ -37,6 +45,7 @@ export function CommandStatusBar({
   portfolioId,
   pauseNewEntries,
   buildId,
+  renderedAt,
 }: {
   argusStatus: "Running" | "Paused" | "Stopped" | "Warning";
   statusExplanation: string;
@@ -52,10 +61,62 @@ export function CommandStatusBar({
   portfolioId: string | null;
   pauseNewEntries: boolean;
   buildId: string;
+  renderedAt: string;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<Busy>(null);
   const [result, setResult] = useState<ActionResult | null>(null);
+  const [staleMs, setStaleMs] = useState(0);
+  const [stale, setStale] = useState(false);
+  const lastRenderRef = useRef(0);
+  const visibleSinceRef = useRef(0);
+  const busyRef = useRef<Busy>(null);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  // Only a completed server render advances renderedAt, so timing it locally
+  // measures real staleness without trusting the browser and API clocks to agree.
+  useEffect(() => {
+    lastRenderRef.current = Date.now();
+    setStaleMs(0);
+  }, [renderedAt]);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (busyRef.current) return;
+      if (document.visibilityState !== "visible") return;
+      router.refresh();
+    };
+    const id = window.setInterval(refresh, REFRESH_MS);
+    // A tab left open through host sleep wakes up hours behind.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      visibleSinceRef.current = Date.now();
+      refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [router]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (!lastRenderRef.current) return;
+      const age = Date.now() - lastRenderRef.current;
+      setStaleMs(age);
+      // Refreshes pause while hidden, so a returning tab is expected to be
+      // behind until its catch-up render lands. Warning then would cry wolf.
+      const catchingUp =
+        visibleSinceRef.current > 0 &&
+        Date.now() - visibleSinceRef.current < CATCH_UP_MS;
+      setStale(age >= STALE_AFTER_MS && !catchingUp);
+    }, 1_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   async function run(
     kind: Busy,
@@ -98,6 +159,15 @@ export function CommandStatusBar({
         ) : null}
       </div>
       <div className="status-chip-row" aria-label="System status">
+        {stale ? (
+          <span
+            className="status-chip tone-bad"
+            title="These readings are a snapshot from the last successful page update, not live values."
+          >
+            <i aria-hidden />
+            Not updating {formatDurationLabel(staleMs)}
+          </span>
+        ) : null}
         <span
           className={`status-chip tone-${
             argusStatus === "Running"
@@ -131,6 +201,14 @@ export function CommandStatusBar({
         </span>
         <span className="status-chip tone-neutral">Build {buildId}</span>
       </div>
+
+      {stale ? (
+        <p className="command-status-fix" role="alert">
+          This page stopped updating {formatDurationLabel(staleMs)} ago. Every
+          reading above is from that moment and may no longer be true. Reload
+          the page, and if it stays stale check that Argus is still running.
+        </p>
+      ) : null}
 
       <p className="command-status-why" role="status">
         {statusExplanation}
