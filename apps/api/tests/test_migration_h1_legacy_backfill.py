@@ -29,7 +29,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 PHASE5_REVISION = "5bb9b33b045b"
 PHASE6_REVISION = "c6a1f0e9d2b8"
 PHASE7_REVISION = "a7b8c9d0e1f2"
-HEAD_REVISION = "e7f8a9b0c1d2"
+HEAD_REVISION = "h0b1c2d3e4f5"
 
 
 def _alembic_config() -> Config:
