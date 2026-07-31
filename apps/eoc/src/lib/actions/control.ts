@@ -126,27 +126,11 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
 }
 
 export async function startArgusAction(): Promise<ActionResult> {
-  // If already up, do not re-run Start (keeps the "car running" model).
-  try {
-    const ready = await fetch(`${apiBaseUrl()}/ready`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(4_000),
-    });
-    if (ready.ok) {
-      revalidatePath("/today");
-      revalidatePath("/control");
-      return {
-        ok: true,
-        message: "Argus is already Running. It stays up until you press Stop.",
-      };
-    }
-  } catch {
-    // Fall through to start script.
-  }
-
-  // Single sync path: start-argus.ps1 self-updates from GitHub then force-syncs
-  // main. Do not wipe apps/eoc/.next or kill :3000 here — that aborts this
-  // server action and leaves Home stuck on Starting…
+  // Always run start-argus.ps1. Fast Start stays cheap when already healthy AND
+  // on current GitHub main; when this PC is behind, Start force-syncs so Home
+  // is not stuck on a stale build stamp (e.g. v2.11).
+  // Do not wipe apps/eoc/.next or kill :3000 here — that aborts this server
+  // action; start-argus schedules a delayed dashboard recycle after sync.
   const res = await runPs1("start-argus.ps1", 240_000);
   revalidatePath("/today");
   revalidatePath("/control");
@@ -157,9 +141,16 @@ export async function startArgusAction(): Promise<ActionResult> {
       detail: res.detail,
     };
   }
+  const detail = res.detail ?? "";
+  const refreshed =
+    detail.includes("forcing code refresh") ||
+    detail.includes("Updated to main") ||
+    detail.includes("Scheduled dashboard recycle");
   return {
     ok: true,
-    message: "Argus started. It will keep Running until you press Stop.",
+    message: refreshed
+      ? "Argus refreshed from GitHub. Reload Home if the build stamp looks old."
+      : "Argus started. It will keep Running until you press Stop.",
     detail: res.detail,
   };
 }

@@ -129,9 +129,43 @@ function Test-ArgusGitDirty([string]$Root) {
   }
 }
 
+function Get-ArgusBuildIdFromText([string]$Text) {
+  if (-not $Text) { return $null }
+  if ($Text -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') {
+    return $Matches[1]
+  }
+  return $null
+}
+
+function Get-ArgusLocalBuildId([string]$Root) {
+  $path = Join-Path $Root "apps\eoc\src\lib\build.ts"
+  if (-not (Test-Path $path)) { return $null }
+  return Get-ArgusBuildIdFromText (Get-Content -Raw $path)
+}
+
+function Test-ArgusBehindOriginMain([string]$Root) {
+  # Returns $true when origin/main SHA differs from HEAD (after fetch).
+  if (-not (Test-Path (Join-Path $Root ".git"))) { return $false }
+  Push-Location $Root
+  try {
+    git fetch origin 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $local = (git rev-parse HEAD 2>$null).Trim()
+    $remote = (git rev-parse "origin/main" 2>$null).Trim()
+    if (-not $local -or -not $remote) { return $false }
+    return ($local -ne $remote)
+  } catch {
+    return $false
+  } finally {
+    Pop-Location
+  }
+}
+
 function Sync-ArgusCode([string]$Root) {
   # Founder cadence: Start Argus pulls GitHub main. Returns $true only when SHA changed.
   # Never hard-resets a dirty tree unless ARGUS_FORCE_SYNC=1 (explicit wipe).
+  # When this PC is behind origin/main, Start enables force sync so Founder
+  # is never stuck on a stale build stamp (e.g. v2.11 while main is newer).
   if (-not (Test-Path (Join-Path $Root ".git"))) {
     Write-Host "Code update skipped (not a git checkout)."
     return $false
