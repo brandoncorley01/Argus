@@ -218,3 +218,24 @@ def reseed_learning(
         ),
         **result,
     }
+
+
+@router.get("/{portfolio_id}/advanced-learning")
+def advanced_learning_pane(
+    portfolio_id: uuid.UUID,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Advanced Learning pane for Paper Training — PAPER only."""
+    from app.services.advanced_learning_service import AdvancedLearningService
+
+    try:
+        return AdvancedLearningService(db).pane(portfolio_id)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "error": str(exc)[:200],
+            "live_trading_enabled": False,
+            "learning_day": 1,
+            "required_days": 20,
+            "disclaimer": "Advanced learning unavailable until migrations and worker are healthy.",
+        }

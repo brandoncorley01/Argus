@@ -190,6 +190,22 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                         )
                         auto_opened += len(opened)
                     TradingIntelligenceService(session).resolve_pending_misses()
+                    # Advanced learning rollup (PAPER only; never unlocks live).
+                    try:
+                        from app.services.advanced_learning_service import (
+                            AdvancedLearningService,
+                        )
+
+                        learning = AdvancedLearningService(session)
+                        for portfolio_id in training.iter_automation_portfolio_ids():
+                            learning.evaluate_cycle(portfolio_id)
+                    except Exception as exc:  # noqa: BLE001
+                        _open_failure_incident(
+                            ctx,
+                            title="Advanced learning evaluate failed",
+                            description=str(exc),
+                            key="advanced-learning:evaluate",
+                        )
                 except Exception as exc:  # noqa: BLE001
                     _open_failure_incident(
                         ctx,

@@ -9,6 +9,10 @@ import {
   recordTrainingFeedbackAction,
   setTrainingModeAction,
 } from "@/lib/actions/paper";
+import {
+  AdvancedLearningPane,
+  type AdvancedLearningPaneData,
+} from "@/components/founder/AdvancedLearningPane";
 import { FEEDBACK_OPTIONS } from "@/lib/founder/plainLanguage";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 
@@ -64,6 +68,7 @@ export function PaperTrainingClient({
   scorecard,
   closedTrades,
   readinessNextStep,
+  advancedLearning,
 }: {
   portfolioId: string;
   mode: "automatic" | "coaching";
@@ -72,6 +77,7 @@ export function PaperTrainingClient({
   scorecard: Scorecard | null;
   closedTrades: ClosedTrade[];
   readinessNextStep: string | null;
+  advancedLearning?: AdvancedLearningPaneData | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -346,6 +352,8 @@ export function PaperTrainingClient({
           </div>
         ) : null}
       </section>
+
+      <AdvancedLearningPane data={advancedLearning ?? null} />
 
       <section className="panel rise" aria-label="Paper Training Scorecard">
         <h2 style={{ marginTop: 0 }}>Paper Training Scorecard</h2>

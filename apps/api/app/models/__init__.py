@@ -1477,6 +1477,11 @@ __all__ += [
 from app.models.trading_intelligence import (  # noqa: E402
     FounderCertificationState,
     MissedOpportunity,
+    PaperLearningDaySnapshot,
+    PaperLearningMilestone,
+    PaperLearningProgram,
+    PaperLearningReadinessReport,
+    PaperStrategyConfidenceState,
     PostTradeReview,
     TradeDecisionSnapshot,
 )
@@ -1484,6 +1489,11 @@ from app.models.trading_intelligence import (  # noqa: E402
 __all__ += [
     "FounderCertificationState",
     "MissedOpportunity",
+    "PaperLearningDaySnapshot",
+    "PaperLearningMilestone",
+    "PaperLearningProgram",
+    "PaperLearningReadinessReport",
+    "PaperStrategyConfidenceState",
     "PostTradeReview",
     "TradeDecisionSnapshot",
 ]

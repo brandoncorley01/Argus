@@ -70,7 +70,7 @@ export default async function PaperTrainingPage() {
     );
   }
 
-  const [settings, candidates, scorecard, closedTrades, readiness] =
+  const [settings, candidates, scorecard, closedTrades, readiness, advancedLearning] =
     await Promise.all([
       soft(() =>
         apiFetch<Settings>(`/api/v1/paper/training/${portfolio.id}/settings`),
@@ -92,6 +92,11 @@ export default async function PaperTrainingPage() {
         ),
       ),
       soft(() => apiFetch<Readiness[]>("/api/v1/paper/training/readiness")),
+      soft(() =>
+        apiFetch<Record<string, unknown>>(
+          `/api/v1/paper/training/${portfolio.id}/advanced-learning`,
+        ),
+      ),
     ]);
 
   const notReady = (readiness ?? []).find((r) => !r.ready);
@@ -116,6 +121,7 @@ export default async function PaperTrainingPage() {
         scorecard={scorecard}
         closedTrades={closedTrades ?? []}
         readinessNextStep={notReady?.next_step ?? null}
+        advancedLearning={advancedLearning ?? null}
       />
     </div>
   );

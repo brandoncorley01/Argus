@@ -47,6 +47,18 @@ export default async function PaperPage() {
         title="Paper Trading Institution"
         description="Internal paper execution only. No brokerage account, exchange credentials, or real capital. Empty books mean no paper activity yet."
       />
+      <Panel title="Advanced Learning">
+        <p className="muted-note">
+          The 20-day advanced PAPER learning engine lives on Paper Training —
+          Opportunity Radar inputs, strategy leaderboard, milestones, and Day-20
+          readiness report. Live trading is never auto-enabled.
+        </p>
+        <p style={{ marginTop: "0.75rem" }}>
+          <Link className="btn" href="/paper-training">
+            Open Paper Training
+          </Link>
+        </p>
+      </Panel>
       <div className="grid grid-2">
         <Panel title="Execution providers">
           {!providers ? (

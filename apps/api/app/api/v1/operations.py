@@ -12,6 +12,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequireAnyAuthenticatedRead, RequireFounderOrOperator
@@ -282,3 +283,78 @@ def trading_intelligence_case_file(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case file not found")
     return row
+
+
+@router.get("/trading-intelligence/advanced-learning")
+def trading_intelligence_advanced_learning(
+    portfolio_id: uuid.UUID | None = None,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Advanced 20-day PAPER learning pane. Never enables live trading."""
+    from app.models.paper_trading import PaperPortfolio
+    from app.services.advanced_learning_service import AdvancedLearningService
+
+    pid = portfolio_id
+    if pid is None:
+        row = db.scalar(select(PaperPortfolio).limit(1))
+        if row is None:
+            return {
+                "error": "no_paper_portfolio",
+                "live_trading_enabled": False,
+                "disclaimer": "Create a paper portfolio to begin advanced learning.",
+            }
+        pid = row.id
+    try:
+        return AdvancedLearningService(db).pane(pid)
+    except Exception as exc:  # noqa: BLE001 — never blank Training
+        return {
+            "error": str(exc)[:200],
+            "live_trading_enabled": False,
+            "learning_day": 1,
+            "required_days": 20,
+            "disclaimer": "Advanced learning unavailable until migrations and worker are healthy.",
+        }
+
+
+@router.get("/trading-intelligence/advanced-learning/readiness-report")
+def trading_intelligence_readiness_report(
+    portfolio_id: uuid.UUID | None = None,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.models.paper_trading import PaperPortfolio
+    from app.services.advanced_learning_service import AdvancedLearningService
+
+    pid = portfolio_id
+    if pid is None:
+        row = db.scalar(select(PaperPortfolio).limit(1))
+        if row is None:
+            raise HTTPException(status_code=404, detail="No paper portfolio")
+        pid = row.id
+    report = AdvancedLearningService(db).readiness_report(pid)
+    if report is None:
+        return {
+            "ready": False,
+            "live_trading_enabled": False,
+            "message": "Readiness report generates after Learning Day 20 with stored evidence.",
+        }
+    return report
+
+
+@router.post("/trading-intelligence/advanced-learning/evaluate")
+def trading_intelligence_evaluate_learning(
+    portfolio_id: uuid.UUID | None = None,
+    _: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.models.paper_trading import PaperPortfolio
+    from app.services.advanced_learning_service import AdvancedLearningService
+
+    pid = portfolio_id
+    if pid is None:
+        row = db.scalar(select(PaperPortfolio).limit(1))
+        if row is None:
+            raise HTTPException(status_code=404, detail="No paper portfolio")
+        pid = row.id
+    return AdvancedLearningService(db).evaluate_cycle(pid)
