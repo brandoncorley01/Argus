@@ -557,8 +557,8 @@ class TradingIntelligenceService:
             scored = {
                 k: (sum(v) / len(v)) for k, v in regimes.items() if v
             }
-            strongest = max(scored, key=scored.get)
-            weakest = min(scored, key=scored.get)
+            strongest = max(scored, key=lambda k: scored[k])
+            weakest = min(scored, key=lambda k: scored[k])
         perf = self.strategy_performance()
         return {
             "strongest_conditions": strongest,
@@ -953,7 +953,7 @@ class TradingIntelligenceService:
                     },
                 }
             )
-        timeline.sort(key=lambda x: x.get("at") or "")
+        timeline.sort(key=lambda x: str(x.get("at") or ""))
 
         watched_seconds = None
         if cand.evaluated_at:

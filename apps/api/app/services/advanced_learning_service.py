@@ -279,7 +279,7 @@ class AdvancedLearningService:
             if not groups:
                 return None
             scored = {k: sum(v, Decimal("0")) for k, v in groups.items()}
-            return max(scored, key=scored.get)
+            return max(scored, key=lambda k: scored[k])
 
         leading_strategy = _leader(by_strategy)
         best_coin = _leader(by_coin)
@@ -287,28 +287,30 @@ class AdvancedLearningService:
         worst_coin = None
         if by_strategy:
             scored = {k: sum(v, Decimal("0")) for k, v in by_strategy.items()}
-            worst_strategy = min(scored, key=scored.get)
+            worst_strategy = min(scored, key=lambda k: scored[k])
         if by_coin:
             scored = {k: sum(v, Decimal("0")) for k, v in by_coin.items()}
-            worst_coin = min(scored, key=scored.get)
+            worst_coin = min(scored, key=lambda k: scored[k])
 
-        strategy_leaderboard = []
+        strategy_leaderboard: list[dict[str, Any]] = []
         for key, vals in by_strategy.items():
             w = sum(1 for v in vals if v > 0)
+            net_str = _as_str(sum(vals, Decimal("0")), 8)
             strategy_leaderboard.append(
                 {
                     "strategy_key": key,
                     "trades": len(vals),
                     "wins": w,
                     "win_rate": _as_str(Decimal(w) / Decimal(len(vals))) if vals else None,
-                    "net_pnl_after_costs": _as_str(sum(vals, Decimal("0")), 8),
+                    "net_pnl_after_costs": net_str,
                     "paper_confidence_delta": _as_str(
                         self.paper_confidence_delta(program.portfolio_id, key)
                     ),
                 }
             )
         strategy_leaderboard.sort(
-            key=lambda row: Decimal(row["net_pnl_after_costs"] or "0"), reverse=True
+            key=lambda row: Decimal(str(row.get("net_pnl_after_costs") or "0")),
+            reverse=True,
         )
 
         calibration = self.intelligence.confidence_calibration()
@@ -486,7 +488,8 @@ class AdvancedLearningService:
                 }
             )
         rows.sort(
-            key=lambda row: Decimal(row["net_pnl_after_costs"] or "0"), reverse=True
+            key=lambda row: Decimal(str(row.get("net_pnl_after_costs") or "0")),
+            reverse=True,
         )
         return rows[:24]
 
@@ -515,7 +518,8 @@ class AdvancedLearningService:
                 }
             )
         rows.sort(
-            key=lambda row: Decimal(row["net_pnl_after_costs"] or "0"), reverse=True
+            key=lambda row: Decimal(str(row.get("net_pnl_after_costs") or "0")),
+            reverse=True,
         )
         return rows
 

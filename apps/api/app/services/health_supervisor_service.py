@@ -288,21 +288,6 @@ class HealthSupervisorService:
         except Exception as exc:  # noqa: BLE001
             return HealthStatus.UNHEALTHY, f"/ready failed: {exc}"
 
-    def _probe_api(self) -> tuple[HealthStatus, str]:
-        """Local control-plane readiness. Closes stale health:api incidents."""
-        import urllib.error
-        import urllib.request
-
-        url = os.environ.get("ARGUS_API_READY_URL", "http://127.0.0.1:8000/ready")
-        try:
-            with urllib.request.urlopen(url, timeout=3) as resp:  # noqa: S310 — local loopback
-                body = resp.read().decode("utf-8", errors="replace")
-                if resp.status == 200 and "ready" in body.lower():
-                    return HealthStatus.HEALTHY, "local /ready ok"
-                return HealthStatus.DEGRADED, f"/ready status={resp.status}"
-        except Exception as exc:  # noqa: BLE001
-            return HealthStatus.UNHEALTHY, f"/ready failed: {exc}"
-
     def _probe_postgres(self) -> tuple[HealthStatus, str]:
         try:
             self._db.execute(text("SELECT 1"))
