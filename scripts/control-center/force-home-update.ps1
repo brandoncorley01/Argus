@@ -3,7 +3,8 @@
 $ErrorActionPreference = "Continue"
 
 Write-Host "=== Force Argus Home update ==="
-Write-Host "Script revision: force-home-update-v5"
+Write-Host "Script revision: force-home-update-v6"
+Write-Host "Prefer update-argus-now.ps1 if this still leaves an old build stamp."
 
 $candidates = @(
   (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
@@ -146,7 +147,13 @@ Write-Host "Starting Argus with updated Home..."
 & $starter
 
 Write-Host ""
+$buildFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
+$buildId = "unknown"
+if (Test-Path $buildFile) {
+  $t = Get-Content -Raw $buildFile
+  if ($t -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { $buildId = $Matches[1] }
+}
 Write-Host "SUCCESS markers on Home:"
 Write-Host "  - Start Argus / Stop Argus at the top"
-Write-Host "  - UI build: home-start-stop-v1 at the bottom"
-Write-Host "Hard-refresh browser with Ctrl+F5 if needed."
+Write-Host "  - Build $buildId (hard-refresh with Ctrl+F5)"
+Write-Host "If still old, run update-argus-now.ps1 via irm | iex."
