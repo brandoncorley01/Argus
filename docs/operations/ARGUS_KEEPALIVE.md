@@ -11,11 +11,12 @@ see [`UNATTENDED_RUNTIME.md`](UNATTENDED_RUNTIME.md).
 1. **Start Argus** writes `runtime/control-center/desired-state.json` with
    `running: true` and registers the Windows scheduled task `ArgusKeepAlive`
    (then starts that task once immediately).
-2. **ArgusKeepAlive** runs at user logon and every 2 minutes. While desired
-   state is Running it:
+2. **ArgusKeepAlive** runs at user logon and every 2 minutes as a **Hidden**
+   scheduled task (no PowerShell console popups). While desired state is Running it:
    - launches Docker Desktop if the engine is down
    - starts `postgres` / `redis` and waits until healthy
    - starts local uvicorn (API) and the health-supervisor worker if missing
+   - appends to `runtime/control-center/keepalive-task.log`
 3. **Stop Argus** sets `running: false` first so keepalive does not fight Stop.
 4. The **login page** probes Docker / Postgres / Redis / API and triggers the
    same recovery when the API is unreachable (never invents a healthy response).

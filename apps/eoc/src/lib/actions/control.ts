@@ -109,7 +109,17 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
   const isWin = process.platform === "win32";
   const cmd = isWin ? "powershell.exe" : "pwsh";
   const args = isWin
-    ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script]
+    ? [
+        "-NoProfile",
+        "-NoLogo",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        script,
+      ]
     : ["-NoProfile", "-File", script];
 
   return runCommand(cmd, args, timeoutMs, { ARGUS_KEEP_DASHBOARD: "1" });
