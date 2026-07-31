@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
@@ -202,7 +203,7 @@ def generate_daily_report(
 def trading_intelligence_briefing(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     try:
@@ -225,7 +226,7 @@ def trading_intelligence_briefing(
 def trading_intelligence_certification(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     return TradingIntelligenceService(db).certification_progress()
@@ -235,7 +236,7 @@ def trading_intelligence_certification(
 def trading_intelligence_learning(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     return TradingIntelligenceService(db).learning_summary()
@@ -245,7 +246,7 @@ def trading_intelligence_learning(
 def trading_intelligence_watchlist(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     return TradingIntelligenceService(db).watchlist_intelligence()
@@ -255,7 +256,7 @@ def trading_intelligence_watchlist(
 def trading_intelligence_mission(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     return TradingIntelligenceService(db).morning_mission()
@@ -265,7 +266,7 @@ def trading_intelligence_mission(
 def trading_intelligence_debrief(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     return TradingIntelligenceService(db).mission_debrief()
@@ -276,7 +277,7 @@ def trading_intelligence_case_file(
     candidate_id: uuid.UUID,
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.services.trading_intelligence_service import TradingIntelligenceService
 
     row = TradingIntelligenceService(db).case_file(candidate_id)
@@ -290,7 +291,7 @@ def trading_intelligence_advanced_learning(
     portfolio_id: uuid.UUID | None = None,
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Advanced 20-day PAPER learning pane. Never enables live trading."""
     from app.models.paper_trading import PaperPortfolio
     from app.services.advanced_learning_service import AdvancedLearningService
@@ -322,7 +323,7 @@ def trading_intelligence_readiness_report(
     portfolio_id: uuid.UUID | None = None,
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.models.paper_trading import PaperPortfolio
     from app.services.advanced_learning_service import AdvancedLearningService
 
@@ -347,7 +348,7 @@ def trading_intelligence_evaluate_learning(
     portfolio_id: uuid.UUID | None = None,
     _: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     from app.models.paper_trading import PaperPortfolio
     from app.services.advanced_learning_service import AdvancedLearningService
 
@@ -358,3 +359,14 @@ def trading_intelligence_evaluate_learning(
             raise HTTPException(status_code=404, detail="No paper portfolio")
         pid = row.id
     return AdvancedLearningService(db).evaluate_cycle(pid)
+
+
+@router.get("/trading-intelligence/advanced-learning/health")
+def trading_intelligence_advanced_learning_health(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Health probe for advanced paper learning tables. Never enables live."""
+    from app.services.advanced_learning_service import AdvancedLearningService
+
+    return AdvancedLearningService(db).health_check()

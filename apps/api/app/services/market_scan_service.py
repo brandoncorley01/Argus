@@ -1574,12 +1574,9 @@ class MarketScanService:
                 }
             )
 
-        open_n = int(
-            status.get("open_positions_live")
-            if status.get("open_positions_live") is not None
-            else (status.get("pipeline_counts") or {}).get("positions")
-            or 0
-        )
+        live_open = status.get("open_positions_live")
+        pipeline_positions = (status.get("pipeline_counts") or {}).get("positions")
+        open_n = int(live_open if live_open is not None else (pipeline_positions or 0))
         if open_n:
             lines.append(
                 {

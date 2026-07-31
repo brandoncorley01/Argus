@@ -116,6 +116,18 @@ class SystemHealthService:
         last_order = self.db.scalar(
             select(PaperOrder).order_by(PaperOrder.created_at.desc()).limit(1)
         )
+        advanced_learning: dict[str, Any]
+        try:
+            from app.services.advanced_learning_service import AdvancedLearningService
+
+            advanced_learning = AdvancedLearningService(self.db).health_check()
+        except Exception as exc:  # noqa: BLE001 — health must stay fail-soft
+            advanced_learning = {
+                "status": "failed",
+                "detail": str(exc)[:200],
+                "live_trading_enabled": False,
+                "paper_only": True,
+            }
         return {
             "default_provider_key": default_provider.provider_key if default_provider else None,
             "default_provider_is_internal_paper": (
@@ -124,6 +136,7 @@ class SystemHealthService:
             ),
             "active_kill_switch_count": active_kill_switch_count,
             "last_paper_order_at": last_order.created_at.isoformat() if last_order else None,
+            "advanced_learning": advanced_learning,
         }
 
     def _reconciliation_section(self) -> dict[str, Any]:
