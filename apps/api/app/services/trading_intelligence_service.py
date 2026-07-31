@@ -22,6 +22,7 @@ from app.models.paper_trading import PaperFill, PaperOrder, PaperPosition
 from app.models.trading_intelligence import (
     FounderCertificationState,
     MissedOpportunity,
+    PaperStrategyConfidenceState,
     PostTradeReview,
     TradeDecisionSnapshot,
 )
@@ -53,6 +54,21 @@ class TradingIntelligenceService:
         self.db = db
         self.audit = AuditService(db)
 
+    def _paper_adaptive_delta(
+        self, *, portfolio_id: uuid.UUID, strategy_key: str
+    ) -> Decimal | None:
+        """Load PAPER-only adaptive confidence delta; never for live paths."""
+        row = self.db.scalar(
+            select(PaperStrategyConfidenceState).where(
+                PaperStrategyConfidenceState.portfolio_id == portfolio_id,
+                PaperStrategyConfidenceState.strategy_key == strategy_key,
+                PaperStrategyConfidenceState.paper_only.is_(True),
+            )
+        )
+        if row is None:
+            return None
+        return max(Decimal("-15"), min(Decimal("15"), Decimal(str(row.confidence_delta))))
+
     def _instrument_id(self, symbol: str) -> uuid.UUID | None:
         inst = self.db.scalar(
             select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
@@ -82,7 +98,7 @@ class TradingIntelligenceService:
         lows = [float(r.low) for r in reversed(rows)]
         first, last = closes[0], closes[-1]
         ret = (last - first) / first if first else 0.0
-        ranges = [(h - l) / c if c else 0.0 for h, l, c in zip(highs, lows, closes)]
+        ranges = [(h - lo) / c if c else 0.0 for h, lo, c in zip(highs, lows, closes)]
         avg_range = sum(ranges) / len(ranges) if ranges else 0.0
         if avg_range > 0.012:
             return "volatile"
@@ -104,10 +120,13 @@ class TradingIntelligenceService:
         volume_ok: bool | None = None,
         risk_reward: float | None = None,
         duplicate_penalty: bool = False,
+        paper_confidence_delta: Decimal | None = None,
     ) -> tuple[Decimal, str, dict[str, Any]]:
         """Numeric confidence 0-100 from verified inputs only (observational).
 
         Returns (score, label, contributing_factors). Never fabricates missing inputs.
+        Optional paper_confidence_delta is PAPER-only adaptive learning (−15..+15)
+        and must never be used for live trading paths.
         """
         factors: dict[str, Any] = {
             "scoring_version": CONFIDENCE_SCORING_VERSION,
@@ -120,6 +139,9 @@ class TradingIntelligenceService:
             "volume_ok": volume_ok,
             "risk_reward": risk_reward,
             "duplicate_signal_penalty": duplicate_penalty,
+            "paper_confidence_delta": (
+                float(paper_confidence_delta) if paper_confidence_delta is not None else None
+            ),
             "adjustments": [],
         }
         base = max(0.0, min(100.0, float(score)))
@@ -160,6 +182,11 @@ class TradingIntelligenceService:
         elif regime == "insufficient_data":
             base *= 0.75
             factors["adjustments"].append("insufficient_data_penalty")
+        if paper_confidence_delta is not None:
+            bounded = max(Decimal("-15"), min(Decimal("15"), paper_confidence_delta))
+            base = max(0.0, min(100.0, base + float(bounded)))
+            factors["adjustments"].append("paper_adaptive_confidence")
+            factors["paper_confidence_delta_applied"] = float(bounded)
         conf = Decimal(str(round(base, 2)))
         factors["final_score"] = float(conf)
         return conf, confidence_from_score(float(conf)), factors
@@ -208,6 +235,14 @@ class TradingIntelligenceService:
             regime=regime,
             stale=stale,
             risk_reward=rr,
+            paper_confidence_delta=(
+                self._paper_adaptive_delta(
+                    portfolio_id=portfolio_id,
+                    strategy_key=cand.strategy_key or STRATEGY_KEY,
+                )
+                if portfolio_id is not None
+                else None
+            ),
         )
         explanation = self.build_explanation(
             symbol=cand.symbol,

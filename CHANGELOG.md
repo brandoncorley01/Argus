@@ -5,13 +5,17 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ## [Unreleased]
 
+### Added
+
+- Advanced Paper Learning Engine: 20-day PAPER cycle with milestones, strategy leaderboard, high-volume Opportunity Radar inputs, bounded adaptive confidence, Day-20 readiness report (never enables live), Advanced Learning pane on Paper Training (`live-monitor-v2.13`)
+
 ### Fixed
 
 - Unattended runtime: Start Argus launches a Windows keep-awake helper so automatic sleep/hibernate does not silently stop paper scans; Stop releases it
 - Worker wake catch-up: health supervisor detects ≥90s wall-clock gaps (and startup) and forces price refresh + scan so automation resumes without Founder clicks
 - Live desk feel: Eastern live clock, Decided pane ages ticking every second, faster Home polls, and visibility/wake refresh so Argus feels alive without constant attention
 
-### Added
+### Added (foundation)
 
 - Phase 5 authentication: Argon2id passwords, PostgreSQL server-side sessions, CSRF, login lockout, Founder bootstrap CLI
 - RBAC enforcement for Founder-only user/role management; audit reads require authentication
