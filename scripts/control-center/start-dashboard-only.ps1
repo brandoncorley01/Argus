@@ -56,8 +56,9 @@ foreach ($port in @(3000)) {
 Write-Host "Starting dashboard..."
 $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
 $envBlock = "`$env:ARGUS_API_BASE_URL='http://127.0.0.1:8000'"
-$eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
-  "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+$eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
+  "-NoProfile", "-NoLogo", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+  "-WindowStyle", "Hidden", "-Command",
   "Set-Location '$Root'; $envBlock; pnpm eoc:dev *> '$eocLog'"
 )
 $eocPid = $eocProc.Id

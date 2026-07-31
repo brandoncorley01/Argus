@@ -197,7 +197,17 @@ export function triggerKeepAlive(): Promise<{ ok: boolean; detail: string }> {
     }
     const child = spawn(
       "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+      [
+        "-NoProfile",
+        "-NoLogo",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        script,
+      ],
       {
         cwd: repoRoot(),
         windowsHide: true,
@@ -243,7 +253,17 @@ export function triggerStartArgus(): Promise<{ ok: boolean; detail: string }> {
     }
     const child = spawn(
       "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+      [
+        "-NoProfile",
+        "-NoLogo",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        script,
+      ],
       {
         cwd: repoRoot(),
         windowsHide: true,

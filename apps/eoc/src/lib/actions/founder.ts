@@ -44,7 +44,17 @@ function runBackupScript(): Promise<{ ok: boolean; message: string }> {
   return new Promise((resolve) => {
     const child = spawn(
       "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+      [
+        "-NoProfile",
+        "-NoLogo",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        script,
+      ],
       { cwd: root, windowsHide: true },
     );
     let stderr = "";

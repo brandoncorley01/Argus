@@ -297,8 +297,10 @@ try {
       Write-Host "Starting dashboard on 127.0.0.1:3000..."
       $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
       $envBlock = "`$env:ARGUS_API_BASE_URL='http://127.0.0.1:8000'; `$env:ARGUS_REPO_ROOT='$Root'"
-      $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Minimized -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+      # Hidden — do not leave a minimized PowerShell tile on the taskbar.
+      $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
+        "-NoProfile", "-NoLogo", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-WindowStyle", "Hidden", "-Command",
         "Set-Location '$Root'; $envBlock; pnpm eoc:dev *> '$eocLog'"
       )
       $eocPid = $eocProc.Id

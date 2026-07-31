@@ -530,6 +530,43 @@ function Stop-ArgusKeepAwake([string]$Root) {
   } catch { }
 }
 
+function Start-ArgusHiddenPowerShell {
+  # Launch a .ps1 with no console window (CreateNoWindow). Prefer this over
+  # Start-Process -WindowStyle Hidden, which still flashes on many Windows builds.
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string]$WorkingDirectory = $null,
+    [string[]]$ExtraArgs = @()
+  )
+  if (-not (Test-Path $ScriptPath)) {
+    throw "Script missing: $ScriptPath"
+  }
+  $work = if ($WorkingDirectory) { $WorkingDirectory } else { Split-Path -Parent $ScriptPath }
+  $argParts = @(
+    "-NoProfile",
+    "-NoLogo",
+    "-NonInteractive",
+    "-ExecutionPolicy", "Bypass",
+    "-WindowStyle", "Hidden",
+    "-File", $ScriptPath
+  ) + $ExtraArgs
+  $quoted = foreach ($a in $argParts) {
+    if ($null -eq $a) { continue }
+    $s = [string]$a
+    if ($s -match '[\s"]') { '"' + ($s -replace '"', '\"') + '"' } else { $s }
+  }
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = (Get-Command powershell.exe).Source
+  $psi.Arguments = [string]::Join(" ", $quoted)
+  $psi.WorkingDirectory = $work
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+  $psi.RedirectStandardOutput = $false
+  $psi.RedirectStandardError = $false
+  return [System.Diagnostics.Process]::Start($psi)
+}
+
 function Start-ArgusKeepAwake([string]$Root) {
   # One helper process: prevents automatic sleep/hibernate while Argus is Running.
   Stop-ArgusKeepAwake $Root
@@ -539,10 +576,12 @@ function Start-ArgusKeepAwake([string]$Root) {
     return $null
   }
   Write-Host "Starting Argus keep-awake (blocks automatic sleep/hibernate until Stop)..."
-  # Script appends its own keep-awake.log — do not redirect stdout onto that file.
-  $proc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script
-  )
+  try {
+    $proc = Start-ArgusHiddenPowerShell -ScriptPath $script -WorkingDirectory $Root
+  } catch {
+    Write-Host "WARN: keep-awake launch failed: $($_.Exception.Message)"
+    return $null
+  }
   # PID file is also written by the script; seed it immediately for Stop races.
   $pidPath = Get-ArgusKeepAwakePidFile $Root
   try {

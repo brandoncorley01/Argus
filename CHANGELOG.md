@@ -5,11 +5,15 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ## [Unreleased]
 
+### Fixed
+
+- PowerShell console popups: ArgusKeepAlive scheduled task is Hidden, keep-awake uses CreateNoWindow, and background Start/EOC/login recovery shells pass `-WindowStyle Hidden` (`live-monitor-v2.14`)
+
 ### Added
 
 - Advanced Paper Learning Engine: 20-day PAPER cycle with milestones, strategy leaderboard, high-volume Opportunity Radar inputs, bounded adaptive confidence, Day-20 readiness report (never enables live), Advanced Learning pane on Paper Training (`live-monitor-v2.13`)
 
-### Fixed
+### Fixed (earlier)
 
 - Unattended runtime: Start Argus launches a Windows keep-awake helper so automatic sleep/hibernate does not silently stop paper scans; Stop releases it
 - Worker wake catch-up: health supervisor detects ≥90s wall-clock gaps (and startup) and forces price refresh + scan so automation resumes without Founder clicks
