@@ -1,47 +1,38 @@
 ﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Home.
 $ErrorActionPreference = "Continue"
 
-# Optional self-update of Start scripts from GitHub main BEFORE sourcing
-# _common.ps1 — otherwise a stale local _common cannot provide new helpers
-# (behind-main detection) and Founder stays stuck on old build stamps.
-# Never overwrites dirty local copies unless ARGUS_FORCE_SYNC=1.
+# ALWAYS refresh Start control-plane scripts from GitHub main BEFORE sourcing
+# _common.ps1. Dirty local copies previously blocked self-update and left the
+# Founder stuck on stale build stamps (e.g. v2.11). Control-center scripts are
+# not founder data — Start means take GitHub's Start scripts.
 if (-not $env:ARGUS_START_SELF_UPDATED) {
   $env:ARGUS_START_SELF_UPDATED = "1"
   $self = $MyInvocation.MyCommand.Path
   if (-not $self) { $self = Join-Path $PSScriptRoot "start-argus.ps1" }
   $scriptDir = Split-Path $self -Parent
-  $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
   $skipSelfUpdate = $env:ARGUS_SKIP_START_SELF_UPDATE -eq "1"
-  $localDirty = $false
-  try {
-    Push-Location $scriptDir
-    $st = git status --porcelain -- "start-argus.ps1" "_common.ps1" "recycle-eoc.ps1" 2>$null
-    if ($LASTEXITCODE -eq 0 -and "$st".Trim()) { $localDirty = $true }
-  } catch { } finally {
-    Pop-Location -ErrorAction SilentlyContinue
-  }
   if ($skipSelfUpdate) {
     Write-Host "Skipping Start script self-update (ARGUS_SKIP_START_SELF_UPDATE=1)."
-  } elseif ($localDirty -and -not $forceSync) {
-    Write-Host "Local Start scripts have uncommitted edits — skipping self-update (set ARGUS_FORCE_SYNC=1 to overwrite)."
   } else {
     $baseUrl = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center"
     $files = @(
       @{ Name = "start-argus.ps1"; Required = $true },
       @{ Name = "_common.ps1"; Required = $true },
-      @{ Name = "recycle-eoc.ps1"; Required = $false }
+      @{ Name = "recycle-eoc.ps1"; Required = $false },
+      @{ Name = "update-argus-now.ps1"; Required = $false }
     )
     $changed = $false
     try {
-      Write-Host "Downloading latest Start scripts from GitHub..."
+      Write-Host "Downloading latest Start scripts from GitHub (always overwrite)..."
       foreach ($f in $files) {
         $dest = Join-Path $scriptDir $f.Name
         $tmp = Join-Path $env:TEMP ("argus-{0}-{1}" -f $f.Name, [guid]::NewGuid().ToString("N"))
         try {
-          Invoke-WebRequest -Uri ("{0}/{1}?{2}" -f $baseUrl, $f.Name, (Get-Random)) -OutFile $tmp -UseBasicParsing -TimeoutSec 30
+          Invoke-WebRequest -Uri ("{0}/{1}?{2}" -f $baseUrl, $f.Name, (Get-Random)) -OutFile $tmp -UseBasicParsing -TimeoutSec 45
           $remote = Get-Content -Raw $tmp
+          if (-not $remote) { throw "empty download for $($f.Name)" }
           $local = if (Test-Path $dest) { Get-Content -Raw $dest } else { "" }
-          if ($remote -and ($forceSync -or $remote -ne $local)) {
+          if ($remote -ne $local) {
             Copy-Item -LiteralPath $tmp -Destination $dest -Force
             $changed = $true
             Write-Host ("Updated {0}" -f $f.Name)
@@ -61,6 +52,8 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       Write-Host "Start scripts already current."
     } catch {
       Write-Host "WARN: could not self-update Start scripts: $($_.Exception.Message)"
+      Write-Host "If Home stays on an old build, run:"
+      Write-Host '  irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1" | iex'
     }
   }
 }
