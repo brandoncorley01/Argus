@@ -71,8 +71,8 @@ def test_scan_interval_is_one_minute() -> None:
 
 def test_short_timeframe_preference_and_candle_lengths() -> None:
     from app.services.market_scan_service import (
-        TIMEFRAME_PREF,
         CANDIDATE_WATCH_TTL,
+        TIMEFRAME_PREF,
         candle_length_for,
     )
 

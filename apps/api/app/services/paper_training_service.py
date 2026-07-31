@@ -503,27 +503,6 @@ class PaperTrainingService:
         )
         return list(open_ids | auto_ids)
 
-    def iter_automation_portfolio_ids(self) -> list[uuid.UUID]:
-        """Portfolios that must receive stop/target exits and/or auto-entry.
-
-        Never use ``select(PaperPortfolio).limit(N)`` — fixture books created
-        earlier starve the Founder's live paper book from automation (stops
-        never fire; automatic mode never enters).
-        """
-        open_ids = set(
-            self.db.scalars(
-                select(PaperPosition.portfolio_id).where(PaperPosition.quantity != 0)
-            ).all()
-        )
-        auto_ids = set(
-            self.db.scalars(
-                select(PaperTrainingSettings.portfolio_id).where(
-                    PaperTrainingSettings.mode == "automatic"
-                )
-            ).all()
-        )
-        return list(open_ids | auto_ids)
-
     def maybe_auto_enter_from_scan(
         self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None
     ) -> list[dict[str, Any]]:

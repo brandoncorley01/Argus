@@ -98,7 +98,10 @@ class TradingIntelligenceService:
         lows = [float(r.low) for r in reversed(rows)]
         first, last = closes[0], closes[-1]
         ret = (last - first) / first if first else 0.0
-        ranges = [(h - lo) / c if c else 0.0 for h, lo, c in zip(highs, lows, closes)]
+        ranges = [
+            (h - lo) / c if c else 0.0
+            for h, lo, c in zip(highs, lows, closes, strict=True)
+        ]
         avg_range = sum(ranges) / len(ranges) if ranges else 0.0
         if avg_range > 0.012:
             return "volatile"
@@ -530,14 +533,14 @@ class TradingIntelligenceService:
             wins = sum(1 for i in items if i.realized_pnl > 0)
             return Decimal(wins) / Decimal(len(items))
 
-        h, l = _wr(high), _wr(low)
+        high_wr, low_wr = _wr(high), _wr(low)
         better = None
-        if h is not None and l is not None:
-            better = h > l
+        if high_wr is not None and low_wr is not None:
+            better = high_wr > low_wr
         return {
             "sample_size": len(rows),
-            "high_confidence_win_rate": str(h) if h is not None else None,
-            "low_confidence_win_rate": str(l) if l is not None else None,
+            "high_confidence_win_rate": str(high_wr) if high_wr is not None else None,
+            "low_confidence_win_rate": str(low_wr) if low_wr is not None else None,
             "higher_confidence_better": better,
             "note": "Observational only — does not auto-tune strategy.",
         }
@@ -627,8 +630,12 @@ class TradingIntelligenceService:
         duplicate_logical = 0
 
         reviews = list(self.db.scalars(select(PostTradeReview)))
-        every_has_explanation = all(bool(r.explanation) for r in reviews) if reviews else False
-        every_has_confidence = all(r.confidence_score is not None for r in reviews) if reviews else False
+        every_has_explanation = (
+            all(bool(r.explanation) for r in reviews) if reviews else False
+        )
+        every_has_confidence = (
+            all(r.confidence_score is not None for r in reviews) if reviews else False
+        )
 
         pnls = [Decimal(str(r.realized_pnl)) for r in reviews]
         costs = [
@@ -637,7 +644,7 @@ class TradingIntelligenceService:
         ]
         expectancy = None
         if pnls:
-            adj = [p - c for p, c in zip(pnls, costs)]
+            adj = [p - c for p, c in zip(pnls, costs, strict=True)]
             expectancy = sum(adj, Decimal("0")) / Decimal(len(adj))
 
         max_dd = Decimal("0")
@@ -716,8 +723,13 @@ class TradingIntelligenceService:
         mission = self.morning_mission()
         thinking = self.thinking_observations(limit=5)
 
+        avg_conf_label = (
+            f"Average confidence: {avg_conf:.1f}"
+            if avg_conf is not None
+            else "Average confidence: —"
+        )
         bullets = [
-            f"Average confidence: {avg_conf:.1f}" if avg_conf is not None else "Average confidence: —",
+            avg_conf_label,
             f"Best strategy today: {best}" if best else "Best strategy today: —",
             f"Largest risk: {open_risk} open paper position(s)",
             (
@@ -731,10 +743,12 @@ class TradingIntelligenceService:
                 else "Recommendation: certification criteria met for review (live still locked)"
             ),
         ]
+        top_opp = watch.get("highest_confidence_opportunity") or {}
+        top_symbol = top_opp.get("symbol", "—")
         action_required = mission.get("founder_action_required") or (
             "None — continue observing paper standards."
             if watch.get("recommendation") == "WAIT"
-            else f"Review highest-priority opportunity ({watch.get('highest_confidence_opportunity', {}).get('symbol', '—')})."
+            else f"Review highest-priority opportunity ({top_symbol})."
         )
         return {
             "bullets": bullets[:5],
@@ -1083,7 +1097,10 @@ class TradingIntelligenceService:
             "primary_areas_of_focus": [
                 "Watchlist confirmation quality",
                 "Open position management",
-                f"Certification progress {cert.get('trading_days_counted')}/{cert.get('required_trading_days')}",
+                (
+                    f"Certification progress {cert.get('trading_days_counted')}/"
+                    f"{cert.get('required_trading_days')}"
+                ),
             ],
             "highest_priority_opportunities": watch.get("top_opportunities") or [],
             "certification_progress": {
@@ -1117,11 +1134,12 @@ class TradingIntelligenceService:
         best = max(reviews, key=lambda r: Decimal(str(r.realized_pnl)), default=None)
         worst = min(reviews, key=lambda r: Decimal(str(r.realized_pnl)), default=None)
         cert = self.certification_progress()
-        success = (
-            "Hold"
-            if not reviews
-            else ("Success" if net >= 0 and cert.get("open_critical_incidents", 0) == 0 else "Review")
-        )
+        if not reviews:
+            success = "Hold"
+        elif net >= 0 and cert.get("open_critical_incidents", 0) == 0:
+            success = "Success"
+        else:
+            success = "Review"
         return {
             "report_date": day.isoformat(),
             "mission_success": success,
