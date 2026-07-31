@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Fixed
 
+- Start no longer skips GitHub sync on Fast Start when this PC is behind `main`; self-updates `_common.ps1` + schedules dashboard recycle so Home leaves stale build stamps (`live-monitor-v2.16`)
 - PowerShell console popups: ArgusKeepAlive scheduled task is Hidden, keep-awake uses CreateNoWindow, and background Start/EOC/login recovery shells pass `-WindowStyle Hidden` (`live-monitor-v2.14`)
 
 ### Added
