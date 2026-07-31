@@ -358,3 +358,14 @@ def trading_intelligence_evaluate_learning(
             raise HTTPException(status_code=404, detail="No paper portfolio")
         pid = row.id
     return AdvancedLearningService(db).evaluate_cycle(pid)
+
+
+@router.get("/trading-intelligence/advanced-learning/health")
+def trading_intelligence_advanced_learning_health(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Health probe for advanced paper learning tables. Never enables live."""
+    from app.services.advanced_learning_service import AdvancedLearningService
+
+    return AdvancedLearningService(db).health_check()

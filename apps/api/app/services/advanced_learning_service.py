@@ -76,24 +76,45 @@ def classify_trade_pattern(review: PostTradeReview, snapshot: TradeDecisionSnaps
     """Best-effort pattern label from stored evidence only (no look-ahead)."""
     detail = dict(review.detail or {})
     snap_detail = dict(snapshot.detail) if snapshot and snapshot.detail else {}
-    reason = str(detail.get("exit_reason") or review.exit_reason or "").lower()
+    reason = str(
+        detail.get("exit_reason")
+        or detail.get("pattern")
+        or review.exit_reason
+        or ""
+    ).lower()
+    strategy = str(getattr(review, "strategy_key", "") or "").lower()
     regime = (review.market_regime or "").lower()
+    text_blob = f"{reason} {strategy}"
     adjustments = snap_detail.get("contributing_factors", {}).get("adjustments") or []
     if not isinstance(adjustments, list):
         adjustments = []
+    adj_text = " ".join(str(a) for a in adjustments).lower()
     volume_ok = snap_detail.get("contributing_factors", {}).get("volume_ok")
-    if "dip" in reason or "reversal" in reason or regime == "trend_down":
-        if review.outcome == "win" and review.realized_pnl > 0:
-            return "dip_reversal"
-    if volume_ok is True or "volume" in " ".join(str(a) for a in adjustments).lower():
-        if regime in {"trend_up", "volatile"} and review.realized_pnl > 0:
-            return "high_volume_breakout"
-    if regime == "trend_up":
-        return "momentum_breakout"
-    if regime == "quiet":
+    won = review.outcome == "win" and review.realized_pnl > 0
+    lost = review.realized_pnl < 0
+
+    if "dip" in text_blob or "reversal" in text_blob or (
+        regime == "trend_down" and ("bounce" in text_blob or "mean" in text_blob)
+    ):
+        return "dip_reversal" if won else "dip_reversal_attempt"
+    if "range" in text_blob or regime == "quiet":
         return "range"
+    if volume_ok is True or "volume" in adj_text or "breakout" in text_blob:
+        if regime in {"trend_up", "volatile"} or "breakout" in text_blob:
+            if won and (volume_ok is True or "volume" in adj_text):
+                return "high_volume_breakout"
+            return "breakout"
+    if (
+        "exhaust" in text_blob
+        or "peak" in text_blob
+        or "peak_fade" in text_blob
+        or "fade_top" in text_blob
+    ):
+        return "peak_exhaustion"
+    if "momentum" in text_blob or regime == "trend_up":
+        return "momentum"
     if regime == "volatile":
-        return "peak_exhaustion" if review.realized_pnl < 0 else "breakout"
+        return "peak_exhaustion" if lost else "breakout"
     return "unclassified"
 
 
@@ -309,6 +330,23 @@ class AdvancedLearningService:
 
         good_vs_lucky = self._good_vs_lucky(reviews)
         lessons = self._recent_lessons(reviews)
+        strategy_by_regime = self._strategy_by_regime(reviews)
+        pattern_performance = self._pattern_performance(reviews)
+        learning = self.intelligence.learning_summary()
+        missed_and_rejected = {
+            "rejected_that_became_winners": learning.get(
+                "rejected_that_became_winners", 0
+            ),
+            "accepted_that_became_losers": learning.get(
+                "accepted_that_became_losers", 0
+            ),
+            "strongest_conditions": learning.get("strongest_conditions"),
+            "weakest_conditions": learning.get("weakest_conditions"),
+            "note": (
+                "Missed opportunities and rejected-candidate outcomes are "
+                "observational PAPER evidence only."
+            ),
+        }
 
         return {
             "trades_closed": len(nets),
@@ -327,7 +365,10 @@ class AdvancedLearningService:
             "learning_confidence": learning_confidence,
             "readiness_score": readiness,
             "strategy_leaderboard": strategy_leaderboard,
+            "strategy_by_regime": strategy_by_regime,
+            "pattern_performance": pattern_performance,
             "good_vs_lucky": good_vs_lucky,
+            "missed_and_rejected": missed_and_rejected,
             "recent_lessons": lessons,
             "calibration": calibration,
             "cost_model_bps_each_way": str(SIMULATED_COST_BPS),
@@ -420,6 +461,64 @@ class AdvancedLearningService:
             )
         return out
 
+    def _strategy_by_regime(self, reviews: list[PostTradeReview]) -> list[dict[str, Any]]:
+        """Which strategies work under which market regimes (stored evidence only)."""
+        buckets: dict[tuple[str, str], list[Decimal]] = {}
+        for r in reviews:
+            regime = (r.market_regime or "unknown").lower()
+            key = (r.strategy_key, regime)
+            buckets.setdefault(key, []).append(self._net_after_costs(r))
+        rows: list[dict[str, Any]] = []
+        for (strategy_key, regime), vals in buckets.items():
+            wins = sum(1 for v in vals if v > 0)
+            net = sum(vals, Decimal("0"))
+            rows.append(
+                {
+                    "strategy_key": strategy_key,
+                    "market_regime": regime,
+                    "trades": len(vals),
+                    "wins": wins,
+                    "win_rate": _as_str(Decimal(wins) / Decimal(len(vals))) if vals else None,
+                    "net_pnl_after_costs": _as_str(net, 8),
+                    "expectancy_after_costs": _as_str(net / Decimal(len(vals)), 8)
+                    if vals
+                    else None,
+                }
+            )
+        rows.sort(
+            key=lambda row: Decimal(row["net_pnl_after_costs"] or "0"), reverse=True
+        )
+        return rows[:24]
+
+    def _pattern_performance(self, reviews: list[PostTradeReview]) -> list[dict[str, Any]]:
+        """Dip/breakout/momentum/range/peak evidence aggregated after costs."""
+        buckets: dict[str, list[Decimal]] = {}
+        for r in reviews:
+            snap = (
+                self.db.get(TradeDecisionSnapshot, r.decision_snapshot_id)
+                if r.decision_snapshot_id
+                else None
+            )
+            pattern = classify_trade_pattern(r, snap)
+            buckets.setdefault(pattern, []).append(self._net_after_costs(r))
+        rows: list[dict[str, Any]] = []
+        for pattern, vals in buckets.items():
+            wins = sum(1 for v in vals if v > 0)
+            net = sum(vals, Decimal("0"))
+            rows.append(
+                {
+                    "pattern": pattern,
+                    "trades": len(vals),
+                    "wins": wins,
+                    "win_rate": _as_str(Decimal(wins) / Decimal(len(vals))) if vals else None,
+                    "net_pnl_after_costs": _as_str(net, 8),
+                }
+            )
+        rows.sort(
+            key=lambda row: Decimal(row["net_pnl_after_costs"] or "0"), reverse=True
+        )
+        return rows
+
     # --- Opportunity Radar / volume inputs ---------------------------------
 
     def high_volume_learning_summary(self, portfolio_id: uuid.UUID) -> dict[str, Any]:
@@ -438,11 +537,12 @@ class AdvancedLearningService:
         )
         rows: list[dict[str, Any]] = []
         for c in candidates:
-            vol = self._relative_volume(c.symbol)
+            vol = self._market_quality(c.symbol)
             priority = float(c.score or 0)
-            if vol and vol["relative_volume"] is not None:
+            if vol and vol.get("relative_volume") is not None:
                 rv = float(vol["relative_volume"])
                 if rv >= float(VOLUME_RELATIVE_HIGH):
+                    # Volume raises analysis priority only — never a trade gate.
                     priority += min(20.0, (rv - 1.0) * 10.0)
             rows.append(
                 {
@@ -451,29 +551,42 @@ class AdvancedLearningService:
                     "bias": c.bias,
                     "radar_score": _as_str(c.score) if c.score is not None else None,
                     "analysis_priority": round(priority, 2),
-                    "relative_volume": vol["relative_volume"] if vol else None,
-                    "liquidity_ok": vol["liquidity_ok"] if vol else None,
+                    "relative_volume": vol.get("relative_volume") if vol else None,
+                    "liquidity_ok": vol.get("liquidity_ok") if vol else None,
+                    "volatility_pct": vol.get("volatility_pct") if vol else None,
+                    "spread_proxy_pct": vol.get("spread_proxy_pct") if vol else None,
+                    "activity_notional": vol.get("activity_notional") if vol else None,
                     "volume_triggers_trade": False,
                     "why": "High volume increases analysis priority only — never a trade trigger.",
                 }
             )
         rows.sort(key=lambda r: r["analysis_priority"], reverse=True)
         high = [r for r in rows if (r["relative_volume"] or 0) >= float(VOLUME_RELATIVE_HIGH)]
+        liquid = [r for r in high if r.get("liquidity_ok")]
         return {
             "volume_never_triggers_trade": True,
             "high_relative_volume_threshold": str(VOLUME_RELATIVE_HIGH),
             "radar_inputs_considered": len(rows),
             "high_volume_symbols": high[:8],
             "priority_queue": rows[:10],
+            "market_quality_note": (
+                "Liquidity, volatility, spread proxy (intrabar range/mid), and "
+                "activity are derived from verified historical OHLCV only — no look-ahead."
+            ),
             "findings": (
-                f"{len(high)} Opportunity Radar symbols currently show elevated "
-                "relative volume; they are ranked higher for analysis, not auto-entry."
+                f"{len(high)} Opportunity Radar symbols show elevated relative volume "
+                f"({len(liquid)} with liquidity_ok); ranked higher for analysis, not auto-entry."
                 if high
                 else "No elevated relative-volume symbols in the current Opportunity Radar set."
             ),
         }
 
     def _relative_volume(self, symbol: str) -> dict[str, Any] | None:
+        """Backward-compatible alias for market quality metrics."""
+        return self._market_quality(symbol)
+
+    def _market_quality(self, symbol: str) -> dict[str, Any] | None:
+        """Relative volume + liquidity/volatility/spread/activity from historical bars."""
         instrument = self.db.scalar(
             select(MarketInstrument).where(MarketInstrument.symbol == symbol)
         )
@@ -495,6 +608,9 @@ class AdvancedLearningService:
             return {
                 "relative_volume": None,
                 "liquidity_ok": None,
+                "volatility_pct": None,
+                "spread_proxy_pct": None,
+                "activity_notional": None,
                 "note": "insufficient_volume_history",
             }
         # Use only bars available at evaluation time (already historical).
@@ -502,16 +618,53 @@ class AdvancedLearningService:
         hist = bars[1:21]
         hist_vols = [_dec(b.volume) for b in hist if b.volume is not None]
         if not hist_vols or latest.volume is None:
-            return {"relative_volume": None, "liquidity_ok": False, "note": "missing_volume"}
+            return {
+                "relative_volume": None,
+                "liquidity_ok": False,
+                "volatility_pct": None,
+                "spread_proxy_pct": None,
+                "activity_notional": None,
+                "note": "missing_volume",
+            }
         avg = sum(hist_vols, Decimal("0")) / Decimal(len(hist_vols))
         if avg <= 0:
-            return {"relative_volume": None, "liquidity_ok": False, "note": "zero_avg_volume"}
+            return {
+                "relative_volume": None,
+                "liquidity_ok": False,
+                "volatility_pct": None,
+                "spread_proxy_pct": None,
+                "activity_notional": None,
+                "note": "zero_avg_volume",
+            }
         rel = _dec(latest.volume) / avg
+        close = _dec(latest.close)
+        mid = (_dec(latest.high) + _dec(latest.low)) / Decimal("2")
+        spread_proxy = (
+            ((_dec(latest.high) - _dec(latest.low)) / mid * Decimal("100"))
+            if mid > 0
+            else None
+        )
+        ranges: list[Decimal] = []
+        for b in hist:
+            c = _dec(b.close)
+            if c > 0:
+                ranges.append((_dec(b.high) - _dec(b.low)) / c * Decimal("100"))
+        volatility = (
+            sum(ranges, Decimal("0")) / Decimal(len(ranges)) if ranges else None
+        )
+        activity = float(_dec(latest.volume) * close) if close > 0 else None
+        liquidity_ok = _dec(latest.volume) >= avg * Decimal("0.5") and _dec(
+            latest.volume
+        ) > 0
         return {
             "relative_volume": float(rel),
-            "liquidity_ok": _dec(latest.volume) > 0,
+            "liquidity_ok": bool(liquidity_ok),
+            "volatility_pct": float(volatility) if volatility is not None else None,
+            "spread_proxy_pct": float(spread_proxy) if spread_proxy is not None else None,
+            "activity_notional": activity,
             "latest_volume": float(_dec(latest.volume)),
             "avg_volume": float(avg),
+            "look_ahead_bias": False,
         }
 
     # --- adaptive PAPER confidence -----------------------------------------
@@ -794,7 +947,10 @@ class AdvancedLearningService:
             "readiness_score": metrics["readiness_score"],
             "metrics": {
                 "strategy_leaderboard": metrics["strategy_leaderboard"],
+                "strategy_by_regime": metrics["strategy_by_regime"],
+                "pattern_performance": metrics["pattern_performance"],
                 "good_vs_lucky": metrics["good_vs_lucky"],
+                "missed_and_rejected": metrics["missed_and_rejected"],
                 "calibration": metrics["calibration"],
                 "cost_model_bps_each_way": metrics["cost_model_bps_each_way"],
             },
@@ -859,13 +1015,37 @@ class AdvancedLearningService:
             "high_volume_findings": volume.get("findings"),
             "high_volume_symbols": volume.get("high_volume_symbols"),
             "dip_and_peak_findings": {
+                "pattern_performance": [
+                    p
+                    for p in metrics["pattern_performance"]
+                    if p["pattern"]
+                    in {
+                        "dip_reversal",
+                        "dip_reversal_attempt",
+                        "peak_exhaustion",
+                        "high_volume_breakout",
+                        "breakout",
+                        "momentum",
+                        "range",
+                    }
+                ],
                 "lessons": [
                     x
                     for x in metrics["recent_lessons"]
-                    if x["pattern"] in {"dip_reversal", "peak_exhaustion", "high_volume_breakout"}
-                ][:8]
+                    if x["pattern"]
+                    in {
+                        "dip_reversal",
+                        "dip_reversal_attempt",
+                        "peak_exhaustion",
+                        "high_volume_breakout",
+                        "breakout",
+                        "momentum",
+                    }
+                ][:8],
             },
+            "strategy_by_market_conditions": metrics["strategy_by_regime"],
             "confidence_accuracy": metrics["calibration"],
+            "good_vs_lucky": metrics["good_vs_lucky"],
             "drawdown_and_risk_discipline": {
                 "max_drawdown": _as_str(metrics["max_drawdown"], 8),
                 "risk_discipline_milestone": next(
@@ -877,6 +1057,8 @@ class AdvancedLearningService:
                 "accepted_that_became_losers": learning.get(
                     "accepted_that_became_losers", 0
                 ),
+                "strongest_conditions": learning.get("strongest_conditions"),
+                "weakest_conditions": learning.get("weakest_conditions"),
             },
             "weaknesses_and_limitations": self._weaknesses(metrics, learning),
             "milestones": milestones,
@@ -974,10 +1156,14 @@ class AdvancedLearningService:
             "learning_confidence": _as_str(metrics["learning_confidence"]),
             "readiness_score": _as_str(metrics["readiness_score"]),
             "strategy_leaderboard": metrics["strategy_leaderboard"],
+            "strategy_by_regime": metrics["strategy_by_regime"],
+            "pattern_performance": metrics["pattern_performance"],
             "high_volume_learning_summary": volume,
             "recent_trade_lessons": metrics["recent_lessons"],
             "learning_milestones": milestones,
             "good_vs_lucky": metrics["good_vs_lucky"],
+            "missed_and_rejected": metrics["missed_and_rejected"],
+            "confidence_calibration": metrics["calibration"],
             "expectancy_after_costs": _as_str(metrics["expectancy_after_costs"], 8),
             "cost_model_bps_each_way": metrics["cost_model_bps_each_way"],
             "readiness_report": (
@@ -1041,3 +1227,48 @@ class AdvancedLearningService:
             "body": report.body,
             "created_at": report.created_at.isoformat(),
         }
+
+    def health_check(self) -> dict[str, Any]:
+        """Lightweight probe: learning tables readable; live stays locked."""
+        try:
+            programs = list(
+                self.db.scalars(
+                    select(PaperLearningProgram)
+                    .order_by(desc(PaperLearningProgram.created_at))
+                    .limit(5)
+                )
+            )
+            active = [p for p in programs if p.status == "active"]
+            latest_snap = self.db.scalar(
+                select(PaperLearningDaySnapshot)
+                .order_by(desc(PaperLearningDaySnapshot.day_date))
+                .limit(1)
+            )
+            milestone_count = len(
+                list(self.db.scalars(select(PaperLearningMilestone).limit(1)))
+            )
+            status = "ok"
+            detail = "Advanced learning tables reachable; PAPER-only engine ready."
+            if not programs:
+                status = "idle"
+                detail = "No learning program yet — starts when a paper portfolio exists."
+            return {
+                "status": status,
+                "detail": detail,
+                "active_programs": len(active),
+                "programs_seen": len(programs),
+                "milestones_table_ok": milestone_count >= 0,
+                "latest_snapshot_day": (
+                    latest_snap.day_date.isoformat() if latest_snap else None
+                ),
+                "volume_never_triggers_trade": VOLUME_NEVER_TRIGGERS_TRADE,
+                "live_trading_enabled": False,
+                "paper_only": True,
+            }
+        except Exception as exc:  # noqa: BLE001 — probe must never crash callers
+            return {
+                "status": "failed",
+                "detail": str(exc)[:200],
+                "live_trading_enabled": False,
+                "paper_only": True,
+            }

@@ -28,8 +28,21 @@ def test_classify_dip_reversal_from_evidence() -> None:
         market_regime="trend_down",
         outcome="win",
         realized_pnl=Decimal("12.5"),
+        strategy_key="mean_reversion",
     )
     assert classify_trade_pattern(review, None) == "dip_reversal"  # type: ignore[arg-type]
+
+
+def test_classify_dip_attempt_when_loss() -> None:
+    review = SimpleNamespace(
+        detail={"exit_reason": "dip_stop"},
+        exit_reason="stop",
+        market_regime="trend_down",
+        outcome="loss",
+        realized_pnl=Decimal("-4"),
+        strategy_key="dip_buy",
+    )
+    assert classify_trade_pattern(review, None) == "dip_reversal_attempt"  # type: ignore[arg-type]
 
 
 def test_classify_high_volume_breakout_from_snapshot_factors() -> None:
@@ -39,6 +52,7 @@ def test_classify_high_volume_breakout_from_snapshot_factors() -> None:
         market_regime="trend_up",
         outcome="win",
         realized_pnl=Decimal("8"),
+        strategy_key="breakout",
     )
     snap = SimpleNamespace(
         detail={
@@ -49,6 +63,40 @@ def test_classify_high_volume_breakout_from_snapshot_factors() -> None:
         }
     )
     assert classify_trade_pattern(review, snap) == "high_volume_breakout"  # type: ignore[arg-type]
+
+
+def test_classify_momentum_and_range() -> None:
+    momentum = SimpleNamespace(
+        detail={},
+        exit_reason="trail",
+        market_regime="trend_up",
+        outcome="win",
+        realized_pnl=Decimal("3"),
+        strategy_key="momentum_core",
+    )
+    assert classify_trade_pattern(momentum, None) == "momentum"  # type: ignore[arg-type]
+
+    quiet = SimpleNamespace(
+        detail={},
+        exit_reason="time",
+        market_regime="quiet",
+        outcome="flat",
+        realized_pnl=Decimal("0.1"),
+        strategy_key="range_fade",
+    )
+    assert classify_trade_pattern(quiet, None) == "range"  # type: ignore[arg-type]
+
+
+def test_classify_peak_exhaustion() -> None:
+    review = SimpleNamespace(
+        detail={"exit_reason": "peak_fade"},
+        exit_reason="stop",
+        market_regime="volatile",
+        outcome="loss",
+        realized_pnl=Decimal("-2"),
+        strategy_key="exhaustion",
+    )
+    assert classify_trade_pattern(review, None) == "peak_exhaustion"  # type: ignore[arg-type]
 
 
 def test_paper_adaptive_confidence_bounded_in_score() -> None:
@@ -111,5 +159,12 @@ def test_classify_unclassified_when_no_pattern() -> None:
         outcome="flat",
         realized_pnl=Decimal("0"),
         closed_at=datetime(2026, 7, 31, tzinfo=UTC),
+        strategy_key="manual",
     )
     assert classify_trade_pattern(review, None) == "unclassified"  # type: ignore[arg-type]
+
+
+def test_readiness_report_never_enables_live_constant() -> None:
+    """Guardrail: volume priority and adaptive bounds stay PAPER-safe."""
+    assert VOLUME_NEVER_TRIGGERS_TRADE is True
+    assert ADAPTIVE_DELTA_MAX <= Decimal("15")

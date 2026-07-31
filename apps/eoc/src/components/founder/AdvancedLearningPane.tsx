@@ -25,14 +25,35 @@ export type AdvancedLearningPaneData = {
     net_pnl_after_costs: string | null;
     paper_confidence_delta: string | null;
   }>;
+  strategy_by_regime?: Array<{
+    strategy_key: string;
+    market_regime: string;
+    trades: number;
+    wins: number;
+    win_rate: string | null;
+    net_pnl_after_costs: string | null;
+    expectancy_after_costs?: string | null;
+  }>;
+  pattern_performance?: Array<{
+    pattern: string;
+    trades: number;
+    wins: number;
+    win_rate: string | null;
+    net_pnl_after_costs: string | null;
+  }>;
   high_volume_learning_summary?: {
     findings?: string;
     volume_never_triggers_trade?: boolean;
+    market_quality_note?: string;
     high_volume_symbols?: Array<{
       symbol: string;
       relative_volume: number | null;
       analysis_priority: number;
       stage?: string;
+      liquidity_ok?: boolean | null;
+      volatility_pct?: number | null;
+      spread_proxy_pct?: number | null;
+      activity_notional?: number | null;
     }>;
     priority_queue?: Array<{
       symbol: string;
@@ -56,6 +77,25 @@ export type AdvancedLearningPaneData = {
     achieved: boolean;
     achieved_at: string | null;
   }>;
+  good_vs_lucky?: {
+    good_decision_wins?: number;
+    lucky_or_unlabeled_wins?: number;
+    poor_decision_losses?: number;
+  };
+  confidence_calibration?: {
+    sample_size?: number;
+    high_confidence_win_rate?: string | null;
+    low_confidence_win_rate?: string | null;
+    higher_confidence_better?: boolean | null;
+    note?: string;
+  };
+  missed_and_rejected?: {
+    rejected_that_became_winners?: number;
+    accepted_that_became_losers?: number;
+    strongest_conditions?: string | null;
+    weakest_conditions?: string | null;
+    note?: string;
+  };
   readiness_report?: {
     summary: string;
     ready_for_controlled_live_testing: boolean;
@@ -105,6 +145,11 @@ export function AdvancedLearningPane({
   const milestones = data.learning_milestones ?? [];
   const lessons = data.recent_trade_lessons ?? [];
   const board = data.strategy_leaderboard ?? [];
+  const byRegime = data.strategy_by_regime ?? [];
+  const patterns = data.pattern_performance ?? [];
+  const gvl = data.good_vs_lucky;
+  const cal = data.confidence_calibration;
+  const missed = data.missed_and_rejected;
 
   return (
     <section className="panel rise" aria-label="Advanced Learning">
@@ -212,6 +257,61 @@ export function AdvancedLearningPane({
         </div>
       )}
 
+      <h3>Strategy × Market Conditions</h3>
+      {byRegime.length === 0 ? (
+        <p className="muted-note">
+          Regime breakdown appears after closed trades with market regime labels.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Regime</th>
+                <th>Trades</th>
+                <th>Win rate</th>
+                <th>Net after costs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byRegime.slice(0, 10).map((row) => (
+                <tr key={`${row.strategy_key}-${row.market_regime}`}>
+                  <td>{row.strategy_key}</td>
+                  <td>{row.market_regime}</td>
+                  <td>
+                    {row.wins}/{row.trades}
+                  </td>
+                  <td>{pct(row.win_rate)}</td>
+                  <td className={pnlClass(row.net_pnl_after_costs)}>
+                    {moneyPnl(row.net_pnl_after_costs)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h3>Pattern Evidence</h3>
+      {patterns.length === 0 ? (
+        <p className="muted-note">
+          Momentum, breakout, dip, range, and peak labels appear from trade evidence.
+        </p>
+      ) : (
+        <ul className="closed-lessons">
+          {patterns.slice(0, 8).map((p) => (
+            <li key={p.pattern}>
+              <strong>{p.pattern}</strong> — {p.wins}/{p.trades} wins (
+              {pct(p.win_rate)}){" "}
+              <span className={pnlClass(p.net_pnl_after_costs)}>
+                {moneyPnl(p.net_pnl_after_costs)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
       <h3>High-Volume Learning Summary</h3>
       <p className="muted-note">
         {volume?.findings ??
@@ -221,6 +321,9 @@ export function AdvancedLearningPane({
         Volume never triggers a trade
         {volume?.volume_never_triggers_trade === false ? " (misconfigured)" : " ✓"}.
       </p>
+      {volume?.market_quality_note ? (
+        <p className="muted-note">{volume.market_quality_note}</p>
+      ) : null}
       {(volume?.high_volume_symbols?.length ?? 0) > 0 ? (
         <ul className="closed-lessons">
           {volume!.high_volume_symbols!.slice(0, 6).map((s) => (
@@ -229,11 +332,80 @@ export function AdvancedLearningPane({
               {s.relative_volume != null
                 ? ` · rel vol ${s.relative_volume.toFixed(2)}×`
                 : ""}
+              {s.liquidity_ok === true
+                ? " · liquid"
+                : s.liquidity_ok === false
+                  ? " · thin"
+                  : ""}
+              {s.volatility_pct != null
+                ? ` · vol ${s.volatility_pct.toFixed(2)}%`
+                : ""}
+              {s.spread_proxy_pct != null
+                ? ` · spread≈${s.spread_proxy_pct.toFixed(2)}%`
+                : ""}
               {s.stage ? ` · ${s.stage}` : ""}
             </li>
           ))}
         </ul>
       ) : null}
+
+      <h3>Good Decisions vs Lucky Wins</h3>
+      {gvl ? (
+        <ul className="closed-lessons">
+          <li>Good-decision wins: {gvl.good_decision_wins ?? 0}</li>
+          <li>
+            Lucky or unlabeled wins: {gvl.lucky_or_unlabeled_wins ?? 0}
+          </li>
+          <li>Poor-decision losses: {gvl.poor_decision_losses ?? 0}</li>
+        </ul>
+      ) : (
+        <p className="muted-note">Decision-quality labels appear after reviews.</p>
+      )}
+
+      <h3>Confidence Calibration</h3>
+      {cal ? (
+        <>
+          <ul className="closed-lessons">
+            <li>Sample size: {cal.sample_size ?? 0}</li>
+            <li>High-confidence win rate: {pct(cal.high_confidence_win_rate)}</li>
+            <li>Low-confidence win rate: {pct(cal.low_confidence_win_rate)}</li>
+            <li>
+              Higher confidence better:{" "}
+              {cal.higher_confidence_better == null
+                ? "—"
+                : cal.higher_confidence_better
+                  ? "yes"
+                  : "no"}
+            </li>
+          </ul>
+          {cal.note ? <p className="muted-note">{cal.note}</p> : null}
+        </>
+      ) : (
+        <p className="muted-note">Calibration needs closed paper trades.</p>
+      )}
+
+      <h3>Missed &amp; Rejected</h3>
+      {missed ? (
+        <>
+          <ul className="closed-lessons">
+            <li>
+              Rejected that became winners:{" "}
+              {missed.rejected_that_became_winners ?? 0}
+            </li>
+            <li>
+              Accepted that became losers:{" "}
+              {missed.accepted_that_became_losers ?? 0}
+            </li>
+            <li>
+              Strongest conditions: {missed.strongest_conditions ?? "—"}
+            </li>
+            <li>Weakest conditions: {missed.weakest_conditions ?? "—"}</li>
+          </ul>
+          {missed.note ? <p className="muted-note">{missed.note}</p> : null}
+        </>
+      ) : (
+        <p className="muted-note">Missed-opportunity tracking fills from radar rejects.</p>
+      )}
 
       <h3>Recent Trade Lessons</h3>
       {lessons.length === 0 ? (
