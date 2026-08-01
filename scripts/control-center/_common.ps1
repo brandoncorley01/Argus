@@ -338,8 +338,19 @@ function Test-ArgusApiProcessLive {
 
 function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
   # Bring infra + API (+ optional worker) back without git sync.
+  if (-not (Ensure-ArgusEnvFile $Root)) {
+    return $false
+  }
   if (-not (Ensure-ArgusInfra $Root)) {
     return $false
+  }
+  if (-not (Ensure-ArgusApiVenv $Root)) {
+    return $false
+  }
+  try {
+    & "$Root\scripts\migrate-up.ps1"
+  } catch {
+    Write-Host "WARN: migrate-up during repair: $($_.Exception.Message)"
   }
   $pids = Read-ArgusPids $Root
   $apiPid = $pids.api
@@ -349,6 +360,8 @@ function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
     Write-Host "API not ready — starting detached uvicorn..."
     $apiPid = Start-ArgusApiProcess $Root
     if (-not (Wait-HttpOk (Get-ArgusApiReadyUrl) 90 "API /ready")) {
+      Write-Host "FAIL API /ready after repair. Last log lines:"
+      Write-Host (Get-ArgusApiLogTail $Root 50)
       Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
       return $false
     }
@@ -413,12 +426,89 @@ function Stop-PidIfRunning([object]$PidValue, [string]$Label) {
   }
 }
 
+function Ensure-ArgusEnvFile([string]$Root) {
+  $envPath = Join-Path $Root ".env"
+  if (Test-Path $envPath) { return $true }
+  $paper = Join-Path $Root ".env.paper.example"
+  $example = Join-Path $Root ".env.example"
+  $src = $null
+  if (Test-Path $paper) { $src = $paper }
+  elseif (Test-Path $example) { $src = $example }
+  if (-not $src) {
+    Write-Host "FAIL Missing .env and no example to copy."
+    return $false
+  }
+  Copy-Item -LiteralPath $src -Destination $envPath -Force
+  Write-Host "Created .env from $(Split-Path $src -Leaf). Edit POSTGRES_PASSWORD if needed."
+  return $true
+}
+
+function Ensure-ArgusApiVenv([string]$Root) {
+  # Recreate apps/api/.venv when missing or unable to import uvicorn.
+  $apiDir = Join-Path $Root "apps\api"
+  $py = Join-Path $apiDir ".venv\Scripts\python.exe"
+  if (Test-Path $py) {
+    & $py -c "import uvicorn" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { return $true }
+    Write-Host "API venv present but uvicorn import failed — rebuilding..."
+  } else {
+    Write-Host "API venv missing — creating with uv sync..."
+  }
+  Push-Location $apiDir
+  try {
+    $synced = $false
+    if (Get-Command uv -ErrorAction SilentlyContinue) {
+      uv sync 2>&1 | Out-Host
+      $synced = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $synced) {
+      python -m uv sync 2>&1 | Out-Host
+      $synced = ($LASTEXITCODE -eq 0)
+    }
+    if (-not (Test-Path $py)) {
+      Write-Host "FAIL API venv still missing after uv sync at $py"
+      return $false
+    }
+    & $py -c "import uvicorn" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "FAIL API venv cannot import uvicorn after sync."
+      return $false
+    }
+    Write-Host "OK  API venv ready"
+    return $true
+  } catch {
+    Write-Host "FAIL Ensure-ArgusApiVenv: $($_.Exception.Message)"
+    return $false
+  } finally {
+    Pop-Location
+  }
+}
+
+function Get-ArgusApiLogTail([string]$Root, [int]$Lines = 40) {
+  $runtime = Get-ArgusRuntimeDir $Root
+  $chunks = @()
+  foreach ($name in @("api.err.log", "api.log")) {
+    $path = Join-Path $runtime $name
+    if (Test-Path $path) {
+      $chunks += "--- $name ---"
+      try {
+        $chunks += Get-Content -Path $path -Tail $Lines -ErrorAction SilentlyContinue
+      } catch { }
+    }
+  }
+  return ($chunks -join "`n")
+}
+
 function Start-ArgusApiProcess([string]$Root) {
   $runtime = Get-ArgusRuntimeDir $Root
   $apiLog = Join-Path $runtime "api.log"
   $apiErr = Join-Path $runtime "api.err.log"
-  $py = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
   $apiDir = Join-Path $Root "apps\api"
+  if (-not (Ensure-ArgusApiVenv $Root)) {
+    Write-Host "API venv unavailable — cannot start API"
+    return $null
+  }
+  $py = Join-Path $apiDir ".venv\Scripts\python.exe"
   if (-not (Test-Path $py)) {
     Write-Host "API venv python missing at $py - skip API start"
     return $null

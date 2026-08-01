@@ -213,6 +213,26 @@ Log "Starting Argus from updated tree..."
 $startExit = $LASTEXITCODE
 Log ("Start exit code: {0}" -f $startExit)
 
+# Source helpers from the refreshed tree for API verification/repair.
+. (Join-Path $Root "scripts\control-center\_common.ps1")
+
+$apiOk = Test-HttpOk (Get-ArgusApiReadyUrl) 5
+if (-not $apiOk) {
+  Log "API /ready failed after Start — running repair..."
+  Log (Get-ArgusApiLogTail $Root 40)
+  if (Repair-ArgusRuntime -Root $Root -IncludeWorker) {
+    $apiOk = $true
+    $startExit = 0
+    Log "OK  API repaired"
+  } else {
+    Log "FAIL API still down after repair"
+    Log (Get-ArgusApiLogTail $Root 60)
+    Log "Next: open Docker Desktop, then run repair-argus-api.ps1 via irm | iex"
+  }
+} else {
+  Log "OK  API /ready"
+}
+
 # Verify what the browser will see.
 Start-Sleep -Seconds 5
 try {
@@ -225,8 +245,10 @@ try {
 Log ""
 Log "=== DONE ==="
 Log ("Expected Home build after Ctrl+F5: {0}" -f $buildId)
+Log ("API ready: {0}" -f $apiOk)
 Log "Open: http://127.0.0.1:3000/today"
-Log "If still old: open Desktop\Argus-update-report.txt and tell Cursor what it says."
+Log "If API failed: irm repair-argus-api.ps1 | iex (see Desktop report)."
 Save-Report
 
+if (-not $apiOk) { exit 1 }
 if ($startExit -ne 0) { exit $startExit }
