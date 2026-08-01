@@ -19,7 +19,8 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       @{ Name = "start-argus.ps1"; Required = $true },
       @{ Name = "_common.ps1"; Required = $true },
       @{ Name = "recycle-eoc.ps1"; Required = $false },
-      @{ Name = "update-argus-now.ps1"; Required = $false }
+      @{ Name = "update-argus-now.ps1"; Required = $false },
+      @{ Name = "repair-argus-api.ps1"; Required = $false }
     )
     $changed = $false
     try {
