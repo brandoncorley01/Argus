@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { revalidatePath } from "next/cache";
 
+import { ARGUS_UI_BUILD } from "@/lib/build";
 import { apiFetch } from "@/lib/server/api";
 import { apiBaseUrl } from "@/lib/server/env";
 import { spawnHiddenPs1 } from "@/lib/server/spawnHiddenPs1";
@@ -147,8 +148,7 @@ export async function startArgusAction(): Promise<ActionResult> {
   }
   return {
     ok: true,
-    message:
-      "Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show live-monitor-v2.21.",
+    message: `Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show ${ARGUS_UI_BUILD}.`,
     detail: res.detail,
   };
 }
