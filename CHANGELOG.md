@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Fixed
 
+- Home Start always force-syncs GitHub main, rewrites `/argus-build.txt` on every Start path, and recycles the dashboard when the Build chip was stale (`live-monitor-v2.21`)
 - PowerShell no longer flashes at random: ArgusKeepAlive / keep-awake / Home Start-Stop / login recovery / backup launch via `run-hidden.vbs` (wscript window style 0); Start self-updates and re-registers the hidden task (`live-monitor-v2.20`)
 - API failure recovery: recreate missing/broken API venv, migrate during repair, dump api.err.log, add `repair-argus-api.ps1` (`live-monitor-v2.19`)
 - Home Build chip reads live `/argus-build.txt`; `update-argus-now.ps1` writes Desktop report + verifies HTTP stamp (`live-monitor-v2.18`)

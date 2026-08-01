@@ -26,7 +26,7 @@ function Save-Report {
 }
 
 Log "=== Argus UPDATE NOW ==="
-Log "Script revision: update-argus-now-v2"
+Log "Script revision: update-argus-now-v3"
 
 function Get-BuildIdFromRoot([string]$Root) {
   $p = Join-Path $Root "apps\eoc\src\lib\build.ts"

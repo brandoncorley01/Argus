@@ -143,8 +143,44 @@ function Get-ArgusLocalBuildId([string]$Root) {
   return Get-ArgusBuildIdFromText (Get-Content -Raw $path)
 }
 
+function Get-ArgusPublicBuildId([string]$Root) {
+  $path = Join-Path $Root "apps\eoc\public\argus-build.txt"
+  if (-not (Test-Path $path)) { return $null }
+  try {
+    $raw = (Get-Content -Raw $path).Trim()
+    if (-not $raw) { return $null }
+    return ($raw -split '\s+')[0].Trim()
+  } catch {
+    return $null
+  }
+}
+
+function Write-ArgusPublicBuildStamp([string]$Root) {
+  # Home Build chip reads /argus-build.txt (no Next rebuild required).
+  $buildId = Get-ArgusLocalBuildId $Root
+  if (-not $buildId) { $buildId = "unknown" }
+  $sha = "local"
+  try {
+    Push-Location $Root
+    $sha = (git rev-parse --short HEAD 2>$null).Trim()
+    if (-not $sha) { $sha = "local" }
+  } catch {
+    $sha = "local"
+  } finally {
+    Pop-Location -ErrorAction SilentlyContinue
+  }
+  $marker = Join-Path $Root "apps\eoc\public\argus-build.txt"
+  $dir = Split-Path $marker -Parent
+  if (-not (Test-Path $dir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  Set-Content -Path $marker -Value "$buildId $sha" -Encoding ascii
+  Write-Host ("Build stamp file: {0} ({1})" -f $buildId, $sha)
+  return $buildId
+}
+
 function Test-ArgusBehindOriginMain([string]$Root) {
-  # Returns $true when origin/main SHA differs from HEAD (after fetch).
+  # Returns $true when origin/main SHA or build stamp differs from this PC (after fetch).
   if (-not (Test-Path (Join-Path $Root ".git"))) { return $false }
   Push-Location $Root
   try {
@@ -153,7 +189,21 @@ function Test-ArgusBehindOriginMain([string]$Root) {
     $local = (git rev-parse HEAD 2>$null).Trim()
     $remote = (git rev-parse "origin/main" 2>$null).Trim()
     if (-not $local -or -not $remote) { return $false }
-    return ($local -ne $remote)
+    if ($local -ne $remote) { return $true }
+
+    # Same SHA should match, but also catch a stale working tree / wrong build.ts.
+    $localBuild = Get-ArgusLocalBuildId $Root
+    $remoteBuildText = git show "origin/main:apps/eoc/src/lib/build.ts" 2>$null
+    $remoteBuild = Get-ArgusBuildIdFromText "$remoteBuildText"
+    if ($localBuild -and $remoteBuild -and ($localBuild -ne $remoteBuild)) {
+      return $true
+    }
+    $publicBuild = Get-ArgusPublicBuildId $Root
+    if ($remoteBuild -and $publicBuild -and ($publicBuild -ne $remoteBuild)) {
+      # Code may already match, but Home is still advertising an old chip — refresh.
+      return $true
+    }
+    return $false
   } catch {
     return $false
   } finally {

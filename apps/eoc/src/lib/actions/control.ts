@@ -97,7 +97,11 @@ function runCommand(
   });
 }
 
-async function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> {
+async function runPs1(
+  scriptLeaf: string,
+  timeoutMs = 180_000,
+  env?: Record<string, string>,
+): Promise<ActionResult> {
   const script = controlScript(scriptLeaf);
   if (!fs.existsSync(script)) {
     return Promise.resolve({
@@ -112,7 +116,7 @@ async function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionRe
     repoRoot: repoRoot(),
     scriptLeaf,
     timeoutMs,
-    env: { ARGUS_KEEP_DASHBOARD: "1" },
+    env: { ARGUS_KEEP_DASHBOARD: "1", ...env },
   });
   if (res.ok) {
     return { ok: true, message: "ok", detail: res.detail };
@@ -125,12 +129,13 @@ async function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionRe
 }
 
 export async function startArgusAction(): Promise<ActionResult> {
-  // Always run start-argus.ps1. Fast Start stays cheap when already healthy AND
-  // on current GitHub main; when this PC is behind, Start force-syncs so Home
-  // is not stuck on a stale build stamp (e.g. v2.11).
+  // Home Start always force-syncs to GitHub main. Fast Start previously left
+  // Founder on a stale Build chip (public/argus-build.txt never rewritten).
   // Do not wipe apps/eoc/.next or kill :3000 here — that aborts this server
   // action; start-argus schedules a delayed dashboard recycle after sync.
-  const res = await runPs1("start-argus.ps1", 240_000);
+  const res = await runPs1("start-argus.ps1", 300_000, {
+    ARGUS_FORCE_SYNC: "1",
+  });
   revalidatePath("/today");
   revalidatePath("/control");
   if (!res.ok) {
@@ -140,16 +145,10 @@ export async function startArgusAction(): Promise<ActionResult> {
       detail: res.detail,
     };
   }
-  const detail = res.detail ?? "";
-  const refreshed =
-    detail.includes("forcing code refresh") ||
-    detail.includes("Updated to main") ||
-    detail.includes("Scheduled dashboard recycle");
   return {
     ok: true,
-    message: refreshed
-      ? "Argus refreshed from GitHub. Reload Home if the build stamp looks old."
-      : "Argus started. It will keep Running until you press Stop.",
+    message:
+      "Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show live-monitor-v2.21.",
     detail: res.detail,
   };
 }
