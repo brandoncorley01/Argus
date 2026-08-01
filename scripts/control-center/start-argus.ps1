@@ -102,6 +102,7 @@ try {
   # skipped sync while services were healthy.
   $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
   $localBuild = Get-ArgusLocalBuildId $Root
+  $publicBuildBefore = Get-ArgusPublicBuildId $Root
   if (-not $forceSync) {
     try {
       if (Test-ArgusBehindOriginMain $Root) {
@@ -113,7 +114,7 @@ try {
           Pop-Location -ErrorAction SilentlyContinue
         }
         $remoteBuild = Get-ArgusBuildIdFromText "$remoteBuildText"
-        Write-Host ("This PC is behind GitHub main (local build {0}; remote {1}) — forcing code refresh." -f $(if ($localBuild) { $localBuild } else { "?" }), $(if ($remoteBuild) { $remoteBuild } else { "?" }))
+        Write-Host ("This PC is behind GitHub main (local build {0}; public {1}; remote {2}) — forcing code refresh." -f $(if ($localBuild) { $localBuild } else { "?" }), $(if ($publicBuildBefore) { $publicBuildBefore } else { "?" }), $(if ($remoteBuild) { $remoteBuild } else { "?" }))
         $forceSync = $true
         $env:ARGUS_FORCE_SYNC = "1"
       } else {
@@ -122,6 +123,29 @@ try {
     } catch {
       Write-Host "WARN: could not compare to GitHub main: $($_.Exception.Message)"
     }
+  }
+
+  # Belt-and-suspenders: raw GitHub build.ts (works even when git fetch/auth fails).
+  if (-not $forceSync) {
+    try {
+      $rawUrl = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/apps/eoc/src/lib/build.ts?{0}" -f (Get-Random)
+      $rawText = (Invoke-WebRequest -Uri $rawUrl -UseBasicParsing -TimeoutSec 20).Content
+      $rawBuild = Get-ArgusBuildIdFromText "$rawText"
+      if ($rawBuild -and (
+          ($localBuild -and $localBuild -ne $rawBuild) -or
+          ($publicBuildBefore -and $publicBuildBefore -ne $rawBuild)
+        )) {
+        Write-Host ("GitHub raw build is {0} (local {1}, public {2}) — forcing code refresh." -f $rawBuild, $(if ($localBuild) { $localBuild } else { "?" }), $(if ($publicBuildBefore) { $publicBuildBefore } else { "?" }))
+        $forceSync = $true
+        $env:ARGUS_FORCE_SYNC = "1"
+      }
+    } catch {
+      Write-Host "WARN: could not read raw GitHub build stamp: $($_.Exception.Message)"
+    }
+  }
+
+  if ($forceSync) {
+    Write-Host ("Force sync armed — hard refresh from GitHub main (local build {0})." -f $(if ($localBuild) { $localBuild } else { "?" }))
   }
 
   $apiReadyNow = Test-HttpOk (Get-ArgusApiReadyUrl) 3
@@ -141,6 +165,7 @@ try {
     Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
     Start-Sleep -Seconds 2
     Write-Host "OK  Worker repair attempted."
+    $null = Write-ArgusPublicBuildStamp $Root
     $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
     Write-Host "=== Argus started ==="
@@ -164,6 +189,7 @@ try {
     if (-not (Wait-HttpOk (Get-ArgusApiReadyUrl) 90 "API /ready")) {
       throw "API /ready still failing after repair. Check Docker Desktop and Start again."
     }
+    $null = Write-ArgusPublicBuildStamp $Root
     $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) { Start-Process (Get-ArgusDashboardUrl) } else { Write-Host "REFRESH_HOME_SOFT" }
     Write-Host "=== Argus started ==="
@@ -234,14 +260,8 @@ try {
         }
       } catch { }
     }
-    $sha = (git rev-parse --short HEAD).Trim()
-    $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
-    $buildId = "command-center"
-    if (Test-Path $buildIdFile) {
-      $m = Select-String -Path $buildIdFile -Pattern 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"' | Select-Object -First 1
-      if ($m) { $buildId = $m.Matches.Groups[1].Value }
-    }
-    Write-Host "Build $buildId @ $sha"
+    $buildId = Write-ArgusPublicBuildStamp $Root
+    Write-Host "Build $buildId (fast Start)"
     $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) {
       Start-Process (Get-ArgusDashboardUrl)
@@ -264,19 +284,9 @@ try {
     Write-Host "WARN: keepalive task refresh failed: $($_.Exception.Message)"
   }
 
-  $sha = (git rev-parse --short HEAD).Trim()
-  $buildMarker = Join-Path $Root "apps\eoc\public\argus-build.txt"
-  $buildIdFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
-  $buildId = "command-center"
-  if (Test-Path $buildIdFile) {
-    $m = Select-String -Path $buildIdFile -Pattern 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"' | Select-Object -First 1
-    if ($m) { $buildId = $m.Matches.Groups[1].Value }
-  }
-  $publicDir = Split-Path $buildMarker -Parent
-  if (-not (Test-Path $publicDir)) {
-    New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
-  }
-  Set-Content -Path $buildMarker -Value "$buildId $sha" -Encoding ascii
+  $buildId = Write-ArgusPublicBuildStamp $Root
+  $sha = "local"
+  try { $sha = (git rev-parse --short HEAD).Trim() } catch { }
 
   # Never wipe .next while the browser dashboard is serving Start.
   # Desktop Start (no keep) may clear cache after EOC is stopped below.
@@ -412,8 +422,13 @@ try {
     Start-Process $dash
   } else {
     # Browser Start: leave :3000 alone during the in-flight action. If code
-    # updated, schedule a delayed dashboard recycle so the new build stamp appears.
-    if ($updated) {
+    # updated (or Home was advertising a stale public stamp), recycle so the
+    # compile-time Build chip and /argus-build.txt both show the new id.
+    $publicNow = Get-ArgusPublicBuildId $Root
+    $needsRecycle = $updated -or $forceSync -or (
+      $publicBuildBefore -and $publicNow -and ($publicBuildBefore -ne $publicNow)
+    )
+    if ($needsRecycle) {
       $recycle = Join-Path $PSScriptRoot "recycle-eoc.ps1"
       try {
         Start-ArgusHiddenPowerShell -ScriptPath $recycle -WorkingDirectory $Root -ExtraArgs @("8")
