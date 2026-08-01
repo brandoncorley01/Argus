@@ -1,45 +1,107 @@
 # FORCE this PC onto current GitHub main (build stamp + dashboard).
-# Run in PowerShell (works even when Start is stuck on an old build):
+# Run in PowerShell:
 #   irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1?$(Get-Random)" | iex
 #
-# Preserves .env and runtime/ (gitignored). Stops ports 3000/8000, hard-resets
-# to origin/main, clears .next, then runs Start Argus.
+# Writes a report to your Desktop: Argus-update-report.txt
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 
-Write-Host "=== Argus UPDATE NOW (force GitHub main) ==="
-Write-Host "Script revision: update-argus-now-v1"
+$ReportLines = New-Object System.Collections.Generic.List[string]
+function Log([string]$msg) {
+  Write-Host $msg
+  $ReportLines.Add(("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $msg)) | Out-Null
+}
 
-function Find-ArgusRoot {
-  $candidates = @(
-    (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
-    (Join-Path $env:USERPROFILE "Desktop\Argus"),
-    (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
-    (Join-Path $env:USERPROFILE "Documents\Argus"),
-    (Join-Path $env:USERPROFILE "source\Argus"),
-    (Join-Path $env:USERPROFILE "src\Argus"),
-    (Get-Location).Path
-  )
-  # Also search common Desktop/OneDrive trees one level deep.
+function Save-Report {
+  $desktop = [Environment]::GetFolderPath("Desktop")
+  if (-not $desktop) { $desktop = $env:USERPROFILE }
+  $path = Join-Path $desktop "Argus-update-report.txt"
+  try {
+    $ReportLines -join "`r`n" | Set-Content -Path $path -Encoding utf8
+    Write-Host ""
+    Write-Host "REPORT SAVED: $path"
+  } catch {
+    Write-Host "WARN: could not write Desktop report: $($_.Exception.Message)"
+  }
+}
+
+Log "=== Argus UPDATE NOW ==="
+Log "Script revision: update-argus-now-v2"
+
+function Get-BuildIdFromRoot([string]$Root) {
+  $p = Join-Path $Root "apps\eoc\src\lib\build.ts"
+  if (-not (Test-Path $p)) { return $null }
+  $t = Get-Content -Raw $p
+  if ($t -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { return $Matches[1] }
+  return $null
+}
+
+function Get-ShortcutArgusRoots {
+  $roots = @()
+  $desktop = [Environment]::GetFolderPath("Desktop")
+  $lnk = Join-Path $desktop "Start Argus.lnk"
+  if (-not (Test-Path $lnk)) { return $roots }
+  try {
+    $w = New-Object -ComObject WScript.Shell
+    $sc = $w.CreateShortcut($lnk)
+    Log ("Desktop shortcut Target: {0}" -f $sc.TargetPath)
+    Log ("Desktop shortcut Args: {0}" -f $sc.Arguments)
+    Log ("Desktop shortcut WorkDir: {0}" -f $sc.WorkingDirectory)
+    if ($sc.WorkingDirectory -and (Test-Path (Join-Path $sc.WorkingDirectory ".git"))) {
+      $roots += $sc.WorkingDirectory
+    }
+    if ($sc.Arguments -match '-File\s+"([^"]+start-argus\.ps1)"') {
+      $scriptPath = $Matches[1]
+      $cand = Resolve-Path (Join-Path (Split-Path $scriptPath -Parent) "..\..") -ErrorAction SilentlyContinue
+      if ($cand -and (Test-Path (Join-Path $cand.Path ".git"))) {
+        $roots += $cand.Path
+      }
+    }
+  } catch {
+    Log ("WARN: could not read Start Argus shortcut: {0}" -f $_.Exception.Message)
+  }
+  return $roots
+}
+
+function Find-AllArgusRoots {
+  $candidates = New-Object System.Collections.Generic.List[string]
+  foreach ($r in (Get-ShortcutArgusRoots)) { $candidates.Add($r) | Out-Null }
+  foreach ($c in @(
+      (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
+      (Join-Path $env:USERPROFILE "Desktop\Argus"),
+      (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
+      (Join-Path $env:USERPROFILE "Documents\Argus"),
+      (Join-Path $env:USERPROFILE "source\Argus"),
+      (Join-Path $env:USERPROFILE "src\Argus"),
+      (Get-Location).Path
+    )) {
+    if ($c) { $candidates.Add($c) | Out-Null }
+  }
   foreach ($base in @(
       (Join-Path $env:USERPROFILE "Desktop"),
       (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
       (Join-Path $env:USERPROFILE "Documents"),
-      (Join-Path $env:USERPROFILE "OneDrive\Documents")
+      (Join-Path $env:USERPROFILE "OneDrive\Documents"),
+      "C:\",
+      "D:\"
     )) {
-    if (Test-Path $base) {
-      Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match 'argus' } |
-        ForEach-Object { $candidates += $_.FullName }
-    }
+    if (-not (Test-Path $base)) { continue }
+    Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match 'argus' } |
+      ForEach-Object { $candidates.Add($_.FullName) | Out-Null }
   }
+  $valid = @()
   foreach ($c in ($candidates | Select-Object -Unique)) {
     if (-not $c) { continue }
     if ((Test-Path (Join-Path $c ".git")) -and (Test-Path (Join-Path $c "apps\eoc"))) {
-      return $c
+      $bid = Get-BuildIdFromRoot $c
+      $sha = ""
+      try { $sha = (& git -C $c rev-parse --short HEAD 2>$null).Trim() } catch {}
+      Log ("Found Argus at: {0} | build={1} | sha={2}" -f $c, $(if ($bid) { $bid } else { "?" }), $(if ($sha) { $sha } else { "?" }))
+      $valid += [pscustomobject]@{ Root = $c; Build = $bid; Sha = $sha }
     }
   }
-  return $null
+  return $valid
 }
 
 function Stop-PortListeners([int[]]$Ports) {
@@ -47,7 +109,7 @@ function Stop-PortListeners([int[]]$Ports) {
     try {
       Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
         ForEach-Object {
-          Write-Host "  kill PID $($_.OwningProcess) on port $port"
+          Log ("  kill PID {0} on port {1}" -f $_.OwningProcess, $port)
           Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
         }
     } catch {}
@@ -55,79 +117,116 @@ function Stop-PortListeners([int[]]$Ports) {
 }
 
 function Invoke-GitAt([string]$Root, [string[]]$GitArgs) {
-  Write-Host ("> git " + ($GitArgs -join " "))
+  Log ("> git " + ($GitArgs -join " "))
   Push-Location $Root
   try {
-    & git @GitArgs
+    & git @GitArgs 2>&1 | ForEach-Object { Log ("  $_") }
     return $LASTEXITCODE
   } finally {
     Pop-Location
   }
 }
 
-$Root = Find-ArgusRoot
-if (-not $Root) {
-  throw "Could not find Argus folder (.git + apps\eoc). cd into Argus and run again."
+$found = @(Find-AllArgusRoots)
+if ($found.Count -eq 0) {
+  Log "ERROR: No Argus folder found (.git + apps\eoc)."
+  Save-Report
+  throw "Could not find Argus folder. cd into Argus and run again."
 }
 
-Write-Host "Argus folder: $Root"
+# Prefer shortcut WorkingDirectory, else the newest git sha / first found.
+$Root = $found[0].Root
+Log ("Using Argus folder: $Root")
 Set-Location $Root
 
-Write-Host "Stopping API/dashboard locks..."
+Log "Stopping API/dashboard locks..."
 Stop-PortListeners @(3000, 8000)
-Get-Process -Name node, pnpm, npm -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Process -Name node -ErrorAction SilentlyContinue | ForEach-Object {
   try {
-    if ($_.Path -and $_.Path -like "*Argus*") {
-      Write-Host "  kill $($_.ProcessName) PID $($_.Id)"
+    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+    if ($cmd -and ($cmd -like "*eoc*" -or $cmd -like "*next*" -or $cmd -like "*Argus*")) {
+      Log ("  kill node PID {0}" -f $_.Id)
       Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
     }
   } catch {}
 }
 Start-Sleep -Seconds 2
 
+$code = Invoke-GitAt $Root @("remote", "-v")
 $code = Invoke-GitAt $Root @("fetch", "origin")
-if ($code -ne 0) { throw "git fetch failed — check internet / GitHub access." }
+if ($code -ne 0) {
+  Log "ERROR: git fetch failed — check internet / GitHub access / credentials."
+  Save-Report
+  throw "git fetch failed"
+}
 
-Write-Host "Hard reset to origin/main (preserves .env / runtime)..."
+Log "Hard reset to origin/main..."
 $null = Invoke-GitAt $Root @("checkout", "-f", "-B", "main", "origin/main")
 $code = Invoke-GitAt $Root @("reset", "--hard", "origin/main")
-if ($code -ne 0) { throw "git reset --hard origin/main failed." }
+if ($code -ne 0) {
+  Log "ERROR: git reset failed"
+  Save-Report
+  throw "git reset --hard origin/main failed"
+}
 $null = Invoke-GitAt $Root @("clean", "-fd", "--exclude=.env", "--exclude=runtime", "--exclude=backups")
 
 $sha = (& git -C $Root rev-parse --short HEAD).Trim()
 $branch = (& git -C $Root rev-parse --abbrev-ref HEAD).Trim()
-Write-Host "OK  Now on $branch @ $sha"
-
-$buildFile = Join-Path $Root "apps\eoc\src\lib\build.ts"
-if (-not (Test-Path $buildFile)) { throw "Missing build.ts after reset." }
-$buildText = Get-Content -Raw $buildFile
-if ($buildText -notmatch 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') {
-  throw "Could not read ARGUS_UI_BUILD from build.ts"
+$buildId = Get-BuildIdFromRoot $Root
+Log ("OK  Now on {0} @ {1}" -f $branch, $sha)
+Log ("OK  build.ts stamp: {0}" -f $(if ($buildId) { $buildId } else { "MISSING" }))
+if ($branch -ne "main") {
+  Save-Report
+  throw "Expected branch main, got $branch"
 }
-$buildId = $Matches[1]
-Write-Host "OK  Build stamp on disk: $buildId"
+if (-not $buildId) {
+  Save-Report
+  throw "build.ts missing ARGUS_UI_BUILD after reset"
+}
+
+# Mirror stamp into public file (served without Next rebuild).
+$publicBuild = Join-Path $Root "apps\eoc\public\argus-build.txt"
+$publicDir = Split-Path $publicBuild -Parent
+if (-not (Test-Path $publicDir)) { New-Item -ItemType Directory -Force -Path $publicDir | Out-Null }
+Set-Content -Path $publicBuild -Value "$buildId $sha" -Encoding ascii
+Log ("Wrote {0}" -f $publicBuild)
 
 $nextCache = Join-Path $Root "apps\eoc\.next"
 if (Test-Path $nextCache) {
-  Write-Host "Clearing Next.js cache..."
+  Log "Clearing Next.js cache..."
   Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Force Start to sync even if something races.
 $env:ARGUS_FORCE_SYNC = "1"
 $env:ARGUS_START_SELF_UPDATED = $null
 $env:ARGUS_SKIP_START_SELF_UPDATE = $null
 $env:ARGUS_KEEP_DASHBOARD = $null
 
 $starter = Join-Path $Root "scripts\control-center\start-argus.ps1"
-if (-not (Test-Path $starter)) { throw "Start script missing: $starter" }
+if (-not (Test-Path $starter)) {
+  Save-Report
+  throw "Start script missing: $starter"
+}
 
-Write-Host "Starting Argus from updated tree..."
+Log "Starting Argus from updated tree..."
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $starter
 $startExit = $LASTEXITCODE
+Log ("Start exit code: {0}" -f $startExit)
 
-Write-Host ""
-Write-Host "=== UPDATE NOW finished (exit $startExit) ==="
-Write-Host "Expected on Home after Ctrl+F5: Build $buildId"
-Write-Host "If still old: wrong Argus folder, or browser tab not hard-refreshed."
+# Verify what the browser will see.
+Start-Sleep -Seconds 5
+try {
+  $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/argus-build.txt?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 10
+  Log ("HTTP /argus-build.txt => {0}" -f $resp.Content.Trim())
+} catch {
+  Log ("WARN: could not fetch http://127.0.0.1:3000/argus-build.txt: {0}" -f $_.Exception.Message)
+}
+
+Log ""
+Log "=== DONE ==="
+Log ("Expected Home build after Ctrl+F5: {0}" -f $buildId)
+Log "Open: http://127.0.0.1:3000/today"
+Log "If still old: open Desktop\Argus-update-report.txt and tell Cursor what it says."
+Save-Report
+
 if ($startExit -ne 0) { exit $startExit }

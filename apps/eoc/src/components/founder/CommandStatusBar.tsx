@@ -30,6 +30,21 @@ function Feedback({ result }: { result: ActionResult | null }) {
 
 type Busy = "start" | "stop" | "pause" | null;
 
+async function fetchLiveBuildId(): Promise<string | null> {
+  try {
+    const res = await fetch(`/argus-build.txt?t=${Date.now()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const text = (await res.text()).trim();
+    // File may be "live-monitor-v2.17" or "live-monitor-v2.17 abc1234"
+    const token = text.split(/\s+/)[0]?.trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
 export function CommandStatusBar({
   argusStatus,
   statusExplanation,
@@ -68,6 +83,7 @@ export function CommandStatusBar({
   const [result, setResult] = useState<ActionResult | null>(null);
   const [staleMs, setStaleMs] = useState(0);
   const [stale, setStale] = useState(false);
+  const [liveBuildId, setLiveBuildId] = useState(buildId);
   const lastRenderRef = useRef(0);
   const visibleSinceRef = useRef(0);
   const busyRef = useRef<Busy>(null);
@@ -75,6 +91,24 @@ export function CommandStatusBar({
   useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
+
+  // Prefer public/argus-build.txt (written on Start) over the compile-time
+  // constant so a synced tree can prove the stamp without a stale .next bundle.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const live = await fetchLiveBuildId();
+      if (!cancelled && live) setLiveBuildId(live);
+    };
+    void load();
+    const id = window.setInterval(() => {
+      void load();
+    }, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [renderedAt]);
 
   // Only a completed server render advances renderedAt, so timing it locally
   // measures real staleness without trusting the browser and API clocks to agree.
@@ -88,6 +122,9 @@ export function CommandStatusBar({
       if (busyRef.current) return;
       if (document.visibilityState !== "visible") return;
       router.refresh();
+      void fetchLiveBuildId().then((live) => {
+        if (live) setLiveBuildId(live);
+      });
     };
     const id = window.setInterval(refresh, REFRESH_MS);
     // A tab left open through host sleep wakes up hours behind.
@@ -199,7 +236,12 @@ export function CommandStatusBar({
         <span className="status-chip tone-neutral" title={lastDecisionLabel}>
           Beat {lastHeartbeat}
         </span>
-        <span className="status-chip tone-neutral">Build {buildId}</span>
+        <span
+          className="status-chip tone-neutral"
+          title={`Compile-time ${buildId}; live file ${liveBuildId}`}
+        >
+          Build {liveBuildId}
+        </span>
       </div>
 
       {stale ? (
