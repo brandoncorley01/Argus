@@ -19,7 +19,8 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       @{ Name = "start-argus.ps1"; Required = $true },
       @{ Name = "_common.ps1"; Required = $true },
       @{ Name = "recycle-eoc.ps1"; Required = $false },
-      @{ Name = "update-argus-now.ps1"; Required = $false }
+      @{ Name = "update-argus-now.ps1"; Required = $false },
+      @{ Name = "repair-argus-api.ps1"; Required = $false }
     )
     $changed = $false
     try {
@@ -277,6 +278,13 @@ try {
     Write-Host "Keeping live dashboard cache (browser Start)."
   }
 
+  if (-not (Ensure-ArgusEnvFile $Root)) {
+    throw "Missing .env. Copy .env.paper.example to .env, then Start again."
+  }
+  if (-not (Ensure-ArgusApiVenv $Root)) {
+    throw "API Python environment failed. Install Python + uv, then Start again (or run repair-argus-api.ps1)."
+  }
+
   & "$Root\scripts\infra-up.ps1"
   & "$Root\scripts\migrate-up.ps1"
 
@@ -350,6 +358,18 @@ try {
   Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $eocPid -WorkerPid $workerPid
 
   $okApi = Wait-HttpOk (Get-ArgusApiReadyUrl) 120 "API /ready"
+  if (-not $okApi) {
+    Write-Host "API /ready failed — attempting one repair cycle..."
+    if (Repair-ArgusRuntime -Root $Root -IncludeWorker) {
+      $okApi = $true
+      $pids = Read-ArgusPids $Root
+      $apiPid = $pids.api
+      $workerPid = $pids.worker
+    } else {
+      Write-Host "FAIL API repair. Log tail:"
+      Write-Host (Get-ArgusApiLogTail $Root 60)
+    }
+  }
   $okEoc = $false
   $deadline = (Get-Date).AddSeconds(120)
   while ((Get-Date) -lt $deadline) {
@@ -366,10 +386,10 @@ try {
 
   if ($KeepDashboard) {
     if (-not $okApi) {
-      throw "Argus API did not become healthy. Check runtime\control-center\*.log"
+      throw "Argus API did not become healthy. Open Docker Desktop, then run: irm `"https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/repair-argus-api.ps1`" | iex"
     }
   } elseif (-not ($okApi -and $okEoc)) {
-    throw "Argus did not become healthy. Check runtime\control-center\*.log"
+    throw "Argus did not become healthy. Open Docker Desktop, then run repair-argus-api.ps1 via irm | iex. See runtime\control-center\api.err.log"
   }
 
   $null = Start-ArgusKeepAwake $Root

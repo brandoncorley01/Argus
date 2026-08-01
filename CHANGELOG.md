@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Fixed
 
+- API failure recovery: recreate missing/broken API venv, migrate during repair, dump api.err.log, add `repair-argus-api.ps1` (`live-monitor-v2.19`)
 - Home Build chip reads live `/argus-build.txt`; `update-argus-now.ps1` writes Desktop report + verifies HTTP stamp (`live-monitor-v2.18`)
 - Start always overwrites control-center scripts from GitHub (dirty local Start scripts no longer block refresh); add `update-argus-now.ps1` one-command hard reset (`live-monitor-v2.17`)
 - Start no longer skips GitHub sync on Fast Start when this PC is behind `main`; self-updates `_common.ps1` + schedules dashboard recycle so Home leaves stale build stamps (`live-monitor-v2.16`)
