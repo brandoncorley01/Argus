@@ -44,6 +44,7 @@ type PulseResponse = {
   fetched_at?: string;
   summary: {
     total_account_value: string;
+    cash_balance: string;
     buying_power: string;
     committed_capital: string;
     open_position_count: number;
@@ -128,7 +129,8 @@ export function PaperLiveProvider({
       fetchedAt: data.fetched_at ?? new Date().toISOString(),
       account: {
         balance: data.summary.total_account_value,
-        cash: data.summary.buying_power,
+        // True remaining paper cash (not buying_power). Equity = cash + marks.
+        cash: data.summary.cash_balance,
         inTrades: data.summary.committed_capital,
         openCount: data.summary.open_position_count,
       },

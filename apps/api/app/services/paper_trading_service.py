@@ -137,7 +137,7 @@ class PaperTradingService:
         return portfolio
 
     def list_portfolios(self) -> list[PaperPortfolio]:
-        """Prefer Founder desks with open paper risk over empty fixture books."""
+        """Prefer Founder Learning Desk, then desks with open risk, then newest."""
         open_qty = (
             select(func.coalesce(func.sum(func.abs(PaperPosition.quantity)), 0))
             .where(
@@ -147,9 +147,14 @@ class PaperTradingService:
             .correlate(PaperPortfolio)
             .scalar_subquery()
         )
+        learning_rank = func.case(
+            (PaperPortfolio.name == "Founder Learning Desk", 0),
+            else_=1,
+        )
         return list(
             self.db.scalars(
                 select(PaperPortfolio).order_by(
+                    learning_rank.asc(),
                     open_qty.desc(),
                     PaperPortfolio.created_at.desc(),
                 )
@@ -790,6 +795,15 @@ class PaperTradingService:
             {"client_order_id": client_id},
         )
 
+        open_positions = [
+            {
+                "symbol": p.symbol,
+                "quantity": p.quantity,
+                "average_cost": p.average_cost or Decimal("0"),
+            }
+            for p in self.list_positions(portfolio.id)
+            if p.quantity != 0
+        ]
         try:
             result, fill_events = self.gateway.submit(
                 provider_key=provider.provider_key,
@@ -811,6 +825,8 @@ class PaperTradingService:
                 kill_switch_active=portfolio.kill_switch_active,
                 portfolio_status=portfolio.status,
                 cash=portfolio.cash_balance,
+                reserved_cash=portfolio.reserved_cash,
+                positions=open_positions,
                 seed=seed,
                 assumptions=assumptions,
             )

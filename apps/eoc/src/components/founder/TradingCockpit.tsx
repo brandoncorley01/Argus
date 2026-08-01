@@ -448,7 +448,7 @@ export function TradingCockpit({
         );
         setLiveAccount({
           balance: data.summary.total_account_value,
-          cash: data.summary.buying_power,
+          cash: data.summary.cash_balance,
           inTrades: data.summary.committed_capital,
           openCount: data.summary.open_position_count,
         });

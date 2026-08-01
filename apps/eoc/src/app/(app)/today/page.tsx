@@ -426,7 +426,7 @@ async function renderTodayPage() {
         portfolioId={portfolio?.id ?? null}
         seedAccount={{
           balance: summary?.total_account_value ?? null,
-          cash: summary?.buying_power ?? null,
+          cash: summary?.cash_balance ?? null,
           inTrades: summary?.committed_capital ?? null,
           openCount: summary?.open_position_count ?? positions.length,
         }}
@@ -460,7 +460,7 @@ async function renderTodayPage() {
           trainingMode={trainingMode}
           account={{
             balance: summary?.total_account_value ?? null,
-            cash: summary?.buying_power ?? null,
+            cash: summary?.cash_balance ?? null,
             inTrades: summary?.committed_capital ?? null,
             openCount: summary?.open_position_count ?? positions.length,
           }}
