@@ -3,7 +3,8 @@ import Link from "next/link";
 
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
-import { direction, money, pnlClass } from "@/lib/founder/simple";
+import { pickPrimaryPortfolio } from "@/lib/founder/learningDesk";
+import { money, pnlClass } from "@/lib/founder/simple";
 import { apiFetch } from "@/lib/server/api";
 import { soft } from "@/lib/server/control-plane";
 
@@ -17,39 +18,63 @@ type Portfolio = {
   status: string;
   kill_switch_active: boolean;
 };
-type Position = {
+
+type PortfolioSummary = {
+  cash_balance: string;
+  buying_power: string;
+  committed_capital: string;
+  total_account_value: string;
+  open_position_count: number;
+};
+
+type PositionSummary = {
   symbol: string;
   quantity: string;
+  side: string;
   average_cost: string;
-  unrealized_pnl: string;
+  committed_capital: string;
+  unrealized_pnl: string | null;
   realized_pnl: string;
+  mark_price: string | null;
+  market_value?: string | null;
 };
 
 export default async function PortfolioPage() {
   await requireUser();
   const portfolios = await soft(() => apiFetch<Portfolio[]>("/api/v1/paper/portfolios"));
-  const portfolio = portfolios?.[0] ?? null;
-  let positions: Position[] = [];
+  const portfolio = pickPrimaryPortfolio(portfolios) ?? null;
+  let summary: PortfolioSummary | null = null;
+  let positions: PositionSummary[] = [];
   if (portfolio) {
-    positions =
-      (await soft(() =>
-        apiFetch<Position[]>(`/api/v1/paper/portfolios/${portfolio.id}/positions`),
-      )) ?? [];
+    const [s, p] = await Promise.all([
+      soft(() =>
+        apiFetch<PortfolioSummary>(
+          `/api/v1/paper/portfolios/${portfolio.id}/summary`,
+        ),
+      ),
+      soft(() =>
+        apiFetch<PositionSummary[]>(
+          `/api/v1/paper/portfolios/${portfolio.id}/position-summaries`,
+        ),
+      ),
+    ]);
+    summary = s;
+    positions = p ?? [];
   }
   const open = positions.filter((p) => Number(p.quantity) !== 0);
-  const deployed = open.reduce(
-    (s, p) => s + Math.abs(Number(p.quantity) || 0) * (Number(p.average_cost) || 0),
-    0,
-  );
-  const unrealized = open.reduce((s, p) => s + (Number(p.unrealized_pnl) || 0), 0);
-  const realized = positions.reduce((s, p) => s + (Number(p.realized_pnl) || 0), 0);
-  const cash = portfolio ? Number(portfolio.cash_balance) : NaN;
-  const value =
-    Number.isFinite(cash) && Number.isFinite(deployed) ? cash + deployed + unrealized : null;
+  const deployed = summary
+    ? Number(summary.committed_capital)
+    : open.reduce((s, p) => s + (Number(p.committed_capital) || 0), 0);
+  const unrealized = open.reduce((s, p) => {
+    const n = Number(p.unrealized_pnl);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
+  const value = summary ? Number(summary.total_account_value) : null;
+  const cash = summary?.cash_balance ?? portfolio?.cash_balance ?? null;
 
   const bySymbol = open.map((p) => ({
     symbol: p.symbol,
-    exposure: Math.abs(Number(p.quantity) || 0) * (Number(p.average_cost) || 0),
+    exposure: Number(p.committed_capital) || 0,
   }));
 
   return (
@@ -66,21 +91,17 @@ export default async function PortfolioPage() {
           <div className="simple-row">
             <div className="simple-chip">
               <span className="metric-label">Portfolio value</span>
-              <strong>{value == null ? "Unavailable" : money(value)}</strong>
+              <strong title="Cash + open marks (same as Home)">
+                {value == null || !Number.isFinite(value) ? "Unavailable" : money(value)}
+              </strong>
             </div>
             <div className="simple-chip">
               <span className="metric-label">Paper cash</span>
-              <strong>{money(portfolio.cash_balance)}</strong>
+              <strong>{cash == null ? "Unavailable" : money(cash)}</strong>
             </div>
             <div className="simple-chip">
               <span className="metric-label">Capital deployed</span>
               <strong title="Open position cost basis">{money(deployed)}</strong>
-            </div>
-            <div className="simple-chip">
-              <span className="metric-label">Realized P&amp;L</span>
-              <strong className={pnlClass(realized)} title="Closed gains/losses on books">
-                {money(realized)}
-              </strong>
             </div>
             <div className="simple-chip">
               <span className="metric-label">Unrealized P&amp;L</span>
@@ -115,17 +136,21 @@ export default async function PortfolioPage() {
                         <th>Symbol</th>
                         <th>Side</th>
                         <th>Qty</th>
+                        <th>Mark</th>
                         <th>Unrealized</th>
                       </tr>
                     </thead>
                     <tbody>
                       {open.map((p) => (
                         <tr key={p.symbol}>
-                          <td>{p.symbol}</td>
-                          <td>{direction(p.quantity)}</td>
+                          <td>
+                            <Link href={`/paper/${portfolio.id}`}>{p.symbol}</Link>
+                          </td>
+                          <td>{p.side === "short" ? "Short" : "Long"}</td>
                           <td>{p.quantity}</td>
-                          <td className={pnlClass(p.unrealized_pnl)}>
-                            {money(p.unrealized_pnl)}
+                          <td>{p.mark_price != null ? money(p.mark_price) : "—"}</td>
+                          <td className={pnlClass(Number(p.unrealized_pnl) || 0)}>
+                            {p.unrealized_pnl != null ? money(p.unrealized_pnl) : "—"}
                           </td>
                         </tr>
                       ))}
@@ -137,15 +162,6 @@ export default async function PortfolioPage() {
           </div>
         </>
       )}
-
-      <div className="form-actions" style={{ marginTop: "1rem" }}>
-        <Link className="btn secondary" href="/today">
-          Home
-        </Link>
-        <Link className="btn secondary" href="/trading">
-          Trading
-        </Link>
-      </div>
     </>
   );
 }

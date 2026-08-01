@@ -6,7 +6,7 @@ import { usePaperLive } from "@/components/founder/PaperLiveProvider";
 
 /**
  * First-glance paper capital — driven by the shared Home pulse.
- * Account = cash + open marks; In trades = cost basis committed; Cash = buying power.
+ * Account = cash + open marks; In trades = cost basis committed; Cash = cash_balance.
  */
 export function CapitalStrip() {
   const { account, fetchedAt, refreshing, positions, openUnrealizedPnl } =
@@ -67,7 +67,7 @@ export function CapitalStrip() {
           <strong className="capital-value capital-value-sm">
             {money(account.cash)}
           </strong>
-          <span className="capital-hint">Buying power for new entries</span>
+          <span className="capital-hint">Remaining paper cash (not in positions)</span>
         </div>
       </div>
       <p className="muted-note capital-strip-footnote">

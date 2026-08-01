@@ -66,6 +66,8 @@ class ExecutionGateway:
         kill_switch_active: bool,
         portfolio_status: str,
         cash: Decimal,
+        reserved_cash: Decimal | None = None,
+        positions: list[dict[str, Any]] | None = None,
         seed: int = 42,
         assumptions: dict[str, Any] | None = None,
     ) -> tuple[OrderState, list[FillEvent]]:
@@ -95,7 +97,14 @@ class ExecutionGateway:
                     "live_execution_forbidden",
                     "Provider environment is not paper/test",
                 )
-            provider.ensure_account(intent.portfolio_id, cash=cash)
+            # DB is source of truth — hydrate before every fill so restarts cannot
+            # wipe open positions / desync cash on the next provider_sync.
+            provider.ensure_account(
+                intent.portfolio_id,
+                cash=cash,
+                reserved=reserved_cash if reserved_cash is not None else Decimal("0"),
+                positions=positions or [],
+            )
         if not provider.readiness():
             provider.connect()
         return provider.submit_order(intent)

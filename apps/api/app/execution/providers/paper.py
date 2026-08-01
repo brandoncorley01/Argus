@@ -84,18 +84,77 @@ class PaperExecutionProvider(ExecutionProvider):
         return ProviderCapabilities(supports_replace=False, supports_short_selling=False)
 
     def ensure_account(
-        self, portfolio_id: uuid.UUID, *, cash: Decimal, currency: str = "USD"
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        cash: Decimal,
+        currency: str = "USD",
+        reserved: Decimal | None = None,
+        positions: list[dict[str, Any]] | None = None,
     ) -> None:
+        """Create or refresh the in-memory book from DB authority.
+
+        Always aligns cash/reserved/positions with the persisted portfolio before
+        an order. Without this, an API restart leaves an empty memory book and the
+        next fill sync deletes real DB positions while keeping reduced cash —
+        which makes paper capital look wrong / evaporate.
+        """
+        self.hydrate_account(
+            portfolio_id,
+            cash=cash,
+            currency=currency,
+            reserved=reserved if reserved is not None else Decimal("0"),
+            positions=positions or [],
+        )
+
+    def hydrate_account(
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        cash: Decimal,
+        currency: str = "USD",
+        reserved: Decimal = Decimal("0"),
+        positions: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Overwrite working cash/positions from DB; keep order/fill history."""
         key = _portfolio_key(self.provider_key, portfolio_id)
-        if key not in _ACCOUNT_STORE:
-            _ACCOUNT_STORE[key] = {
-                "cash": Decimal(cash),
-                "reserved": Decimal("0"),
-                "currency": currency,
-                "positions": {},
-                "orders": {},
-                "fills": [],
+        prior = _ACCOUNT_STORE.get(key)
+        pos_map: dict[str, dict[str, Decimal]] = {}
+        for row in positions or []:
+            symbol = str(row["symbol"]).upper()
+            qty = Decimal(str(row["quantity"]))
+            if qty == 0:
+                continue
+            pos_map[symbol] = {
+                "qty": qty,
+                "avg_cost": Decimal(str(row.get("average_cost") or 0)),
             }
+        _ACCOUNT_STORE[key] = {
+            "cash": Decimal(cash),
+            "reserved": Decimal(reserved),
+            "currency": currency,
+            "positions": pos_map,
+            "orders": prior["orders"] if prior else {},
+            "fills": prior["fills"] if prior else [],
+        }
+
+    def reset_account(
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        cash: Decimal,
+        currency: str = "USD",
+    ) -> None:
+        """Full learning-desk / reseed reset — flat book, new cash."""
+        key = _portfolio_key(self.provider_key, portfolio_id)
+        _ACCOUNT_STORE[key] = {
+            "cash": Decimal(cash),
+            "reserved": Decimal("0"),
+            "currency": currency,
+            "positions": {},
+            "orders": {},
+            "fills": [],
+        }
 
     def clear_symbol_position(
         self,
@@ -108,6 +167,8 @@ class PaperExecutionProvider(ExecutionProvider):
         key = _portfolio_key(self.provider_key, portfolio_id)
         acct = _ACCOUNT_STORE.get(key)
         if acct is None:
+            if cash_after is not None:
+                self.reset_account(portfolio_id, cash=cash_after)
             return
         acct["positions"].pop(symbol.upper(), None)
         if cash_after is not None:

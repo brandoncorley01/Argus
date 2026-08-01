@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { requireUser } from "@/lib/actions/auth";
 import { formatTimestamp } from "@/lib/format";
+import { pickPrimaryPortfolio } from "@/lib/founder/learningDesk";
 import {
   FOUNDER_MILESTONE,
   milestoneProgressPercent,
@@ -134,7 +135,7 @@ export default async function OverviewPage() {
   const todayTrades = dailyReports?.[0]?.content?.trade_count;
   const reportDate = dailyReports?.[0]?.report_date;
 
-  const portfolio = portfolios?.[0] ?? null;
+  const portfolio = pickPrimaryPortfolio(portfolios) ?? null;
   let openPositions: PaperPosition[] | null = null;
   if (portfolio) {
     openPositions = await soft(() =>

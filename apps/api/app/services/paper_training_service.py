@@ -35,6 +35,7 @@ from app.services.plain_language import (
 
 MIN_BARS = 25
 # Match anticipated live connected-account size for Founder learning.
+FOUNDER_LEARNING_DESK_NAME = "Founder Learning Desk"
 LEARNING_STARTING_CASH = Decimal("300")
 LEARNING_DEFAULT_NOTIONAL = Decimal("30")  # ~10% of $300 book per practice entry
 # Take-profit must clear at least this reward:risk multiple of stop distance.
@@ -929,6 +930,29 @@ class PaperTrainingService:
         except Exception:  # noqa: BLE001 — UI stream must never block trading
             pass
 
+    def ensure_learning_desk(
+        self, *, actor: AuthenticatedPrincipal
+    ) -> PaperPortfolio:
+        """Return the canonical $300 Founder Learning Desk (create if missing)."""
+        existing = self.db.scalar(
+            select(PaperPortfolio).where(
+                PaperPortfolio.name == FOUNDER_LEARNING_DESK_NAME
+            )
+        )
+        if existing is not None:
+            return existing
+        portfolio = self.paper.create_portfolio(
+            name=FOUNDER_LEARNING_DESK_NAME,
+            initial_cash=LEARNING_STARTING_CASH,
+            actor=actor,
+        )
+        settings = self.get_or_create_settings(portfolio.id)
+        settings.mode = "automatic"
+        settings.default_notional = LEARNING_DEFAULT_NOTIONAL
+        self.db.commit()
+        self.db.refresh(portfolio)
+        return portfolio
+
     def reseed_learning_desk(
         self,
         portfolio_id: uuid.UUID,
@@ -974,8 +998,15 @@ class PaperTrainingService:
         try:
             from app.execution.providers.paper import PaperExecutionProvider
 
-            runtime = PaperExecutionProvider(self.db)
-            runtime.ensure_account(portfolio.id, cash=starting_cash)
+            # Prefer the live gateway instance so reseed cannot leave a stale
+            # in-memory book that later provider_syncs old cash back to DB.
+            runtime = self.paper.gateway.get_provider("internal_paper")
+            if isinstance(runtime, PaperExecutionProvider):
+                runtime.reset_account(portfolio.id, cash=starting_cash)
+            else:
+                PaperExecutionProvider(self.db).reset_account(
+                    portfolio.id, cash=starting_cash
+                )
         except Exception:  # noqa: BLE001 — DB cash is source of truth for UI
             pass
         settings = self.get_or_create_settings(portfolio_id)

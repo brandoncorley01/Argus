@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RequireAnyAuthenticatedRead, RequireFounder, RequireFounderOrOperator
 from app.db.session import get_db
+from app.schemas.paper import PortfolioRead
 from app.schemas.paper_training import (
     CandleReadinessRow,
     CoachingActionRequest,
@@ -64,6 +65,19 @@ def founder_candidates(
         payload["lesson"] = training.trade_lesson_for_candidate(cand)
         rows.append(FounderCandidateRead.model_validate(payload))
     return rows
+
+
+@router.get("/learning-desk", response_model=PortfolioRead)
+def learning_desk(
+    principal: AuthenticatedPrincipal = Depends(RequireFounderOrOperator),
+    service: PaperTrainingService = Depends(get_service),
+) -> PortfolioRead:
+    """Ensure the canonical $300 Founder Learning Desk exists and return it."""
+    try:
+        desk = service.ensure_learning_desk(actor=principal)
+        return PortfolioRead.model_validate(desk)
+    except Exception as exc:  # noqa: BLE001
+        raise _http(exc) from exc
 
 
 @router.get("/{portfolio_id}/settings", response_model=TrainingSettingsRead)
