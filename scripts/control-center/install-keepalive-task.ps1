@@ -1,11 +1,12 @@
 # Register a per-user scheduled task that recovers Argus when desired=Running.
 # Idempotent. Does not require admin if registering under the current user.
-# Task is Hidden so PowerShell does not flash on the Founder desktop every 2 minutes.
+# Uses run-hidden.vbs (window style 0) so PowerShell NEVER flashes on the desktop.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
 $Root = Get-ArgusRoot
 $script = Join-Path $PSScriptRoot "keep-argus-alive.ps1"
+$launcher = Join-Path $PSScriptRoot "run-hidden.vbs"
 $taskName = "ArgusKeepAlive"
 $runtime = Get-ArgusRuntimeDir $Root
 $log = Join-Path $runtime "keepalive-task.log"
@@ -13,20 +14,15 @@ $log = Join-Path $runtime "keepalive-task.log"
 if (-not (Test-Path $script)) {
   throw "Missing keep-argus-alive.ps1 at $script"
 }
+if (-not (Test-Path $launcher)) {
+  throw "Missing run-hidden.vbs at $launcher"
+}
 
-# Redirect to a log so a hidden task never needs a console for Write-Host.
-$arg = @(
-  "-NoProfile",
-  "-NoLogo",
-  "-NonInteractive",
-  "-ExecutionPolicy", "Bypass",
-  "-WindowStyle", "Hidden",
-  "-Command",
-  ("& '{0}' *>> '{1}'" -f ($script -replace "'", "''"), ($log -replace "'", "''"))
-) -join " "
+# wscript //B = batch mode (no UI). run-hidden.vbs runs PowerShell with window style 0.
+$arg = '//B //nologo "{0}" "{1}"' -f ($launcher -replace '"', '""'), ($script -replace '"', '""')
 
 $action = New-ScheduledTaskAction `
-  -Execute "powershell.exe" `
+  -Execute "wscript.exe" `
   -Argument $arg `
   -WorkingDirectory $Root
 
@@ -55,16 +51,16 @@ Register-ScheduledTask `
   -Trigger @($triggerLogon, $triggerRepeat) `
   -Settings $settings `
   -Principal $principal `
-  -Description "Argus keepalive (hidden): restore Docker postgres/redis + local API/worker while desired state is Running. Paper only. No console popups." `
+  -Description "Argus keepalive (fully hidden via wscript): restore Docker postgres/redis + local API/worker while desired state is Running. Paper only. No PowerShell popups." `
   -Force | Out-Null
 
-# Run once immediately so recovery does not wait for the first 2-minute tick.
 try {
   Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
-  Write-Host "OK  Scheduled task '$taskName' registered (Hidden) and started once."
+  Write-Host "OK  Scheduled task '$taskName' registered (fully hidden) and started once."
 } catch {
-  Write-Host "OK  Scheduled task '$taskName' registered Hidden (at logon + every 2 minutes)."
+  Write-Host "OK  Scheduled task '$taskName' registered fully hidden (at logon + every 2 minutes)."
   Write-Host "WARN: could not start task immediately: $($_.Exception.Message)"
 }
 Write-Host "It only recovers when runtime\control-center\desired-state.json has running=true."
-Write-Host "Keepalive task log: $log"
+Write-Host "Keepalive log: $log"
+Write-Host "PowerShell windows must NOT appear from this task."

@@ -1,6 +1,6 @@
 # Unattended runtime (keep-awake + catch-up)
 
-Build id: `live-monitor-v2.14`.
+Build id: `live-monitor-v2.20`.
 
 Argus is local-first on the Founder PC. While **Start Argus** has left the
 system Running, Argus should keep working without babysitting until **Stop
@@ -22,8 +22,8 @@ supported) about every 30 seconds while the API or worker is alive.
 - **Stop Argus** releases the request and stops the helper.
 - Status: `status-argus.ps1` shows `Keep-awake: up (blocks automatic sleep)`.
 - Log: `runtime/control-center/keep-awake.log`.
-- Keep-awake and keepalive helpers launch with **CreateNoWindow / Hidden** so
-  PowerShell does not flash on the desktop.
+- Keep-awake and keepalive helpers launch through **`run-hidden.vbs`**
+  (`wscript` window style 0) so PowerShell does not flash on the desktop.
 
 Forced hibernate (user choosing Hibernate, lid policies that ignore away
 mode, or critical battery) can still suspend the machine. On resume, catch-up

@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 
 import { apiBaseUrl } from "@/lib/server/env";
+import { spawnHiddenPs1 } from "@/lib/server/spawnHiddenPs1";
 
 export type ReachabilityReport = {
   desired_running: boolean;
@@ -183,122 +184,27 @@ export async function probeReachability(): Promise<ReachabilityReport> {
   };
 }
 
-export function triggerKeepAlive(): Promise<{ ok: boolean; detail: string }> {
-  return new Promise((resolve) => {
-    const script = path.join(
-      repoRoot(),
-      "scripts",
-      "control-center",
-      "keep-argus-alive.ps1",
-    );
-    if (!fs.existsSync(script)) {
-      resolve({ ok: false, detail: "keep-argus-alive.ps1 missing" });
-      return;
-    }
-    const child = spawn(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        script,
-      ],
-      {
-        cwd: repoRoot(),
-        windowsHide: true,
-        env: { ...process.env, ARGUS_REPO_ROOT: repoRoot() },
-      },
-    );
-    let detail = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({ ok: false, detail: detail.slice(-2000) || "keepalive timed out" });
-    }, 120_000);
-    child.stdout.on("data", (c: Buffer) => {
-      detail += c.toString();
-    });
-    child.stderr.on("data", (c: Buffer) => {
-      detail += c.toString();
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ ok: false, detail: err.message });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
-        ok: code === 0,
-        detail: detail.trim().slice(-4000),
-      });
-    });
+export async function triggerKeepAlive(): Promise<{ ok: boolean; detail: string }> {
+  const res = await spawnHiddenPs1({
+    repoRoot: repoRoot(),
+    scriptLeaf: "keep-argus-alive.ps1",
+    timeoutMs: 120_000,
   });
+  return { ok: res.ok, detail: res.detail };
 }
 
-export function triggerStartArgus(): Promise<{ ok: boolean; detail: string }> {
-  return new Promise((resolve) => {
-    const script = path.join(
-      repoRoot(),
-      "scripts",
-      "control-center",
-      "start-argus.ps1",
-    );
-    if (!fs.existsSync(script)) {
-      resolve({ ok: false, detail: "start-argus.ps1 missing" });
-      return;
-    }
-    const child = spawn(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        script,
-      ],
-      {
-        cwd: repoRoot(),
-        windowsHide: true,
-        env: {
-          ...process.env,
-          ARGUS_REPO_ROOT: repoRoot(),
-          ARGUS_KEEP_DASHBOARD: "1",
-          // Avoid nested self-update wipe while recovering from login.
-          ARGUS_START_SELF_UPDATED: "1",
-          // Never hard-reset the tree from a login recovery path.
-          ARGUS_SKIP_START_SELF_UPDATE: "1",
-        },
-      },
-    );
-    let detail = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({ ok: false, detail: detail.slice(-2000) || "Start timed out" });
-    }, 240_000);
-    child.stdout.on("data", (c: Buffer) => {
-      detail += c.toString();
-    });
-    child.stderr.on("data", (c: Buffer) => {
-      detail += c.toString();
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ ok: false, detail: err.message });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
-        ok: code === 0,
-        detail: detail.trim().slice(-4000),
-      });
-    });
+export async function triggerStartArgus(): Promise<{ ok: boolean; detail: string }> {
+  const res = await spawnHiddenPs1({
+    repoRoot: repoRoot(),
+    scriptLeaf: "start-argus.ps1",
+    timeoutMs: 240_000,
+    env: {
+      ARGUS_KEEP_DASHBOARD: "1",
+      // Avoid nested self-update wipe while recovering from login.
+      ARGUS_START_SELF_UPDATED: "1",
+      // Never hard-reset the tree from a login recovery path.
+      ARGUS_SKIP_START_SELF_UPDATE: "1",
+    },
   });
+  return { ok: res.ok, detail: res.detail };
 }
