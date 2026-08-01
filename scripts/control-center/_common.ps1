@@ -644,9 +644,16 @@ function Stop-ArgusKeepAwake([string]$Root) {
   try {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       Where-Object {
-        $_.Name -eq "powershell.exe" -and
-        $_.CommandLine -and
-        $_.CommandLine -like "*keep-awake-argus.ps1*"
+        $_.CommandLine -and (
+          (
+            $_.Name -eq "powershell.exe" -and
+            $_.CommandLine -like "*keep-awake-argus.ps1*"
+          ) -or (
+            ($_.Name -eq "wscript.exe" -or $_.Name -eq "cscript.exe") -and
+            $_.CommandLine -like "*run-hidden.vbs*" -and
+            $_.CommandLine -like "*keep-awake-argus.ps1*"
+          )
+        )
       } |
       ForEach-Object {
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
@@ -655,8 +662,8 @@ function Stop-ArgusKeepAwake([string]$Root) {
 }
 
 function Start-ArgusHiddenPowerShell {
-  # Launch a .ps1 with no console window (CreateNoWindow). Prefer this over
-  # Start-Process -WindowStyle Hidden, which still flashes on many Windows builds.
+  # Launch a .ps1 with no console window. Prefer wscript + run-hidden.vbs
+  # (window style 0). CreateNoWindow alone still flashes on some Windows builds.
   param(
     [Parameter(Mandatory = $true)][string]$ScriptPath,
     [string]$WorkingDirectory = $null,
@@ -666,6 +673,29 @@ function Start-ArgusHiddenPowerShell {
     throw "Script missing: $ScriptPath"
   }
   $work = if ($WorkingDirectory) { $WorkingDirectory } else { Split-Path -Parent $ScriptPath }
+  $vbs = Join-Path $PSScriptRoot "run-hidden.vbs"
+  if (Test-Path $vbs) {
+    # Fire-and-forget via VBS so keep-awake can stay resident; VBS waits on PS,
+    # so launch VBS itself without waiting (CreateNoWindow on wscript).
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Command wscript.exe).Source
+    $argList = @(
+      "//B", "//nologo",
+      ('"{0}"' -f ($vbs -replace '"', '""')),
+      ('"{0}"' -f ($ScriptPath -replace '"', '""'))
+    )
+    foreach ($a in $ExtraArgs) {
+      if ($null -eq $a) { continue }
+      $argList += ('"{0}"' -f ([string]$a -replace '"', '""'))
+    }
+    $psi.Arguments = [string]::Join(" ", $argList)
+    $psi.WorkingDirectory = $work
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    return [System.Diagnostics.Process]::Start($psi)
+  }
+
   $argParts = @(
     "-NoProfile",
     "-NoLogo",

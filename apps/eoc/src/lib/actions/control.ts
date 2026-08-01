@@ -8,6 +8,7 @@ import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/server/api";
 import { apiBaseUrl } from "@/lib/server/env";
+import { spawnHiddenPs1 } from "@/lib/server/spawnHiddenPs1";
 import { ApiClientError } from "@/lib/types";
 
 export type ActionResult =
@@ -96,7 +97,7 @@ function runCommand(
   });
 }
 
-function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> {
+async function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> {
   const script = controlScript(scriptLeaf);
   if (!fs.existsSync(script)) {
     return Promise.resolve({
@@ -106,23 +107,21 @@ function runPs1(scriptLeaf: string, timeoutMs = 180_000): Promise<ActionResult> 
     });
   }
 
-  const isWin = process.platform === "win32";
-  const cmd = isWin ? "powershell.exe" : "pwsh";
-  const args = isWin
-    ? [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        script,
-      ]
-    : ["-NoProfile", "-File", script];
-
-  return runCommand(cmd, args, timeoutMs, { ARGUS_KEEP_DASHBOARD: "1" });
+  // Prefer fully-hidden wscript launcher on Windows (no console flash).
+  const res = await spawnHiddenPs1({
+    repoRoot: repoRoot(),
+    scriptLeaf,
+    timeoutMs,
+    env: { ARGUS_KEEP_DASHBOARD: "1" },
+  });
+  if (res.ok) {
+    return { ok: true, message: "ok", detail: res.detail };
+  }
+  return {
+    ok: false,
+    message: res.detail || `Command failed (exit ${res.code ?? "?"}).`,
+    detail: res.detail,
+  };
 }
 
 export async function startArgusAction(): Promise<ActionResult> {

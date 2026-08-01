@@ -1,11 +1,11 @@
 "use server";
 
-import { spawn } from "node:child_process";
 import path from "node:path";
 
 import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/server/api";
+import { spawnHiddenPs1 } from "@/lib/server/spawnHiddenPs1";
 import { ApiClientError } from "@/lib/types";
 
 export type ActionResult =
@@ -38,43 +38,20 @@ function repoRoot(): string {
   return path.resolve(process.cwd(), "..", "..");
 }
 
-function runBackupScript(): Promise<{ ok: boolean; message: string }> {
+async function runBackupScript(): Promise<{ ok: boolean; message: string }> {
   const root = repoRoot();
-  const script = path.join(root, "scripts", "backup", "backup-paper.ps1");
-  return new Promise((resolve) => {
-    const child = spawn(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        script,
-      ],
-      { cwd: root, windowsHide: true },
-    );
-    let stderr = "";
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (err) => {
-      resolve({ ok: false, message: err.message });
-    });
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve({ ok: true, message: "Backup completed and verified." });
-      } else {
-        resolve({
-          ok: false,
-          message: stderr.trim() || `Backup failed (exit ${code ?? "unknown"}).`,
-        });
-      }
-    });
+  const res = await spawnHiddenPs1({
+    repoRoot: root,
+    scriptRel: "scripts/backup/backup-paper.ps1",
+    timeoutMs: 180_000,
   });
+  if (res.ok) {
+    return { ok: true, message: "Backup completed and verified." };
+  }
+  return {
+    ok: false,
+    message: res.detail.trim() || `Backup failed (exit ${res.code ?? "unknown"}).`,
+  };
 }
 
 export async function generateDailyReportFounderAction(

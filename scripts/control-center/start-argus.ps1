@@ -18,6 +18,10 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
     $files = @(
       @{ Name = "start-argus.ps1"; Required = $true },
       @{ Name = "_common.ps1"; Required = $true },
+      @{ Name = "run-hidden.vbs"; Required = $true },
+      @{ Name = "install-keepalive-task.ps1"; Required = $true },
+      @{ Name = "keep-argus-alive.ps1"; Required = $true },
+      @{ Name = "keep-awake-argus.ps1"; Required = $false },
       @{ Name = "recycle-eoc.ps1"; Required = $false },
       @{ Name = "update-argus-now.ps1"; Required = $false },
       @{ Name = "repair-argus-api.ps1"; Required = $false }
@@ -251,6 +255,14 @@ try {
   # Pull GitHub main only when the tree is clean (or ARGUS_FORCE_SYNC=1).
   # Never silently hard-reset local work — that wiped keepalive/login fixes before.
   $updated = Sync-ArgusCode $Root
+
+  # Re-register keepalive after sync so the task action picks up run-hidden.vbs
+  # (older installs still pointed at a flashing powershell.exe).
+  try {
+    & "$PSScriptRoot\install-keepalive-task.ps1"
+  } catch {
+    Write-Host "WARN: keepalive task refresh failed: $($_.Exception.Message)"
+  }
 
   $sha = (git rev-parse --short HEAD).Trim()
   $buildMarker = Join-Path $Root "apps\eoc\public\argus-build.txt"
