@@ -423,17 +423,27 @@ function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
     if (-not (Test-ArgusWorkerFresh $Root)) {
       Write-Host "Worker missing — starting health supervisor / market ops..."
       $workerPid = Start-ArgusWorkerProcess $Root
-      Start-Sleep -Seconds 2
+      Start-Sleep -Seconds 3
     }
-    # Keep-awake is the only guard against the host sleeping mid-session, and
-    # nothing else restarts it once it exits.
+    # Keep-awake is the only guard against the host sleeping mid-session.
+    # Restart whenever the helper died — even if API was briefly down.
     if (-not (Test-ArgusKeepAwakeAlive $Root)) {
       Write-Host "Keep-awake missing - restoring sleep protection..."
       $null = Start-ArgusKeepAwake $Root
     }
   }
   Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $workerPid
-  return (Test-HttpOk (Get-ArgusApiReadyUrl) 3)
+  $apiOk = Test-HttpOk (Get-ArgusApiReadyUrl) 3
+  if (-not $IncludeWorker) {
+    return $apiOk
+  }
+  # Unattended mode requires BOTH API and worker. API-only "healthy" left
+  # Founder with no scans / no data for days while Home still looked Running.
+  $workerOk = Test-ArgusWorkerFresh $Root
+  if ($apiOk -and -not $workerOk) {
+    Write-Host "WARN: API up but worker still down after repair"
+  }
+  return ($apiOk -and $workerOk)
 }
 
 function Read-ArgusPids([string]$Root) {

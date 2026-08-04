@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Fixed
 
+- Unattended hard fix: keep-awake stays up while desired=Running (no longer exits on brief API blips); keepalive requires API+worker; scan automation uses isolated DB sessions; catch-up cooldown stops scan storms (`live-monitor-v2.23`)
 - Paper capital accuracy: hydrate in-memory book from DB before every order (stops position wipe / cash desync after API restart); Home/Portfolio show cash_balance + mark equity; learning-desk endpoint restored (`live-monitor-v2.22`)
 - Home Start always force-syncs GitHub main, rewrites `/argus-build.txt` on every Start path, and recycles the dashboard when the Build chip was stale (`live-monitor-v2.21`)
 - PowerShell no longer flashes at random: ArgusKeepAlive / keep-awake / Home Start-Stop / login recovery / backup launch via `run-hidden.vbs` (wscript window style 0); Start self-updates and re-registers the hidden task (`live-monitor-v2.20`)

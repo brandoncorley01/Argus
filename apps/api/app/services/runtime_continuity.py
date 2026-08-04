@@ -12,8 +12,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 # Health cycles run every 30s. A gap well above that means the host slept,
-# the worker was suspended, or the process was down.
-DEFAULT_GAP_THRESHOLD = timedelta(seconds=90)
+# the worker was suspended, or the process was down. Use 3 minutes so normal
+# ARQ job backlog (scan/price refresh) does not look like host sleep.
+DEFAULT_GAP_THRESHOLD = timedelta(seconds=180)
 
 
 def utcnow() -> datetime:

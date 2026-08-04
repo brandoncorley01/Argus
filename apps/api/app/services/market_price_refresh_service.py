@@ -244,6 +244,10 @@ class MarketPriceRefreshService:
                 )
                 accepted += int(result.get("records_accepted") or 0)
             except MarketIntelligenceError as exc:
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
                 failed.append(
                     {"symbol": "*", "code": exc.code, "message": exc.message}
                 )
@@ -260,20 +264,27 @@ class MarketPriceRefreshService:
                     }
                 )
 
-        self.audit.append(
-            action="market.prices.refresh",
-            resource_type="market_ohlcv_bars",
-            resource_id="batch",
-            actor_user_id=principal.user.id,
-            payload={
-                "symbols": target,
-                "timeframes": [tf for tf, _, _ in frames],
-                "bars_submitted": len(bars),
-                "records_accepted": accepted,
-                "failed_count": len(failed),
-            },
-        )
-        self.db.commit()
+        try:
+            self.audit.append(
+                action="market.prices.refresh",
+                resource_type="market_ohlcv_bars",
+                resource_id="batch",
+                actor_user_id=principal.user.id,
+                payload={
+                    "symbols": target,
+                    "timeframes": [tf for tf, _, _ in frames],
+                    "bars_submitted": len(bars),
+                    "records_accepted": accepted,
+                    "failed_count": len(failed),
+                },
+            )
+            self.db.commit()
+        except Exception:
+            try:
+                self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
         ready_note = (
             "Recent 1m/5m price history was updated from the public Coinbase Exchange feed. "

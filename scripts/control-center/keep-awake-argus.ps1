@@ -1,6 +1,11 @@
-# Prevent Windows automatic sleep/hibernate while Argus is Running.
-# Pulses SetThreadExecutionState so the host stays awake until Stop Argus
-# (or the API/worker processes disappear). Display may still dim.
+# Prevent Windows automatic sleep/hibernate while Argus desired state is Running.
+# Pulses SetThreadExecutionState so the host stays awake until Stop Argus.
+# Display may still dim.
+#
+# CRITICAL: Do NOT exit just because API/worker are briefly down. That used to
+# release sleep protection, Windows slept for days, and Argus looked "dead"
+# until a Founder click. While desired=Running, keep blocking sleep and let
+# keepalive restart API/worker.
 #
 # Keep this file ASCII-only: it has no UTF-8 BOM, so Windows PowerShell 5.1
 # decodes it as cp1252 and any non-ASCII byte can terminate a string early.
@@ -44,20 +49,15 @@ function Request-KeepAwake {
   }
 }
 
-function Test-ArgusTradingAlive([string]$RootPath) {
-  if (Test-ArgusWorkerFresh $RootPath) { return $true }
-  if (Test-HttpOk (Get-ArgusApiReadyUrl) 2) { return $true }
-  return $false
-}
-
 try {
   $PID | Set-Content -Path $pidFile -Encoding utf8
-  Write-KeepAwakeLog "keep-awake started pid=$PID"
-  Write-Host "Argus keep-awake active (prevents automatic sleep/hibernate while Running)."
+  Write-KeepAwakeLog "keep-awake started pid=$PID (tied to desired-state Running)"
+  Write-Host "Argus keep-awake active (blocks automatic sleep while desired=Running)."
 
   while ($true) {
-    if (-not (Test-ArgusTradingAlive $Root)) {
-      Write-KeepAwakeLog "Argus not alive - releasing keep-awake"
+    $desired = Read-ArgusDesiredState $Root
+    if (-not $desired.running) {
+      Write-KeepAwakeLog "Desired state is Stopped - releasing keep-awake"
       break
     }
     Request-KeepAwake

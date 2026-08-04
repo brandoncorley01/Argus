@@ -21,7 +21,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       @{ Name = "run-hidden.vbs"; Required = $true },
       @{ Name = "install-keepalive-task.ps1"; Required = $true },
       @{ Name = "keep-argus-alive.ps1"; Required = $true },
-      @{ Name = "keep-awake-argus.ps1"; Required = $false },
+      @{ Name = "keep-awake-argus.ps1"; Required = $true },
       @{ Name = "recycle-eoc.ps1"; Required = $false },
       @{ Name = "update-argus-now.ps1"; Required = $false },
       @{ Name = "repair-argus-api.ps1"; Required = $false }

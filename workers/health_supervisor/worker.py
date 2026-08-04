@@ -169,6 +169,18 @@ async def run_health_supervisor_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
     pending = bool(ctx.pop("catch_up_pending", False))
     reason = str(ctx.pop("catch_up_reason", "host_sleep_or_suspend"))
 
+    # Job backlog can delay health cron by a few minutes without host sleep.
+    # A successful catch-up must cool down so we do not re-scan forever.
+    last_cu = ctx.get("last_catch_up_at")
+    if last_cu is not None:
+        try:
+            since_cu = (now - last_cu).total_seconds()
+            if since_cu < 600:
+                sleep_gap = False
+                pending = False
+        except Exception:  # noqa: BLE001
+            pass
+
     def _cycle() -> dict[str, Any]:
         factory = get_session_factory(ctx["settings"])
         session = factory()
@@ -202,12 +214,16 @@ async def run_health_supervisor_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
             ctx["catch_up_gap_seconds"] = format_gap_seconds(gap)
             catch_up = await run_runtime_catch_up(ctx)
             result = {**result, "catch_up": catch_up}
+            ctx["last_catch_up_at"] = utcnow()
+            ctx["last_wall_clock"] = utcnow()
             print(
                 f"runtime_continuity: catch-up ok reason={catch_reason} "
                 f"gap_seconds={format_gap_seconds(gap)}",
                 flush=True,
             )
         except Exception as exc:  # noqa: BLE001 — health cycle must still surface
+            ctx["last_catch_up_at"] = utcnow()
+            ctx["last_wall_clock"] = utcnow()
             result = {
                 **result,
                 "catch_up": {"ok": False, "error": str(exc)[:240], "reason": catch_reason},

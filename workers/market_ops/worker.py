@@ -165,63 +165,28 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
 
     def _cycle() -> dict[str, Any]:
         factory = get_session_factory(ctx["settings"])
-        session = factory()
+        # Separate sessions: a poisoned automation transaction must never
+        # mark a successful scan as failed (PendingRollbackError on cycle attrs).
+        scan_session = factory()
+        summary: dict[str, Any]
         try:
-            service = MarketScanService(session)
+            service = MarketScanService(scan_session)
             try:
                 cycle = service.run_scan_cycle(force=force)
-                auto_opened = 0
-                auto_exits = 0
-                try:
-                    from app.services.paper_training_service import PaperTrainingService
-                    from app.services.trading_intelligence_service import (
-                        TradingIntelligenceService,
-                    )
-
-                    training = PaperTrainingService(session)
-                    for portfolio_id in training.iter_automation_portfolio_ids():
-                        # Exits first so new entries are not closed in the same pass.
-                        exits = training.evaluate_paper_exits(
-                            portfolio_id=portfolio_id, actor=None
-                        )
-                        auto_exits += len(exits)
-                        opened = training.maybe_auto_enter_from_scan(
-                            portfolio_id=portfolio_id, actor=None
-                        )
-                        auto_opened += len(opened)
-                    TradingIntelligenceService(session).resolve_pending_misses()
-                    # Advanced learning rollup (PAPER only; never unlocks live).
-                    try:
-                        from app.services.advanced_learning_service import (
-                            AdvancedLearningService,
-                        )
-
-                        learning = AdvancedLearningService(session)
-                        for portfolio_id in training.iter_automation_portfolio_ids():
-                            learning.evaluate_cycle(portfolio_id)
-                    except Exception as exc:  # noqa: BLE001
-                        _open_failure_incident(
-                            ctx,
-                            title="Advanced learning evaluate failed",
-                            description=str(exc),
-                            key="advanced-learning:evaluate",
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    _open_failure_incident(
-                        ctx,
-                        title="Paper automation after scan failed",
-                        description=str(exc),
-                        key="paper-automation:scan",
-                    )
-                return {
+                summary = {
+                    "ok": True,
                     "cycle_id": str(cycle.id),
                     "status": cycle.status,
                     "symbols_scanned": cycle.symbols_scanned,
                     "candidates_found": cycle.candidates_found,
-                    "auto_paper_entries": auto_opened,
-                    "auto_paper_exits": auto_exits,
+                    "auto_paper_entries": 0,
+                    "auto_paper_exits": 0,
                 }
             except Exception as exc:  # noqa: BLE001
+                try:
+                    scan_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
                 _open_failure_incident(
                     ctx,
                     title="Market scan cycle failed",
@@ -230,7 +195,97 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                 )
                 return {"ok": False, "error": str(exc)[:240]}
         finally:
-            session.close()
+            scan_session.close()
+
+        auto_session = factory()
+        try:
+            try:
+                from app.services.paper_training_service import PaperTrainingService
+                from app.services.trading_intelligence_service import (
+                    TradingIntelligenceService,
+                )
+
+                training = PaperTrainingService(auto_session)
+                auto_opened = 0
+                auto_exits = 0
+                for portfolio_id in training.iter_automation_portfolio_ids():
+                    try:
+                        exits = training.evaluate_paper_exits(
+                            portfolio_id=portfolio_id, actor=None
+                        )
+                        auto_exits += len(exits)
+                        opened = training.maybe_auto_enter_from_scan(
+                            portfolio_id=portfolio_id, actor=None
+                        )
+                        auto_opened += len(opened)
+                    except Exception as exc:  # noqa: BLE001
+                        try:
+                            auto_session.rollback()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _open_failure_incident(
+                            ctx,
+                            title="Paper automation after scan failed",
+                            description=str(exc),
+                            key="paper-automation:scan",
+                        )
+                try:
+                    TradingIntelligenceService(auto_session).resolve_pending_misses()
+                except Exception as exc:  # noqa: BLE001
+                    try:
+                        auto_session.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _open_failure_incident(
+                        ctx,
+                        title="Trading intelligence resolve failed",
+                        description=str(exc),
+                        key="trading-intelligence:resolve",
+                    )
+                try:
+                    from app.services.advanced_learning_service import (
+                        AdvancedLearningService,
+                    )
+
+                    learning = AdvancedLearningService(auto_session)
+                    for portfolio_id in training.iter_automation_portfolio_ids():
+                        try:
+                            learning.evaluate_cycle(portfolio_id)
+                        except Exception as exc:  # noqa: BLE001
+                            try:
+                                auto_session.rollback()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            _open_failure_incident(
+                                ctx,
+                                title="Advanced learning evaluate failed",
+                                description=str(exc),
+                                key="advanced-learning:evaluate",
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    _open_failure_incident(
+                        ctx,
+                        title="Advanced learning evaluate failed",
+                        description=str(exc),
+                        key="advanced-learning:evaluate",
+                    )
+                summary["auto_paper_entries"] = auto_opened
+                summary["auto_paper_exits"] = auto_exits
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    auto_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                _open_failure_incident(
+                    ctx,
+                    title="Paper automation after scan failed",
+                    description=str(exc),
+                    key="paper-automation:scan",
+                )
+        finally:
+            auto_session.close()
+
+        return summary
 
     return _run_logged(
         ctx,

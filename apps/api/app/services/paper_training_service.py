@@ -584,6 +584,10 @@ class PaperTrainingService:
                     reason_code="auto_enter",
                 )
             except (PaperTradingError, PaperTrainingError) as exc:
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
                 self.audit.append(
                     action="paper.training.auto_enter_failed",
                     resource_type="market_scan_candidate",
@@ -592,6 +596,22 @@ class PaperTrainingService:
                     payload={
                         "symbol": cand.symbol,
                         "error": getattr(exc, "message", str(exc))[:240],
+                    },
+                )
+                continue
+            except Exception as exc:  # noqa: BLE001 — never poison the scan session
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.audit.append(
+                    action="paper.training.auto_enter_failed",
+                    resource_type="market_scan_candidate",
+                    resource_id=str(cand.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": cand.symbol,
+                        "error": str(exc)[:240],
                     },
                 )
                 continue
@@ -761,6 +781,10 @@ class PaperTrainingService:
                     ),
                 )
             except PaperTradingError as exc:
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
                 self.audit.append(
                     action="paper.training.auto_exit_failed",
                     resource_type="paper_position",
@@ -792,6 +816,24 @@ class PaperTrainingService:
                         )
                 except Exception:  # noqa: BLE001
                     pass
+                continue
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.audit.append(
+                    action="paper.training.auto_exit_failed",
+                    resource_type="paper_position",
+                    resource_id=str(pos.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": pos.symbol,
+                        "reason": reason,
+                        "mark": str(mark),
+                        "error": str(exc)[:240],
+                    },
+                )
                 continue
             self.paper._event(
                 order,
