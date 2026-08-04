@@ -956,46 +956,50 @@ class MarketScanService:
     def _load_bar_rows(
         self, instrument_id: uuid.UUID, *, limit: int
     ) -> tuple[list[MarketOhlcvBar], str | None, datetime | None]:
+        """Load the newest *limit* bars. Never scan the full history table."""
         # Prefer short TFs only when they have enough history to evaluate.
         for tf in TIMEFRAME_PREF:
-            rows = list(
+            newest = list(
                 self.db.scalars(
                     select(MarketOhlcvBar)
                     .where(
                         MarketOhlcvBar.instrument_id == instrument_id,
                         MarketOhlcvBar.timeframe == tf,
                     )
-                    .order_by(MarketOhlcvBar.open_time.asc())
+                    .order_by(desc(MarketOhlcvBar.open_time))
+                    .limit(max(limit, MIN_BARS))
                 )
             )
-            if len(rows) >= MIN_BARS:
-                rows = rows[-limit:]
+            if len(newest) >= MIN_BARS:
+                rows = list(reversed(newest[:limit] if len(newest) > limit else newest))
                 return rows, tf, rows[-1].close_time
         # Fallback: best available preferred TF even if short, else any bars.
         for tf in TIMEFRAME_PREF:
-            rows = list(
+            newest = list(
                 self.db.scalars(
                     select(MarketOhlcvBar)
                     .where(
                         MarketOhlcvBar.instrument_id == instrument_id,
                         MarketOhlcvBar.timeframe == tf,
                     )
-                    .order_by(MarketOhlcvBar.open_time.asc())
+                    .order_by(desc(MarketOhlcvBar.open_time))
+                    .limit(limit)
                 )
             )
-            if rows:
-                rows = rows[-limit:]
+            if newest:
+                rows = list(reversed(newest))
                 return rows, tf, rows[-1].close_time
-        rows = list(
+        newest = list(
             self.db.scalars(
                 select(MarketOhlcvBar)
                 .where(MarketOhlcvBar.instrument_id == instrument_id)
-                .order_by(MarketOhlcvBar.open_time.asc())
+                .order_by(desc(MarketOhlcvBar.open_time))
+                .limit(limit)
             )
         )
-        if not rows:
+        if not newest:
             return [], None, None
-        rows = rows[-limit:]
+        rows = list(reversed(newest))
         return rows, rows[-1].timeframe, rows[-1].close_time
 
     def _prior_watch_meta(self, symbol: str) -> dict[str, Any]:

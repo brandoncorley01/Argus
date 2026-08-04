@@ -514,6 +514,23 @@ class PaperTrainingService:
         portfolio = self.db.get(PaperPortfolio, portfolio_id)
         if portfolio is None or portfolio.kill_switch_active or portfolio.pause_new_entries_active:
             return []
+        # Do not grind a depleted learning desk — leave cash intact and explain on Home.
+        buying_power = portfolio.cash_balance - (portfolio.reserved_cash or Decimal("0"))
+        if buying_power < settings.default_notional:
+            if buying_power < Decimal("1"):
+                self._emit_decision_event(
+                    symbol="*",
+                    outcome="info",
+                    title="Paper capital too low for new entries",
+                    detail=(
+                        f"Cash available is ${buying_power:.2f}; automatic entries need "
+                        f"about ${settings.default_notional:.2f}. "
+                        "Open positions can still exit. "
+                        "Use Reseed learning desk to restore $300 practice cash."
+                    ),
+                    reason_code="insufficient_paper_cash",
+                )
+            return []
         opened: list[dict[str, Any]] = []
         cands = list(
             self.db.scalars(

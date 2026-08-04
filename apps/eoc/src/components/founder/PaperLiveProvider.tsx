@@ -21,6 +21,10 @@ export type PaperLiveAccount = {
   cash: string | null;
   inTrades: string | null;
   openCount: number;
+  startingCash?: string | null;
+  netVsStart?: string | null;
+  fillCount?: number | null;
+  capitalExplanation?: string | null;
 };
 
 export type PaperLivePulse = {
@@ -48,6 +52,10 @@ type PulseResponse = {
     buying_power: string;
     committed_capital: string;
     open_position_count: number;
+    starting_cash?: string;
+    net_vs_starting_cash?: string;
+    fill_count?: number;
+    capital_explanation?: string;
   };
   positions?: PositionSummary[];
   open_positions?: Array<{
@@ -133,6 +141,10 @@ export function PaperLiveProvider({
         cash: data.summary.cash_balance,
         inTrades: data.summary.committed_capital,
         openCount: data.summary.open_position_count,
+        startingCash: data.summary.starting_cash ?? null,
+        netVsStart: data.summary.net_vs_starting_cash ?? null,
+        fillCount: data.summary.fill_count ?? null,
+        capitalExplanation: data.summary.capital_explanation ?? null,
       },
       positions,
       totalRealizedPnl:

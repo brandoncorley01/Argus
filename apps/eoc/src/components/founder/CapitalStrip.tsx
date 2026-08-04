@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { money } from "@/lib/founder/simple";
 
 import { usePaperLive } from "@/components/founder/PaperLiveProvider";
@@ -15,6 +17,8 @@ export function CapitalStrip() {
   const equity = account.balance != null ? Number(account.balance) : null;
   const inTrades = account.inTrades != null ? Number(account.inTrades) : null;
   const cash = account.cash != null ? Number(account.cash) : null;
+  const starting = account.startingCash != null ? Number(account.startingCash) : 300;
+  const netVs = account.netVsStart != null ? Number(account.netVsStart) : null;
   const partsOk =
     equity != null &&
     cash != null &&
@@ -32,6 +36,16 @@ export function CapitalStrip() {
     partsOk && implied != null && Number.isFinite(implied)
       ? Math.abs(equity! - implied)
       : 0;
+  const explanation =
+    account.capitalExplanation?.trim() ||
+    (cash != null && Number.isFinite(cash) && cash < starting * 0.25
+      ? `Started near $${starting.toFixed(0)}. Cash is now ${money(cash)} after paper buys/sells` +
+        (account.fillCount ? ` (${account.fillCount} fills)` : "") +
+        (netVs != null && Number.isFinite(netVs)
+          ? ` — net ${money(netVs)} vs start`
+          : "") +
+        ". Nothing was withdrawn. Reseed learning desk restores $300 practice cash."
+      : null);
 
   return (
     <section className="panel rise capital-strip" aria-label="Paper capital">
@@ -42,10 +56,11 @@ export function CapitalStrip() {
           {openUnrealizedPnl != null && Number.isFinite(openUnrealizedPnl)
             ? ` · open P&L ${money(openUnrealizedPnl)}`
             : ""}
+          {Number.isFinite(starting) ? ` · started ${money(starting)}` : ""}
           {fetchedAt
             ? refreshing
               ? " · refreshing…"
-              : " · live with open positions"
+              : " · live"
             : " · waiting for first pulse"}
         </p>
       </div>
@@ -70,14 +85,22 @@ export function CapitalStrip() {
           <span className="capital-hint">Remaining paper cash (not in positions)</span>
         </div>
       </div>
-      <p className="muted-note capital-strip-footnote">
-        Learning desk targets ~$300 starting cash. Equity moves when prices mark
-        open trades or when Argus opens/closes paper positions
-        {drift > 1
-          ? ` · check: cash + marks ≈ ${money(implied)} vs equity ${money(equity)}`
-          : ""}
-        .
-      </p>
+      {explanation ? (
+        <p className="attention-box capital-strip-story" style={{ marginTop: "0.75rem" }}>
+          {explanation}{" "}
+          <Link href="/paper-training">Open Paper Training</Link> to reseed if you want a
+          fresh $300 practice book.
+        </p>
+      ) : (
+        <p className="muted-note capital-strip-footnote">
+          Learning desk targets ~$300 starting cash. Equity moves when prices mark
+          open trades or when Argus opens/closes paper positions
+          {drift > 1
+            ? ` · check: cash + marks ≈ ${money(implied)} vs equity ${money(equity)}`
+            : ""}
+          .
+        </p>
+      )}
     </section>
   );
 }

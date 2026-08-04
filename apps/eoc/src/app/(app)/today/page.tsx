@@ -51,6 +51,11 @@ type PortfolioSummary = {
   kill_switch_active: boolean;
   pause_new_entries_active: boolean;
   status: string;
+  starting_cash?: string;
+  net_vs_starting_cash?: string;
+  fill_count?: number;
+  order_count?: number;
+  capital_explanation?: string;
 };
 
 type ProviderRow = {
@@ -429,6 +434,10 @@ async function renderTodayPage() {
           cash: summary?.cash_balance ?? null,
           inTrades: summary?.committed_capital ?? null,
           openCount: summary?.open_position_count ?? positions.length,
+          startingCash: summary?.starting_cash ?? null,
+          netVsStart: summary?.net_vs_starting_cash ?? null,
+          fillCount: summary?.fill_count ?? null,
+          capitalExplanation: summary?.capital_explanation ?? null,
         }}
         seedPositions={positions}
         seedTotalPnl={totalPnl}

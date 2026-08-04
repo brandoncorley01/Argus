@@ -85,6 +85,11 @@ class PortfolioSummaryRead(BaseModel):
     kill_switch_active: bool
     pause_new_entries_active: bool
     status: str
+    starting_cash: Decimal | None = None
+    net_vs_starting_cash: Decimal | None = None
+    fill_count: int | None = None
+    order_count: int | None = None
+    capital_explanation: str | None = None
 
 
 class PositionSummaryRead(BaseModel):

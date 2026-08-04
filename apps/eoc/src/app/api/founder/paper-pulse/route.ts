@@ -16,6 +16,11 @@ type PortfolioSummary = {
   kill_switch_active: boolean;
   pause_new_entries_active: boolean;
   status: string;
+  starting_cash?: string;
+  net_vs_starting_cash?: string;
+  fill_count?: number;
+  order_count?: number;
+  capital_explanation?: string;
 };
 
 type ClosedTrade = {

@@ -371,7 +371,7 @@ export function TradingCockpit({
           : "";
         const res = await fetch(`/api/founder/cockpit${q}`, {
           cache: "no-store",
-          signal: AbortSignal.timeout(20_000),
+          signal: AbortSignal.timeout(50_000),
         });
         if (!res.ok) return;
         const data = (await res.json()) as CockpitSnapshot;
@@ -617,8 +617,9 @@ export function TradingCockpit({
     return (
       <section className="panel rise" aria-label="Trading Cockpit">
         <h2 style={{ marginTop: 0 }}>Live Trading Cockpit</h2>
-        <p className="attention-box">
-          Cockpit unavailable right now. Refresh this page — Argus stays Running until you press Stop.
+        <p className="muted-note">
+          Loading live markets… If this stays blank, press Start Argus so the API
+          and worker are healthy, then hard-refresh Home.
         </p>
       </section>
     );

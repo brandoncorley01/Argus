@@ -230,6 +230,50 @@ class PaperTradingService:
         else:
             total_value = portfolio.cash_balance + committed
             basis = "cost"
+
+        # Capital story — explain where starting paper cash went (no invention).
+        starting_cash = self._starting_cash(portfolio_id)
+        fill_count = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PaperFill)
+                .join(PaperOrder, PaperOrder.id == PaperFill.order_id)
+                .where(PaperOrder.portfolio_id == portfolio_id)
+            )
+            or 0
+        )
+        order_count = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PaperOrder)
+                .where(PaperOrder.portfolio_id == portfolio_id)
+            )
+            or 0
+        )
+        net_vs_start = total_value - starting_cash
+        if position_rows:
+            capital_explanation = (
+                f"Started at ${starting_cash:.2f} paper cash. "
+                f"Now ${portfolio.cash_balance:.2f} cash + "
+                f"${committed:.2f} in open trades "
+                f"(equity ${total_value:.2f}). "
+                f"{fill_count} paper fills recorded."
+            )
+        elif fill_count > 0:
+            capital_explanation = (
+                f"Started at ${starting_cash:.2f} paper cash. "
+                f"Flat now with ${portfolio.cash_balance:.2f} remaining after "
+                f"{fill_count} paper fills across {order_count} orders "
+                f"(net {net_vs_start:+.2f} vs start). "
+                f"Money was used in paper buys/sells — not withdrawn. "
+                f"Use Reseed learning desk to reset to $300 practice cash."
+            )
+        else:
+            capital_explanation = (
+                f"Paper cash ${portfolio.cash_balance:.2f} "
+                f"(starting size ${starting_cash:.2f}). No fills yet."
+            )
+
         return {
             "portfolio_id": portfolio.id,
             "currency": portfolio.currency,
@@ -244,7 +288,39 @@ class PaperTradingService:
             "kill_switch_active": portfolio.kill_switch_active,
             "pause_new_entries_active": portfolio.pause_new_entries_active,
             "status": portfolio.status,
+            "starting_cash": starting_cash,
+            "net_vs_starting_cash": net_vs_start,
+            "fill_count": fill_count,
+            "order_count": order_count,
+            "capital_explanation": capital_explanation,
         }
+
+    def _starting_cash(self, portfolio_id: uuid.UUID) -> Decimal:
+        """Best evidence of opening paper cash: initial deposit, else first ledger, else 300."""
+        initial = self.db.scalar(
+            select(PaperCashLedger.amount)
+            .where(
+                PaperCashLedger.portfolio_id == portfolio_id,
+                PaperCashLedger.entry_type == "initial_deposit",
+            )
+            .order_by(PaperCashLedger.created_at.asc())
+            .limit(1)
+        )
+        if initial is not None and initial > 0:
+            return Decimal(initial)
+        first = self.db.scalar(
+            select(PaperCashLedger)
+            .where(PaperCashLedger.portfolio_id == portfolio_id)
+            .order_by(PaperCashLedger.created_at.asc())
+            .limit(1)
+        )
+        if first is not None:
+            # Reconstruct start ≈ balance_after - amount for the first movement.
+            reconstructed = Decimal(first.balance_after) - Decimal(first.amount)
+            if reconstructed > 0:
+                return reconstructed
+        # Canonical Founder learning desk size.
+        return Decimal("300")
 
     def _latest_mark(self, symbol: str) -> tuple[Decimal | None, datetime | None]:
         """Latest trustworthy OHLCV close for symbol (prefers public feed bars)."""
