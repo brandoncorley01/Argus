@@ -7,14 +7,15 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Added
 
-- Fix paper portfolio list 500: use SQLAlchemy `case(...)` (not `func.case`) so Home/Academy can load desks (`live-monitor-v2.38`)
-- Live Desk clarity: discovery tiles pop in and log when new coins hit Radar; stronger real-time scan spotlight; denser panels collapsed into Watching / Scan log / Filtered (`live-monitor-v2.37`)
 - Dynamic Coinbase USD market discovery: periodically lists active USD products, ranks sudden interest, filters liquidity/spread/volatility/chase risk, promotes a capped set into Alpha Radar; compact Market Discovery card on Live Desk; Academy tracks discovery outcomes (`live-monitor-v2.36`)
 - Argus Academy learning loop: institutional memory consults before automatic paper entries (EXECUTE/WAIT/AVOID); decision quality independent of P&L; PAPER detectors (momentum, breakout, dip/pullback, range, peak protection); readiness uses % drawdown + memory reuse (`live-monitor-v2.33`)
 - Argus Academy surface restored on nav + `/paper-training` (learning desk, capital recovery, Advanced Learning) (`live-monitor-v2.34`)
+- Live Desk clarity: discovery tiles pop in and log when new coins hit Radar; stronger real-time scan spotlight; denser panels collapsed into Watching / Scan log / Filtered (`live-monitor-v2.37`)
 
 ### Fixed
 
+- Market discovery actually runs on Start Argus: register discovery cron on the health-supervisor worker (the process Start launches) and persist discovery state under repo `runtime/` (`live-monitor-v2.39`)
+- Fix paper portfolio list 500: use SQLAlchemy `case(...)` (not `func.case`) so Home/Academy can load desks (`live-monitor-v2.38`)
 - Cockpit load + capital story: OHLCV bar queries use LIMIT (fixes 15s cockpit 502); Home explains $300→remaining cash via paper fills; auto-enter pauses when cash below notional (`live-monitor-v2.24`)
 - Unattended hard fix: keep-awake stays up while desired=Running (no longer exits on brief API blips); keepalive requires API+worker; scan automation uses isolated DB sessions; catch-up cooldown stops scan storms (`live-monitor-v2.23`)
 - Paper capital accuracy: hydrate in-memory book from DB before every order (stops position wipe / cash desync after API restart); Home/Portfolio show cash_balance + mark equity; learning-desk endpoint restored (`live-monitor-v2.22`)
