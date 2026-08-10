@@ -223,6 +223,7 @@ class TradingIntelligenceService:
         portfolio_id: uuid.UUID | None = None,
         entry_order_id: uuid.UUID | None = None,
         stale: bool = False,
+        memory_consult: dict[str, Any] | None = None,
     ) -> TradeDecisionSnapshot:
         regime = self.infer_market_regime(cand.symbol)
         rr = None
@@ -256,6 +257,7 @@ class TradingIntelligenceService:
             reason_text=cand.reason_text,
             confidence_label=label,
         )
+        cand_detail = dict(cand.detail or {})
         snap = TradeDecisionSnapshot(
             portfolio_id=portfolio_id,
             candidate_id=cand.id,
@@ -274,6 +276,12 @@ class TradingIntelligenceService:
                 "founder_stage": STAGE_MAP.get(cand.stage or "", cand.stage),
                 "contributing_factors": factors,
                 "scoring_version": CONFIDENCE_SCORING_VERSION,
+                "planned_stop": str(cand.stop_loss) if cand.stop_loss is not None else None,
+                "planned_target": str(cand.take_profit) if cand.take_profit is not None else None,
+                "trade_pattern": cand_detail.get("trade_pattern")
+                or cand_detail.get("pattern"),
+                "institutional_memory": memory_consult,
+                "memory_consult": memory_consult,
                 "observational_only": True,
             },
         )
@@ -358,7 +366,6 @@ class TradingIntelligenceService:
         cost_haircut = abs(exit_price * qty) * SIMULATED_COST_BPS / Decimal("10000") * 2
         adj = realized - cost_haircut
         outcome = "win" if adj > 0 else ("loss" if adj < 0 else "flat")
-        good = adj > 0
 
         conf = snap.confidence_score if snap else Decimal("50")
         regime = snap.market_regime if snap else self.infer_market_regime(symbol)
@@ -366,6 +373,46 @@ class TradingIntelligenceService:
             snap.explanation
             if snap
             else f"{symbol} closed via {exit_reason} without a prior decision snapshot."
+        )
+
+        snap_detail = dict(snap.detail) if snap and snap.detail else {}
+        factors = snap_detail.get("contributing_factors") or {}
+        stop_plan = None
+        target_plan = None
+        if snap_detail.get("stop_loss") is not None:
+            stop_plan = Decimal(str(snap_detail["stop_loss"]))
+        if snap_detail.get("take_profit") is not None:
+            target_plan = Decimal(str(snap_detail["take_profit"]))
+        # Prefer planned levels from entry order event if present on snap.
+        entry_zone = None
+        if entry_fill is not None:
+            entry_zone = entry_fill.price
+        from app.services.institutional_memory import grade_decision_quality
+
+        volume_ok = factors.get("volume_ok")
+        if volume_ok is not None:
+            volume_ok = bool(volume_ok)
+        good, quality_code, quality_factors = grade_decision_quality(
+            outcome=outcome,
+            entry_price=entry_zone,
+            stop_loss=stop_plan
+            or (
+                Decimal(str(cand_stop))
+                if (cand_stop := snap_detail.get("planned_stop")) is not None
+                else None
+            ),
+            take_profit=target_plan
+            or (
+                Decimal(str(cand_tp))
+                if (cand_tp := snap_detail.get("planned_target")) is not None
+                else None
+            ),
+            exit_reason=exit_reason,
+            risk_status=str(snap_detail.get("risk_status") or "clear"),
+            volume_ok=volume_ok,
+            stale_data=bool(factors.get("stale_data")),
+            strategy_rule_ok=bool(snap is not None),
+            holding_seconds=holding,
         )
 
         review = PostTradeReview(
@@ -391,9 +438,10 @@ class TradingIntelligenceService:
                 "expectancy_adjusted_pnl": str(adj),
                 "max_favorable_excursion": str(mfe) if mfe is not None else None,
                 "would_take_again": bool(good),
-                "decision_quality": (
-                    "acceptable" if good else "review_required"
-                ),
+                "decision_quality": quality_code,
+                "decision_quality_code": quality_code,
+                "decision_quality_factors": quality_factors,
+                "outcome_independent_of_pnl": True,
                 "observational_only": True,
             },
             closed_at=closed_at,

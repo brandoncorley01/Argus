@@ -102,6 +102,22 @@ export type AdvancedLearningPaneData = {
     live_trading_enabled: boolean;
     body?: Record<string, unknown>;
   } | null;
+  knowledge_retained?: number | null;
+  knowledge_reused?: number | null;
+  memory_reuse_rate?: string | null;
+  explained_loss_pct?: string | null;
+  decision_quality?: {
+    GOOD_DECISION_WIN?: number;
+    GOOD_DECISION_LOSS?: number;
+    POOR_DECISION_WIN?: number;
+    POOR_DECISION_LOSS?: number;
+    good_decision_rate?: string | null;
+    good_decision_wins?: number;
+    lucky_or_unlabeled_wins?: number;
+    poor_decision_losses?: number;
+  };
+  learning_velocity?: string | null;
+  maximum_drawdown_pct_of_start?: string | null;
   disclaimer?: string;
   error?: string;
   live_trading_enabled?: boolean;
@@ -213,6 +229,44 @@ export function AdvancedLearningPane({
         </div>
       </div>
 
+      <div className="summary-grid summary-grid-primary" style={{ marginTop: "0.75rem" }}>
+        <div className="summary-card">
+          <span className="metric-label">Knowledge Retained</span>
+          <strong>{data.knowledge_retained ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Knowledge Reused</span>
+          <strong>{data.knowledge_reused ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Memory Reuse Rate</span>
+          <strong>{pct(data.memory_reuse_rate)}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Explained Loss %</span>
+          <strong>{pct(data.explained_loss_pct)}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Decision Quality</span>
+          <strong>
+            {pct(data.decision_quality?.good_decision_rate)}
+          </strong>
+          <span className="muted-note" style={{ display: "block", marginTop: "0.25rem" }}>
+            G/W {data.decision_quality?.GOOD_DECISION_WIN ?? data.decision_quality?.good_decision_wins ?? 0}
+            {" · "}
+            G/L {data.decision_quality?.GOOD_DECISION_LOSS ?? 0}
+            {" · "}
+            P/W {data.decision_quality?.POOR_DECISION_WIN ?? data.decision_quality?.lucky_or_unlabeled_wins ?? 0}
+            {" · "}
+            P/L {data.decision_quality?.POOR_DECISION_LOSS ?? data.decision_quality?.poor_decision_losses ?? 0}
+          </span>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Learning Velocity</span>
+          <strong>{num(data.learning_velocity, 2)}</strong>
+        </div>
+      </div>
+
       <div className="readiness-box" role="status" style={{ marginTop: "0.85rem" }}>
         <strong>
           Expectancy after fees: {moneyPnl(data.expectancy_after_costs)}
@@ -220,6 +274,10 @@ export function AdvancedLearningPane({
         <p className="muted-note" style={{ margin: "0.35rem 0 0" }}>
           Cost model {data.cost_model_bps_each_way ?? "10"} bps each way on top of
           paper fill fees/slippage. Program status: {data.program_status ?? "active"}.
+          {data.maximum_drawdown_pct_of_start != null
+            ? ` Drawdown vs $300 start: ${pct(data.maximum_drawdown_pct_of_start)}.`
+            : ""}
+          {" "}Prior lessons now gate automatic paper entries (EXECUTE / WAIT / AVOID).
         </p>
       </div>
 

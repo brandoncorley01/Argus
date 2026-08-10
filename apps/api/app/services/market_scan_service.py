@@ -671,6 +671,73 @@ class MarketScanService:
                         )
                         events_emitted += 1
 
+                # Additional PAPER opportunity detectors — compete via same candidate contract.
+                try:
+                    from app.services.paper_opportunity_detectors import run_all_detectors
+
+                    for sig in run_all_detectors(bars):
+                        if kill:
+                            continue
+                        if sig.bias == "Neutral" or sig.strategy_key == "peak_exhaustion_protection":
+                            self._add_candidate(
+                                cycle,
+                                symbol=inst.symbol,
+                                timeframe=timeframe or "1m",
+                                bias="Neutral",
+                                stage="Rejected",
+                                score=sig.score,
+                                risk_status="clear",
+                                reason_code=sig.reason_code or "peak_exhaustion",
+                                reason_text=sig.reason_text,
+                                price=price,
+                                market_data_at=bar_close_time,
+                                strategy_key=sig.strategy_key,
+                                detail={
+                                    **sig.detail,
+                                    "trade_pattern": sig.pattern,
+                                    "pattern": sig.pattern,
+                                    "protection_only": True,
+                                    "paper_only": True,
+                                },
+                            )
+                            continue
+                        if sig.bias != "Bullish":
+                            continue
+                        d_stage = "Risk Review" if pause else "Watching"
+                        d_risk = "paused" if pause else "clear"
+                        d_reason = "pause_new_entries" if pause else None
+                        if not pause:
+                            pipeline["watching"] += 1
+                            pipeline["qualified"] += 1
+                            candidates_found += 1
+                        else:
+                            pipeline["risk_review"] += 1
+                        self._add_candidate(
+                            cycle,
+                            symbol=inst.symbol,
+                            timeframe=timeframe or "1m",
+                            bias="Bullish",
+                            stage=d_stage,
+                            score=sig.score,
+                            risk_status=d_risk,
+                            reason_code=d_reason,
+                            reason_text=sig.reason_text,
+                            price=price,
+                            market_data_at=bar_close_time,
+                            entry_zone=price,
+                            stop_loss=sig.stop_loss,
+                            take_profit=sig.take_profit,
+                            strategy_key=sig.strategy_key,
+                            detail={
+                                **sig.detail,
+                                "trade_pattern": sig.pattern,
+                                "pattern": sig.pattern,
+                                "paper_only": True,
+                            },
+                        )
+                except Exception:  # noqa: BLE001 — detectors must never fail the scan
+                    pass
+
             # Open paper positions count toward pipeline Positions.
             open_count = len(
                 list(
@@ -1753,12 +1820,13 @@ class MarketScanService:
         stop_loss: Decimal | None = None,
         take_profit: Decimal | None = None,
         detail: dict[str, Any] | None = None,
+        strategy_key: str | None = None,
     ) -> MarketScanCandidate:
         cand = MarketScanCandidate(
             cycle_id=cycle.id,
             symbol=symbol,
             timeframe=timeframe,
-            strategy_key=STRATEGY_KEY,
+            strategy_key=strategy_key or STRATEGY_KEY,
             bias=bias,
             stage=stage,
             score=score,

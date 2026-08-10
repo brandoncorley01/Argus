@@ -268,6 +268,12 @@ class AdvancedLearningService:
             dd = peak - equity
             if dd > max_dd:
                 max_dd = dd
+        # Percentage drawdown vs peak equity path (and vs $300 learning start).
+        starting_cash = Decimal("300")
+        max_dd_pct_of_peak = (
+            (max_dd / peak) if peak > 0 else Decimal("0")
+        )
+        max_dd_pct_of_start = max_dd / starting_cash if starting_cash > 0 else Decimal("0")
 
         by_strategy: dict[str, list[Decimal]] = {}
         by_coin: dict[str, list[Decimal]] = {}
@@ -360,6 +366,9 @@ class AdvancedLearningService:
             "profit_factor": profit_factor,
             "expectancy_after_costs": expectancy,
             "max_drawdown": max_dd if nets else None,
+            "max_drawdown_pct_of_peak": max_dd_pct_of_peak if nets else None,
+            "max_drawdown_pct_of_start": max_dd_pct_of_start if nets else None,
+            "starting_cash_reference": starting_cash,
             "leading_strategy": leading_strategy,
             "best_coin": best_coin,
             "worst_strategy": worst_strategy,
@@ -423,21 +432,54 @@ class AdvancedLearningService:
         return min(Decimal("100"), day_part + trade_part + quality + conf_part)
 
     def _good_vs_lucky(self, reviews: list[PostTradeReview]) -> dict[str, Any]:
+        counts = {
+            "GOOD_DECISION_WIN": 0,
+            "GOOD_DECISION_LOSS": 0,
+            "POOR_DECISION_WIN": 0,
+            "POOR_DECISION_LOSS": 0,
+        }
         good_wins = 0
         lucky_wins = 0
         bad_losses = 0
+        good_losses = 0
         for r in reviews:
-            if r.realized_pnl > 0:
-                if r.good_decision is True:
-                    good_wins += 1
+            detail = dict(r.detail or {})
+            code = str(
+                detail.get("decision_quality_code")
+                or detail.get("decision_quality")
+                or ""
+            ).upper()
+            if code not in counts:
+                # Derive from process flag + outcome when legacy rows lack codes.
+                if r.realized_pnl > 0:
+                    code = "GOOD_DECISION_WIN" if r.good_decision else "POOR_DECISION_WIN"
+                elif r.realized_pnl < 0:
+                    code = "GOOD_DECISION_LOSS" if r.good_decision else "POOR_DECISION_LOSS"
                 else:
-                    lucky_wins += 1
-            elif r.realized_pnl < 0 and r.good_decision is False:
+                    continue
+            if code in counts:
+                counts[code] += 1
+            if code == "GOOD_DECISION_WIN":
+                good_wins += 1
+            elif code == "POOR_DECISION_WIN":
+                lucky_wins += 1
+            elif code == "POOR_DECISION_LOSS":
                 bad_losses += 1
+            elif code == "GOOD_DECISION_LOSS":
+                good_losses += 1
+        total = sum(counts.values()) or 1
+        good_n = counts["GOOD_DECISION_WIN"] + counts["GOOD_DECISION_LOSS"]
         return {
             "good_decision_wins": good_wins,
             "lucky_or_unlabeled_wins": lucky_wins,
             "poor_decision_losses": bad_losses,
+            "good_decision_losses": good_losses,
+            "GOOD_DECISION_WIN": counts["GOOD_DECISION_WIN"],
+            "GOOD_DECISION_LOSS": counts["GOOD_DECISION_LOSS"],
+            "POOR_DECISION_WIN": counts["POOR_DECISION_WIN"],
+            "POOR_DECISION_LOSS": counts["POOR_DECISION_LOSS"],
+            "good_decision_rate": _as_str(Decimal(good_n) / Decimal(total)),
+            "outcome_independent": True,
         }
 
     def _recent_lessons(self, reviews: list[PostTradeReview]) -> list[dict[str, Any]]:
@@ -998,13 +1040,38 @@ class AdvancedLearningService:
         volume = self.high_volume_learning_summary(program.portfolio_id)
         learning = self.intelligence.learning_summary()
         misses = learning.get("rejected_that_became_winners", 0)
+
+        from app.services.institutional_memory import InstitutionalMemoryService
+
+        memory_stats = InstitutionalMemoryService(self.db).knowledge_stats(
+            program.portfolio_id
+        )
+
+        # Per-strategy sample adequacy (≥3 closed trades on at least 2 strategies).
+        leaderboard = metrics.get("strategy_leaderboard") or []
+        strategies_with_samples = sum(
+            1 for row in leaderboard if int(row.get("trades") or 0) >= 3
+        )
+        decision_quality = metrics.get("good_vs_lucky") or {}
+        good_rate = _dec(decision_quality.get("good_decision_rate"))
+        reuse_rate = _dec(memory_stats.get("memory_reuse_rate"))
+        max_dd_pct = metrics.get("max_drawdown_pct_of_start") or Decimal("1")
+        calibration = metrics.get("calibration") or {}
+        # Lightweight forward/OOS proxy: last 30% of reviews vs earlier expectancy.
+        oos_ok = self._forward_evidence_ok(program)
+
         ready = (
-            metrics["trades_closed"] >= 10
+            metrics["trades_closed"] >= 20
             and metrics["expectancy_after_costs"] is not None
             and metrics["expectancy_after_costs"] > 0
-            and (metrics["max_drawdown"] or Decimal("0")) <= Decimal("500")
+            and max_dd_pct <= Decimal("0.35")  # ≤35% of $300 start
             and metrics["readiness_score"] >= Decimal("60")
             and sum(1 for m in milestones if m["achieved"]) >= 5
+            and strategies_with_samples >= 2
+            and good_rate >= Decimal("0.45")
+            and reuse_rate >= Decimal("0.10")
+            and calibration.get("higher_confidence_better") is not False
+            and oos_ok
         )
         body = {
             "learning_day": day_index,
@@ -1050,12 +1117,27 @@ class AdvancedLearningService:
             "strategy_by_market_conditions": metrics["strategy_by_regime"],
             "confidence_accuracy": metrics["calibration"],
             "good_vs_lucky": metrics["good_vs_lucky"],
+            "decision_quality": decision_quality,
+            "institutional_memory": memory_stats,
             "drawdown_and_risk_discipline": {
                 "max_drawdown": _as_str(metrics["max_drawdown"], 8),
+                "max_drawdown_pct_of_start": _as_str(max_dd_pct),
+                "max_drawdown_pct_of_peak": _as_str(
+                    metrics.get("max_drawdown_pct_of_peak")
+                ),
+                "drawdown_limit_pct_of_start": "0.35",
                 "risk_discipline_milestone": next(
                     (m for m in milestones if m["key"] == "risk_discipline"), None
                 ),
             },
+            "sample_adequacy": {
+                "trades_closed": metrics["trades_closed"],
+                "min_trades_required": 20,
+                "strategies_with_min_samples": strategies_with_samples,
+                "min_strategies_required": 2,
+            },
+            "forward_evidence_ok": oos_ok,
+            "memory_reuse_rate": memory_stats.get("memory_reuse_rate"),
             "missed_opportunities": {
                 "rejected_that_became_winners": misses,
                 "accepted_that_became_losers": learning.get(
@@ -1106,11 +1188,34 @@ class AdvancedLearningService:
         self.db.flush()
         return report
 
+    def _forward_evidence_ok(self, program: PaperLearningProgram) -> bool:
+        """Out-of-sample / forward proxy: recent third expectancy not sharply worse."""
+        reviews = self._reviews_for_program(program)
+        if len(reviews) < 12:
+            return False
+        split = max(1, int(len(reviews) * 0.7))
+        earlier = reviews[:split]
+        later = reviews[split:]
+        if not later:
+            return False
+        exp_early = sum((self._net_after_costs(r) for r in earlier), Decimal("0")) / Decimal(
+            len(earlier)
+        )
+        exp_late = sum((self._net_after_costs(r) for r in later), Decimal("0")) / Decimal(
+            len(later)
+        )
+        # Forward window must be non-negative or not collapse >50% vs earlier.
+        if exp_late >= 0:
+            return True
+        if exp_early <= 0:
+            return exp_late >= exp_early
+        return exp_late >= (exp_early * Decimal("0.5"))
+
     def _weaknesses(
         self, metrics: dict[str, Any], learning: dict[str, Any]
     ) -> list[str]:
         weaknesses: list[str] = []
-        if metrics["trades_closed"] < 10:
+        if metrics["trades_closed"] < 20:
             weaknesses.append("Too few closed paper trades for strong statistical claims.")
         if metrics["win_rate"] is not None and metrics["win_rate"] < Decimal("0.45"):
             weaknesses.append("Win rate below 45% in the learning window.")
@@ -1118,7 +1223,12 @@ class AdvancedLearningService:
             "expectancy_after_costs"
         ] <= 0:
             weaknesses.append("Expectancy after simulated fees is not positive.")
-        if metrics["max_drawdown"] and metrics["max_drawdown"] > Decimal("300"):
+        dd_pct = metrics.get("max_drawdown_pct_of_start")
+        if dd_pct is not None and dd_pct > Decimal("0.35"):
+            weaknesses.append(
+                "Drawdown exceeds 35% of the $300 learning starting capital."
+            )
+        elif metrics["max_drawdown"] and metrics["max_drawdown"] > Decimal("105"):
             weaknesses.append("Drawdown is elevated relative to the paper desk size.")
         if learning.get("accepted_that_became_losers", 0) > learning.get(
             "rejected_that_became_winners", 0
@@ -1170,6 +1280,15 @@ class AdvancedLearningService:
             "confidence_calibration": metrics["calibration"],
             "expectancy_after_costs": _as_str(metrics["expectancy_after_costs"], 8),
             "cost_model_bps_each_way": metrics["cost_model_bps_each_way"],
+            "maximum_drawdown_pct_of_start": _as_str(
+                metrics.get("max_drawdown_pct_of_start")
+            ),
+            "knowledge_retained": None,
+            "knowledge_reused": None,
+            "memory_reuse_rate": None,
+            "explained_loss_pct": None,
+            "decision_quality": metrics["good_vs_lucky"],
+            "learning_velocity": None,
             "readiness_report": (
                 {
                     "id": str(report.id),
@@ -1190,6 +1309,21 @@ class AdvancedLearningService:
             ),
             "generated_at": datetime.now(UTC).isoformat(),
         }
+        try:
+            from app.services.institutional_memory import InstitutionalMemoryService
+
+            mem = InstitutionalMemoryService(self.db).knowledge_stats(portfolio_id)
+            payload["knowledge_retained"] = mem.get("knowledge_retained")
+            payload["knowledge_reused"] = mem.get("knowledge_reused")
+            payload["memory_reuse_rate"] = mem.get("memory_reuse_rate")
+            payload["explained_loss_pct"] = mem.get("explained_loss_pct")
+            payload["learning_velocity"] = mem.get("learning_velocity")
+            payload["decision_quality"] = mem.get("decision_quality") or metrics[
+                "good_vs_lucky"
+            ]
+            payload["institutional_memory"] = mem
+        except Exception:  # noqa: BLE001
+            pass
         # Persist program/milestone bootstrap created during pane reads.
         try:
             self.db.commit()

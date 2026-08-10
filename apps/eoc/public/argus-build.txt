@@ -1,1 +1,1 @@
-live-monitor-v2.24
+live-monitor-v2.33 academy-learning-loop

@@ -540,7 +540,7 @@ class PaperTrainingService:
                     MarketScanCandidate.risk_status == "clear",
                 )
                 .order_by(desc(MarketScanCandidate.score))
-                .limit(5)
+                .limit(12)
             )
         )
         # Prefer freshest Watching candidates with usable score.
@@ -565,6 +565,13 @@ class PaperTrainingService:
         resolved = self._resolve_actor(actor, portfolio)
         if resolved is None:
             return []
+
+        from app.services.institutional_memory import InstitutionalMemoryService
+        from app.services.trading_intelligence_service import TradingIntelligenceService
+
+        intelligence = TradingIntelligenceService(self.db)
+        memory = InstitutionalMemoryService(self.db)
+
         for cand in cands:
             if cand.symbol in open_syms:
                 continue
@@ -573,29 +580,119 @@ class PaperTrainingService:
             if (cand.bias or "") != "Bullish":
                 # Long-only: never convert bearish/neutral probes into buys.
                 continue
+            # --- Institutional memory consult BEFORE paper entry (PAPER only) ---
+            regime = intelligence.infer_market_regime(cand.symbol)
+            delta = intelligence._paper_adaptive_delta(
+                portfolio_id=portfolio_id,
+                strategy_key=cand.strategy_key or "sma_crossover",
+            )
+            rr = None
+            if cand.entry_zone and cand.stop_loss and cand.take_profit:
+                risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
+                reward = abs(float(cand.take_profit) - float(cand.entry_zone))
+                if risk > 0:
+                    rr = reward / risk
+            conf, _label, factors = intelligence.score_confidence(
+                score=float(cand.score or 0),
+                bias=cand.bias or "Neutral",
+                risk_status=cand.risk_status or "blocked",
+                regime=regime,
+                stale=False,
+                risk_reward=rr,
+                paper_confidence_delta=delta,
+            )
+            cand_detail = dict(cand.detail or {})
+            vol_cond = "normal"
+            if factors.get("volume_ok") is True or cand_detail.get("relative_volume_high"):
+                vol_cond = "elevated"
+            elif factors.get("volume_ok") is False:
+                vol_cond = "thin"
+            consult = memory.consult_before_entry(
+                portfolio_id=portfolio_id,
+                symbol=cand.symbol,
+                strategy_key=cand.strategy_key or "sma_crossover",
+                market_regime=regime,
+                base_score=float(cand.score or 0),
+                paper_confidence_delta=delta,
+                confidence_label_score=conf,
+                volume_condition=vol_cond,
+                trade_pattern=str(
+                    cand_detail.get("trade_pattern")
+                    or cand_detail.get("pattern")
+                    or ""
+                )
+                or None,
+            )
+            action = str(consult.get("action") or "WAIT")
+            if action != "EXECUTE":
+                self.audit.append(
+                    action="paper.training.memory_gate",
+                    resource_type="market_scan_candidate",
+                    resource_id=str(cand.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": cand.symbol,
+                        "gate_action": action,
+                        "learned_opportunity_score": consult.get(
+                            "learned_opportunity_score"
+                        ),
+                        "similar_setup_count": consult.get("similar_setup_count"),
+                        "evidence_strength": consult.get("evidence_strength"),
+                        "prior_review_ids": consult.get("prior_review_ids"),
+                        "paper_only": True,
+                    },
+                )
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"Memory {action.lower()} on {cand.symbol}",
+                    detail=(
+                        f"Learned score {consult.get('learned_opportunity_score')}; "
+                        f"similar setups {consult.get('similar_setup_count')}; "
+                        f"evidence {consult.get('evidence_strength')}. No paper order."
+                    ),
+                    reason_code=f"memory_{action.lower()}",
+                )
+                continue
             try:
                 order = self._open_paper_from_candidate(
                     portfolio_id=portfolio_id,
                     cand=cand,
                     notional=settings.default_notional,
                     actor=resolved,
+                    memory_consult=consult,
                 )
                 cand.stage = "Entered"
-                opened.append({"symbol": cand.symbol, "order_id": str(order.id)})
+                opened.append(
+                    {
+                        "symbol": cand.symbol,
+                        "order_id": str(order.id),
+                        "memory_action": action,
+                        "learned_opportunity_score": consult.get(
+                            "learned_opportunity_score"
+                        ),
+                    }
+                )
                 open_syms.add(cand.symbol)
                 self.audit.append(
                     action="paper.training.auto_enter",
                     resource_type="paper_order",
                     resource_id=str(order.id),
                     actor_user_id=resolved.user.id,
-                    payload={"symbol": cand.symbol, "candidate_id": str(cand.id)},
+                    payload={
+                        "symbol": cand.symbol,
+                        "candidate_id": str(cand.id),
+                        "institutional_memory": consult,
+                        "paper_only": True,
+                    },
                 )
                 self._emit_decision_event(
                     symbol=cand.symbol,
                     outcome="entered",
                     title=f"Entered {cand.symbol}",
                     detail=(
-                        f"Opened a ${settings.default_notional} paper long. "
+                        f"Opened a ${settings.default_notional} paper long after memory "
+                        f"EXECUTE (score {consult.get('learned_opportunity_score')}). "
                         f"Stop {cand.stop_loss}; target {cand.take_profit}."
                     ),
                     reason_code="auto_enter",
@@ -669,6 +766,7 @@ class PaperTrainingService:
         cand: MarketScanCandidate,
         notional: Decimal,
         actor: AuthenticatedPrincipal,
+        memory_consult: dict[str, Any] | None = None,
     ) -> PaperOrder:
         price = cand.current_price
         if price is None or price <= 0:
@@ -714,6 +812,7 @@ class PaperTrainingService:
                 "stop_loss": str(stop),
                 "take_profit": str(target),
                 "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else str(price),
+                "institutional_memory": memory_consult,
             },
         )
         try:
@@ -725,6 +824,7 @@ class PaperTrainingService:
                     portfolio_id=portfolio_id,
                     entry_order_id=order.id,
                     stale=False,
+                    memory_consult=memory_consult,
                 )
         except Exception:  # noqa: BLE001 — intelligence must never block paper entry
             pass
