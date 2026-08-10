@@ -264,7 +264,9 @@ class MarketDiscoveryService:
                 break
         return pool
 
-    def rank_markets(self, product_ids: list[str]) -> tuple[list[RankedMarket], list[dict[str, Any]]]:
+    def rank_markets(
+        self, product_ids: list[str]
+    ) -> tuple[list[RankedMarket], list[dict[str, Any]]]:
         ranked: list[RankedMarket] = []
         rejected: list[dict[str, Any]] = []
         volumes: list[Decimal] = []
@@ -273,7 +275,11 @@ class MarketDiscoveryService:
             st = self._fetch_stats(pid)
             if not st:
                 rejected.append(
-                    {"symbol": pid, "reason": "stale_or_missing_stats", "primary_reason": "stale data"}
+                    {
+                        "symbol": pid,
+                        "reason": "stale_or_missing_stats",
+                        "primary_reason": "stale data",
+                    }
                 )
                 continue
             stats_cache[pid] = st
@@ -347,7 +353,11 @@ class MarketDiscoveryService:
                     }
                 )
                 continue
-            if range_pct < MIN_RANGE_PCT and abs(change) < Decimal("0.015") and pid not in CORE_SYMBOLS:
+            if (
+                range_pct < MIN_RANGE_PCT
+                and abs(change) < Decimal("0.015")
+                and pid not in CORE_SYMBOLS
+            ):
                 rejected.append(
                     {
                         "symbol": pid,

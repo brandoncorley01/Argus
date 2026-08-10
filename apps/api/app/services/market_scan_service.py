@@ -707,7 +707,10 @@ class MarketScanService:
                     for sig in run_all_detectors(bars):
                         if kill:
                             continue
-                        if sig.bias == "Neutral" or sig.strategy_key == "peak_exhaustion_protection":
+                        if (
+                            sig.bias == "Neutral"
+                            or sig.strategy_key == "peak_exhaustion_protection"
+                        ):
                             self._add_candidate(
                                 cycle,
                                 symbol=inst.symbol,
@@ -1818,6 +1821,7 @@ class MarketScanService:
                     {
                         "id": str(e.id),
                         "at": e.occurred_at,
+                        "symbol": e.symbol,
                         "text": text[:280],
                         "tone": "ok" if outcome == "entered" else "warn",
                     }
@@ -1844,6 +1848,7 @@ class MarketScanService:
                 {
                     "id": str(e.id),
                     "at": e.occurred_at,
+                    "symbol": e.symbol,
                     "text": text,
                     "tone": (
                         "bad"

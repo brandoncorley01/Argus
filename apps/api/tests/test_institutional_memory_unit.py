@@ -6,11 +6,11 @@ from types import SimpleNamespace
 from app.services.institutional_memory import (
     EXECUTE_SCORE,
     WAIT_SCORE,
+    InstitutionalMemoryService,
     confidence_bucket,
     grade_decision_quality,
     knowledge_record_from_review,
 )
-from app.services.institutional_memory import InstitutionalMemoryService
 from app.services.paper_opportunity_detectors import (
     detect_breakout,
     detect_dip_pullback_reversal,
@@ -21,11 +21,18 @@ from app.services.paper_opportunity_detectors import (
 )
 
 
-def _bar(c: float, h: float | None = None, l: float | None = None, v: float = 100) -> SimpleNamespace:
+def _bar(
+    c: float,
+    h: float | None = None,
+    low: float | None = None,
+    v: float = 100,
+) -> SimpleNamespace:
     close = Decimal(str(c))
     high = Decimal(str(h if h is not None else c * 1.002))
-    low = Decimal(str(l if l is not None else c * 0.998))
-    return SimpleNamespace(close=close, high=high, low=low, volume=Decimal(str(v)))
+    low_px = Decimal(str(low if low is not None else c * 0.998))
+    return SimpleNamespace(
+        close=close, high=high, low=low_px, volume=Decimal(str(v))
+    )
 
 
 def test_grade_decision_quality_independent_of_pnl() -> None:
@@ -175,8 +182,8 @@ def test_momentum_and_breakout_detectors() -> None:
     assert mom.bias == "Bullish"
 
     # Breakout above prior high with volume
-    flat = [_bar(100, h=100.2, l=99.8, v=50) for _ in range(32)]
-    flat.append(_bar(101.0, h=101.3, l=100.5, v=200))
+    flat = [_bar(100, h=100.2, low=99.8, v=50) for _ in range(32)]
+    flat.append(_bar(101.0, h=101.3, low=100.5, v=200))
     br = detect_breakout(flat)
     assert br is not None
     assert br.strategy_key == "breakout"
@@ -188,19 +195,22 @@ def test_dip_range_peak_detectors_and_runner() -> None:
     # Force a dip near the end under sma20 then bounce
     for i in range(5):
         bars[-(5 - i)] = _bar(100.8 - (0.15 * (5 - i)))
-    bars[-1] = _bar(100.95, h=101.0, l=100.7)
+    bars[-1] = _bar(100.95, h=101.0, low=100.7)
     dip = detect_dip_pullback_reversal(bars)
     # May or may not fire depending on SMA geometry; just ensure no crash
     assert dip is None or dip.pattern == "dip_reversal"
 
     quiet = [_bar(100 + ((i % 5) - 2) * 0.05, v=80) for i in range(30)]
-    quiet[-1] = _bar(99.7, h=99.85, l=99.6)
+    quiet[-1] = _bar(99.7, h=99.85, low=99.6)
     rng = detect_range_mean_reversion(quiet)
     assert rng is None or rng.strategy_key == "range_mean_reversion"
 
-    run_up = [_bar(100 + i * 0.4, h=100 + i * 0.4 + 0.3, l=100 + i * 0.4 - 0.05) for i in range(20)]
+    run_up = [
+        _bar(100 + i * 0.4, h=100 + i * 0.4 + 0.3, low=100 + i * 0.4 - 0.05)
+        for i in range(20)
+    ]
     # Exhaustion wick
-    run_up.append(_bar(108.0, h=109.5, l=107.8, v=40))
+    run_up.append(_bar(108.0, h=109.5, low=107.8, v=40))
     peak = detect_peak_exhaustion_protection(run_up)
     assert peak is None or peak.pattern == "peak_exhaustion"
 

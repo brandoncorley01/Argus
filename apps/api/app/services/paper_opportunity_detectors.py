@@ -7,9 +7,10 @@ through Alpha Radar / scan pipeline alongside sma_crossover.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -236,7 +237,8 @@ def detect_peak_exhaustion_protection(bars: Sequence[Any]) -> DetectorSignal | N
         return None
     avg_vol = _sma(vols[:-1], 15)
     vol_fade = bool(avg_vol and vols[-1] < avg_vol)
-    # Bearish/Neutral protection — does not open longs; scan stores as Neutral Rejected/Expired helper.
+    # Bearish/Neutral protection — does not open longs; scan stores as
+    # Neutral Rejected/Expired helper.
     return DetectorSignal(
         strategy_key="peak_exhaustion_protection",
         bias="Neutral",

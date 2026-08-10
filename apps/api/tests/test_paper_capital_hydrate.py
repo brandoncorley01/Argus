@@ -11,7 +11,7 @@ from app.execution.contracts import (
     OrderSide,
     OrderType,
 )
-from app.execution.providers.paper import PaperExecutionProvider, _ACCOUNT_STORE
+from app.execution.providers.paper import _ACCOUNT_STORE, PaperExecutionProvider
 
 
 def _intent(portfolio_id, *, side: OrderSide, qty: str = "1") -> OrderIntent:
