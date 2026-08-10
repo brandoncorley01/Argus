@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import {
   coachingSkipAction,
@@ -19,10 +19,19 @@ import { formatAgeLabel, formatLiveClock, formatTimestamp } from "@/lib/format";
 import { usePaperLiveOptional } from "@/components/founder/PaperLiveProvider";
 
 const COCKPIT_POLL_MS = 4_000;
+const COCKPIT_POLL_SCANNING_MS = 1_500;
 const PULSE_POLL_MS = 5_000;
 const KEEP_ALIVE_MS = 30_000;
 /** Interval fire delayed this much ⇒ host likely slept; force catch-up poll. */
 const WAKE_GAP_MS = 10_000;
+
+type DeskLogItem = {
+  id: string;
+  at: number;
+  text: string;
+  tone: "ok" | "warn" | "info" | "bad";
+  symbol?: string;
+};
 
 function fmtCountdown(totalSec: number | null | undefined): string {
   if (totalSec == null || !Number.isFinite(totalSec)) return "—";
@@ -351,6 +360,11 @@ export function TradingCockpit({
   // null until mount — Date.now() in useState breaks hydration vs SSR HTML
   const [now, setNow] = useState<number | null>(null);
   const [userPinnedUntil, setUserPinnedUntil] = useState(0);
+  const [deskLog, setDeskLog] = useState<DeskLogItem[]>([]);
+  const [popSymbols, setPopSymbols] = useState<Set<string>>(new Set());
+  const knownWallRef = useRef<Set<string> | null>(null);
+  const knownDiscoveryRef = useRef<Set<string>>(new Set());
+  const scanningRef = useRef(false);
 
   useEffect(() => {
     setNow(Date.now());
@@ -362,6 +376,37 @@ export function TradingCockpit({
     let cancelled = false;
     let inFlight = false;
     let lastTick = Date.now();
+    let timer: number | null = null;
+
+    const pushLog = (item: Omit<DeskLogItem, "id" | "at"> & { id?: string }) => {
+      const id =
+        item.id ?? `${item.symbol ?? "log"}-${Date.now()}-${Math.random()}`;
+      setDeskLog((prev) => {
+        if (prev.some((p) => p.id === id)) return prev;
+        return [
+          {
+            id,
+            at: Date.now(),
+            text: item.text,
+            tone: item.tone,
+            symbol: item.symbol,
+          },
+          ...prev,
+        ].slice(0, 40);
+      });
+    };
+
+    const markPop = (symbol: string) => {
+      setPopSymbols((prev) => new Set(prev).add(symbol));
+      window.setTimeout(() => {
+        setPopSymbols((prev) => {
+          const next = new Set(prev);
+          next.delete(symbol);
+          return next;
+        });
+      }, 4200);
+    };
+
     const poll = async () => {
       if (inFlight) return;
       inFlight = true;
@@ -376,8 +421,64 @@ export function TradingCockpit({
         if (!res.ok) return;
         const data = (await res.json()) as CockpitSnapshot;
         if (cancelled) return;
+        scanningRef.current = data.scanner_state === "Scanning";
         setLastBeatAt(data.generated_at);
         setBeatCount((n) => n + 1);
+
+        const wallSyms = new Set(data.wall.map((t) => t.symbol));
+        if (knownWallRef.current == null) {
+          knownWallRef.current = wallSyms;
+        } else {
+          for (const tile of data.wall) {
+            if (!knownWallRef.current.has(tile.symbol)) {
+              knownWallRef.current.add(tile.symbol);
+              if (tile.discovered || tile.newly_discovered) {
+                markPop(tile.symbol);
+                setFlash(tile.symbol);
+                window.setTimeout(() => setFlash(null), 1600);
+                const cls = tile.opportunity_class?.replaceAll("_", " ");
+                pushLog({
+                  tone: "ok",
+                  symbol: tile.symbol,
+                  text: cls
+                    ? `Discovered ${tile.symbol} · ${cls} → Radar`
+                    : `Discovered ${tile.symbol} → Radar`,
+                });
+              }
+            }
+          }
+        }
+
+        for (const raw of data.market_discovery?.newly_discovered ?? []) {
+          const sym = typeof raw === "string" ? raw : raw.symbol;
+          if (!sym || knownDiscoveryRef.current.has(sym)) continue;
+          knownDiscoveryRef.current.add(sym);
+          markPop(sym);
+          const cls =
+            typeof raw === "object" && raw.opportunity_class
+              ? raw.opportunity_class.replaceAll("_", " ")
+              : null;
+          pushLog({
+            tone: "ok",
+            symbol: sym,
+            text: cls
+              ? `New opportunity ${sym} · ${cls}`
+              : `New opportunity ${sym}`,
+          });
+        }
+
+        if (
+          data.scanner_state === "Scanning" &&
+          data.current_market
+        ) {
+          pushLog({
+            id: `scan-${data.current_market}-${data.scan_progress.scanned}`,
+            tone: "info",
+            symbol: data.current_market,
+            text: `Scanning ${data.current_market} (${data.scan_progress.scanned}/${data.scan_progress.total})`,
+          });
+        }
+
         setCockpit((prev) => {
           if (prev) {
             for (const tile of data.wall) {
@@ -401,14 +502,19 @@ export function TradingCockpit({
       } finally {
         inFlight = false;
         lastTick = Date.now();
+        if (!cancelled) {
+          const delay = scanningRef.current
+            ? COCKPIT_POLL_SCANNING_MS
+            : COCKPIT_POLL_MS;
+          timer = window.setTimeout(() => {
+            const gap = Date.now() - lastTick;
+            void poll();
+            if (gap > WAKE_GAP_MS + COCKPIT_POLL_MS) void poll();
+          }, delay);
+        }
       }
     };
     void poll();
-    const id = window.setInterval(() => {
-      const gap = Date.now() - lastTick;
-      void poll();
-      if (gap > WAKE_GAP_MS + COCKPIT_POLL_MS) void poll();
-    }, COCKPIT_POLL_MS);
 
     const onVisible = () => {
       if (document.visibilityState === "visible") void poll();
@@ -417,7 +523,7 @@ export function TradingCockpit({
 
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      if (timer != null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [portfolioId]);
@@ -553,9 +659,17 @@ export function TradingCockpit({
   }, [selected, cockpit?.generated_at]);
 
   // Rotate Live Desk focus across open positions + active watches (skip Expired).
+  // While scanning, stick to the symbol Argus is evaluating right now.
   useEffect(() => {
     const rotate = () => {
       if (Date.now() < userPinnedUntil) return;
+      if (
+        cockpit?.scanner_state === "Scanning" &&
+        cockpit.current_market
+      ) {
+        setSelected(cockpit.current_market);
+        return;
+      }
       const fromCockpit = cockpit?.focus_symbols?.length
         ? cockpit.focus_symbols
         : [
@@ -584,7 +698,19 @@ export function TradingCockpit({
     cockpit?.open_position_symbols,
     cockpit?.watches,
     cockpit?.current_market,
+    cockpit?.scanner_state,
     displayOpenSymbols,
+    userPinnedUntil,
+  ]);
+
+  // Follow the live scan spotlight as soon as current_market advances.
+  useEffect(() => {
+    if (Date.now() < userPinnedUntil) return;
+    if (cockpit?.scanner_state !== "Scanning" || !cockpit.current_market) return;
+    setSelected(cockpit.current_market);
+  }, [
+    cockpit?.scanner_state,
+    cockpit?.current_market,
     userPinnedUntil,
   ]);
 
@@ -612,6 +738,36 @@ export function TradingCockpit({
     null;
   const tile: CockpitWallTile | null =
     cockpit?.wall.find((w) => w.symbol === selected) ?? null;
+
+  const wallSorted = useMemo(() => {
+    const wall = cockpit?.wall ?? [];
+    const cur = cockpit?.current_market;
+    return [...wall].sort((a, b) => {
+      const rank = (t: CockpitWallTile) => {
+        if (cur && t.symbol === cur) return 0;
+        if (popSymbols.has(t.symbol) || t.newly_discovered) return 1;
+        if (t.status === "Open" || displayOpenSymbols.includes(t.symbol)) return 2;
+        if (t.status.includes("Watch") || t.status.includes("Setup")) return 3;
+        if (t.discovered) return 4;
+        return 5;
+      };
+      return rank(a) - rank(b) || a.symbol.localeCompare(b.symbol);
+    });
+  }, [cockpit?.wall, cockpit?.current_market, popSymbols, displayOpenSymbols]);
+
+  const activityLog = useMemo(() => {
+    const fromApi = (cockpit?.decided ?? []).slice(0, 12).map((d) => ({
+      id: d.id,
+      at: Date.parse(d.at) || 0,
+      text: d.text,
+      tone: (d.tone === "ok" || d.tone === "warn" || d.tone === "bad"
+        ? d.tone
+        : "info") as DeskLogItem["tone"],
+    }));
+    return [...deskLog, ...fromApi]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 18);
+  }, [deskLog, cockpit?.decided]);
 
   if (!cockpit) {
     return (
@@ -694,6 +850,23 @@ export function TradingCockpit({
       ? Number(watch.current_price)
       : tile?.current_price ?? null;
 
+  const scanning = cockpit.scanner_state === "Scanning";
+  const scanProgressPct =
+    cockpit.scan_progress.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (cockpit.scan_progress.scanned / cockpit.scan_progress.total) * 100,
+          ),
+        )
+      : scanning
+        ? 8
+        : scanFill;
+  const md = cockpit.market_discovery;
+  const watchingList = (cockpit.watches ?? []).filter((w) =>
+    ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
+  );
+
   const expireLeft =
     watch == null
       ? null
@@ -716,7 +889,7 @@ export function TradingCockpit({
         : Math.max(0, Math.floor((now - Date.parse(watch.watching_since)) / 1000));
 
   return (
-    <div className="trading-cockpit">
+    <div className="trading-cockpit desk-simplified">
       <section className="panel rise heartbeat-panel" aria-label="Argus live desk">
         <div className="cockpit-head">
           <div>
@@ -745,48 +918,53 @@ export function TradingCockpit({
               {c.label}
             </span>
           ))}
-          <span className="status-chip tone-neutral">1m / 5m</span>
-          <span className="status-chip tone-neutral">
-            {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total} mkts
-          </span>
         </div>
 
-        <div className="argus-dial-row">
-          <Dial
-            label="Pulse"
-            valueLabel={beatAge == null ? "—" : `${beatAge}s`}
-            pct={
-              beatAge == null
-                ? 0
-                : Math.max(8, 100 - Math.min(100, beatAge * (100 / 20)))
-            }
-            tone={beatFresh ? "ok" : "warn"}
-            beating={beatFresh}
-          />
-          <Dial
-            label="Prices"
-            valueLabel={
-              feedAge == null
-                ? "—"
-                : feedAge < 120
-                  ? `${feedAge}s`
-                  : `${Math.floor(feedAge / 60)}m`
-            }
-            pct={
-              feedAge == null
-                ? 0
-                : Math.max(5, 100 - Math.min(100, (feedAge / 300) * 100))
-            }
-            tone={feedOk ? "ok" : feedWarn ? "warn" : "bad"}
-            beating={feedOk}
-          />
-          <Dial
-            label="Next scan"
-            valueLabel={fmtCountdown(nextScanSec)}
-            pct={scanFill}
-            tone={cockpit.scanner_state === "Scanning" ? "ok" : "neutral"}
-            beating={cockpit.scanner_state === "Scanning"}
-          />
+        <div
+          className={`scan-stage${scanning ? " is-scanning" : ""}`}
+          aria-live="polite"
+          aria-label="Scan progress"
+        >
+          <div className="scan-stage-main">
+            <span className="scan-stage-kicker">
+              {scanning ? "Scanning now" : "Next scan"}
+            </span>
+            <strong className="scan-stage-symbol">
+              {scanning
+                ? (cockpit.current_market ?? "…")
+                : nextScanSec != null
+                  ? fmtCountdown(nextScanSec)
+                  : "—"}
+            </strong>
+            <span className="scan-stage-meta">
+              {cockpit.scan_progress.scanned}/{cockpit.scan_progress.total} markets
+              {md
+                ? ` · discovered ${md.promoted_to_radar?.length ?? 0}`
+                : ""}
+            </span>
+          </div>
+          <div className="scan-stage-bar" aria-hidden>
+            <i style={{ width: `${scanProgressPct}%` }} />
+          </div>
+          {scanning && cockpit.current_market ? (
+            <p className="scan-stage-beam">
+              Sweeping <em>{cockpit.current_market}</em>
+              {" — "}
+              tile highlighted on the wall
+            </p>
+          ) : md && (md.newly_discovered?.length ?? 0) > 0 ? (
+            <p className="scan-stage-beam">
+              New on Radar:{" "}
+              {(md.newly_discovered ?? [])
+                .map((n) => (typeof n === "string" ? n : n.symbol))
+                .filter(Boolean)
+                .slice(0, 4)
+                .join(", ")}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="argus-dial-row dial-row-compact">
           <Dial
             label="Watching"
             valueLabel={String(watchingN)}
@@ -847,67 +1025,7 @@ export function TradingCockpit({
           />
         </div>
 
-        {(() => {
-          const md = cockpit.market_discovery;
-          if (!md) return null;
-          const newly = (md.newly_discovered ?? [])
-            .map((n) => (typeof n === "string" ? n : n.symbol))
-            .filter(Boolean)
-            .slice(0, 4);
-          const promoted = (md.promoted_to_radar ?? []).slice(0, 4);
-          const rejected = (md.rejected_sample ?? []).slice(0, 3);
-          return (
-            <div className="market-discovery-card" aria-label="Market Discovery">
-              <div className="market-discovery-head">
-                <strong>Market Discovery</strong>
-                <span className="muted-note">Coinbase USD · PAPER</span>
-              </div>
-              <div className="market-discovery-metrics">
-                <span>
-                  Scanned <b>{md.markets_scanned ?? 0}</b>
-                </span>
-                <span>
-                  Active <b>{md.active_opportunities ?? 0}</b>
-                </span>
-                <span>
-                  Promoted <b>{(md.promoted_to_radar ?? []).length}</b>
-                </span>
-                <span>
-                  Rejected <b>{md.rejected_count ?? 0}</b>
-                </span>
-              </div>
-              {newly.length > 0 ? (
-                <p className="market-discovery-line">
-                  New movers: {newly.join(", ")}
-                </p>
-              ) : (
-                <p className="market-discovery-line muted-note">
-                  No new discovery promotions this cycle.
-                </p>
-              )}
-              {promoted.length > 0 ? (
-                <p className="market-discovery-line">
-                  On Radar: {promoted.join(", ")}
-                  {(md.promoted_to_radar?.length ?? 0) > promoted.length
-                    ? "…"
-                    : ""}
-                </p>
-              ) : null}
-              {rejected.length > 0 ? (
-                <ul className="market-discovery-rejects">
-                  {rejected.map((r, i) => (
-                    <li key={`${r.symbol ?? "r"}-${i}`}>
-                      {r.symbol ?? "—"} —{" "}
-                      {r.primary_reason || r.reason || "filtered"}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          );
-        })()}
-
-        <div className="action-card-row" aria-label="Manual controls">
+        <div className="action-card-row action-row-compact" aria-label="Manual controls">
           <button
             type="button"
             className="action-card"
@@ -919,9 +1037,7 @@ export function TradingCockpit({
               })
             }
           >
-            <span className="action-card-kicker">1 · Feed</span>
             <strong>Update prices</strong>
-            <span className="action-card-hint">Download 1m/5m candles</span>
           </button>
           <button
             type="button"
@@ -934,13 +1050,10 @@ export function TradingCockpit({
               })
             }
           >
-            <span className="action-card-kicker">2 · Brain</span>
             <strong>Re-score now</strong>
-            <span className="action-card-hint">Judge setups on fresh bars</span>
           </button>
           {portfolioId ? (
             <div className="action-card mode-card">
-              <span className="action-card-kicker">Practice</span>
               <div className="mode-seg">
                 <button
                   type="button"
@@ -977,9 +1090,6 @@ export function TradingCockpit({
                   Auto enter
                 </button>
               </div>
-              <span className="action-card-hint">
-                {mode === "coaching" ? "Take required" : "Enters when clear"}
-              </span>
             </div>
           ) : null}
         </div>
@@ -995,11 +1105,13 @@ export function TradingCockpit({
         <div className="cockpit-head">
           <h2 style={{ marginTop: 0 }}>Markets</h2>
           <span className="muted-note">
-            {cockpit.current_market ?? "Rotating"} · tap a tile
+            {scanning
+              ? `Live sweep · ${cockpit.current_market ?? "…"}`
+              : `${cockpit.wall.length} on desk · tap a tile`}
           </span>
         </div>
         <div className="market-wall">
-          {cockpit.wall.length === 0 ? (
+          {wallSorted.length === 0 ? (
             <button
               type="button"
               className="action-card"
@@ -1015,49 +1127,75 @@ export function TradingCockpit({
               <span className="action-card-hint">Update prices first</span>
             </button>
           ) : (
-            cockpit.wall.map((t) => (
-              <button
-                type="button"
-                key={t.symbol}
-                className={`wall-tile ${selected === t.symbol ? "is-selected" : ""} ${
-                  flash === t.symbol ? "flash" : ""
-                } ${t.stale ? "is-stale" : ""}`}
-                onClick={() => {
-                  setUserPinnedUntil(Date.now() + 45_000);
-                  setSelected(t.symbol);
-                }}
-              >
-                <header>
-                  <strong>{t.symbol}</strong>
-                  <span
-                    className={`fresh-dot ${t.stale ? "is-stale" : "is-fresh"}`}
-                    title={t.stale ? "Stale" : "Fresh"}
-                  />
-                  <span
-                    className={`wall-status status-${t.status.replace(/\s+/g, "-").toLowerCase()}`}
-                  >
-                    {t.status}
-                  </span>
-                </header>
-                <div className="wall-price">
-                  {t.current_price != null ? money(String(t.current_price)) : "—"}
-                  {t.pct_change != null ? (
-                    <span className={t.pct_change >= 0 ? "pnl-pos" : "pnl-neg"}>
-                      {t.pct_change >= 0 ? "+" : ""}
-                      {t.pct_change.toFixed(2)}%
+            wallSorted.map((t) => {
+              const isScanFocus =
+                scanning && cockpit.current_market === t.symbol;
+              const isNew =
+                popSymbols.has(t.symbol) || Boolean(t.newly_discovered);
+              return (
+                <button
+                  type="button"
+                  key={t.symbol}
+                  className={[
+                    "wall-tile",
+                    selected === t.symbol ? "is-selected" : "",
+                    flash === t.symbol ? "flash" : "",
+                    t.stale ? "is-stale" : "",
+                    isScanFocus ? "is-scanning" : "",
+                    isNew ? "is-new-discovery" : "",
+                    t.discovered ? "is-discovered" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={() => {
+                    setUserPinnedUntil(Date.now() + 45_000);
+                    setSelected(t.symbol);
+                  }}
+                >
+                  <header>
+                    <strong>{t.symbol}</strong>
+                    <span
+                      className={`fresh-dot ${t.stale ? "is-stale" : "is-fresh"}`}
+                      title={t.stale ? "Stale" : "Fresh"}
+                    />
+                    <span
+                      className={`wall-status status-${t.status.replace(/\s+/g, "-").toLowerCase()}`}
+                    >
+                      {isScanFocus
+                        ? "Scanning"
+                        : isNew
+                          ? "New"
+                          : t.status}
                     </span>
-                  ) : null}
-                </div>
-                <Sparkline
-                  values={t.sparkline}
-                  highlight={flash === t.symbol}
-                />
-                <div className="wall-meta">
-                  <span>{t.outlook}</span>
-                  <span>{Math.round(t.signal_strength)}</span>
-                </div>
-              </button>
-            ))
+                  </header>
+                  <div className="wall-price">
+                    {t.current_price != null
+                      ? money(String(t.current_price))
+                      : "—"}
+                    {t.pct_change != null ? (
+                      <span
+                        className={t.pct_change >= 0 ? "pnl-pos" : "pnl-neg"}
+                      >
+                        {t.pct_change >= 0 ? "+" : ""}
+                        {t.pct_change.toFixed(2)}%
+                      </span>
+                    ) : null}
+                  </div>
+                  <Sparkline
+                    values={t.sparkline}
+                    highlight={flash === t.symbol || isScanFocus}
+                  />
+                  <div className="wall-meta">
+                    <span>
+                      {t.opportunity_class
+                        ? t.opportunity_class.replaceAll("_", " ")
+                        : t.outlook}
+                    </span>
+                    <span>{Math.round(t.signal_strength)}</span>
+                  </div>
+                </button>
+              );
+            })
           )}
         </div>
       </section>
@@ -1248,225 +1386,84 @@ export function TradingCockpit({
         </div>
       </section>
 
-      <section className="panel rise live-monitor-panel" aria-label="Live monitor">
-        <div className="cockpit-head">
-          <h2 style={{ marginTop: 0 }}>Live monitor</h2>
-          <span
-            className={`status-light ${
-              cockpit.scanner_state === "Delayed"
-                ? "warn"
-                : cockpit.scanner_state === "Scanning" || feedOk
-                  ? "ok"
-                  : "warn"
-            }`}
-          >
-            {cockpit.scanner_state === "Scanning"
-              ? `Checking ${cockpit.current_market ?? "…"}`
-              : cockpit.scanner_state === "Paused"
-                ? "Paused"
-                : cockpit.scanner_state === "Failed"
-                  ? "Scan failed — check worker"
-                  : cockpit.scanner_state === "Delayed"
-                    ? "Scan delayed — worker catching up"
-                    : nextScanSec != null && nextScanSec <= 0
-                      ? "Next pass due"
-                      : nextScanSec != null
-                        ? `Next pass ${fmtCountdown(nextScanSec)}`
-                        : "Running"}
-          </span>
-        </div>
-        <div className="status-chip-row live-monitor-strip">
-          {cockpit.doing.map((d, i) => (
-            <span key={`${d.text}-${i}`} className={`status-chip tone-${d.tone === "info" ? "neutral" : d.tone}`}>
-              <i aria-hidden />
-              {d.text}
-            </span>
-          ))}
-          <span className="status-chip tone-neutral">
-            Beat {beatCount || 1}
-          </span>
-          {mode === "coaching" ? (
-            <span className="status-chip tone-warn" title="Coaching mode does not auto-enter trades">
-              Coaching — no auto entries
-            </span>
-          ) : (
-            <span className="status-chip tone-ok">Automatic Practice</span>
-          )}
-        </div>
-
-        {(cockpit.rejection_summary?.length ?? 0) > 0 ||
-        (cockpit.rejected_live?.length ?? 0) > 0 ||
-        (cockpit.watches?.length ?? 0) > 0 ? (
-          <div className="live-activity-boards" aria-label="Live watching and rejects">
-            <div className="live-activity-col">
-              <h3 className="live-activity-title">Watching now</h3>
-              {(cockpit.watches ?? []).filter((w) =>
-                ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
-              ).length === 0 ? (
-                <p className="muted-note">Nothing on watch this pass.</p>
-              ) : (
-                <ul className="live-activity-list">
-                  {(cockpit.watches ?? [])
-                    .filter((w) =>
-                      ["Watching", "Risk Review", "Evaluating"].includes(w.stage_raw),
-                    )
-                    .slice(0, 10)
-                    .map((w) => (
-                      <li key={w.id}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setUserPinnedUntil(Date.now() + 45_000);
-                            setSelected(w.symbol);
-                          }}
-                        >
-                          <strong>{w.symbol}</strong>
-                          <span>{w.stage_raw}</span>
-                          <em>{w.why || w.waiting_for || w.narrative}</em>
-                        </button>
-                      </li>
-                    ))}
-                </ul>
-              )}
-            </div>
-            <div className="live-activity-col">
-              <h3 className="live-activity-title">Rejected this pass — why</h3>
-              {(cockpit.rejection_summary?.length ?? 0) > 0 ? (
-                <ul className="live-activity-list rejects-tally">
-                  {cockpit.rejection_summary!.map((r) => (
-                    <li key={r.code}>
-                      <strong>{r.count}×</strong>
-                      <em>{r.why}</em>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {(cockpit.rejected_live?.length ?? 0) > 0 ? (
-                <ul className="live-activity-list">
-                  {cockpit.rejected_live!.slice(0, 12).map((r, i) => (
-                    <li key={`${r.symbol}-${i}`}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUserPinnedUntil(Date.now() + 45_000);
-                          setSelected(r.symbol);
-                        }}
-                      >
-                        <strong>{r.symbol}</strong>
-                        <span>{r.stage}</span>
-                        <em>{r.why}</em>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (cockpit.rejection_summary?.length ?? 0) === 0 ? (
-                <p className="muted-note">No rejects logged for the latest pass yet.</p>
-              ) : null}
-            </div>
+      <section className="panel rise desk-activity" aria-label="Activity">
+        <div className="live-activity-boards desk-activity-boards">
+          <div className="live-activity-col">
+            <h3 className="live-activity-title">Watching</h3>
+            {watchingList.length === 0 ? (
+              <p className="muted-note">Nothing on watch.</p>
+            ) : (
+              <ul className="live-activity-list">
+                {watchingList.slice(0, 6).map((w) => (
+                  <li key={w.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserPinnedUntil(Date.now() + 45_000);
+                        setSelected(w.symbol);
+                      }}
+                    >
+                      <strong>{w.symbol}</strong>
+                      <span>{w.stage_raw}</span>
+                      <em>{w.why || w.waiting_for}</em>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        ) : null}
-
-        <div className="live-monitor-grid" role="list">
-          {(cockpit.monitor?.length ? cockpit.monitor : cockpit.wall.map((t) => ({
-            symbol: t.symbol,
-            status: t.status,
-            phase: t.stale ? "stale" : "idle",
-            price: t.current_price,
-            pct_change: t.pct_change,
-            outlook: t.outlook,
-            signal_strength: t.signal_strength,
-            timeframe: t.timeframe,
-            stale: t.stale,
-            market_data_at: t.market_data_at,
-            age_seconds: ageSeconds(t.market_data_at, now),
-            last_analyzed_at: t.last_analyzed_at,
-            analyzed_age_seconds: ageSeconds(t.last_analyzed_at, now),
-            focus: t.symbol === cockpit.current_market,
-          }))).map((row) => {
-            const age =
-              now == null
-                ? row.age_seconds
-                : ageSeconds(row.market_data_at, now);
-            const checked =
-              now == null
-                ? row.analyzed_age_seconds
-                : ageSeconds(row.last_analyzed_at, now);
-            return (
-              <button
-                type="button"
-                key={row.symbol}
-                role="listitem"
-                className={`live-monitor-row phase-${row.phase}${row.focus ? " is-focus" : ""}${selected === row.symbol ? " is-selected" : ""}`}
-                onClick={() => {
-                  setUserPinnedUntil(Date.now() + 45_000);
-                  setSelected(row.symbol);
-                }}
-              >
-                <header>
-                  <strong>{row.symbol}</strong>
-                  <span className={`fresh-dot ${row.stale ? "is-stale" : "is-fresh"}`} />
-                  <span className="live-monitor-status">{row.status}</span>
-                </header>
-                <div className="live-monitor-price">
-                  {row.price != null ? money(String(row.price)) : "—"}
-                  {row.pct_change != null ? (
-                    <span className={row.pct_change >= 0 ? "pnl-pos" : "pnl-neg"}>
-                      {row.pct_change >= 0 ? "+" : ""}
-                      {row.pct_change.toFixed(2)}%
-                    </span>
-                  ) : null}
-                </div>
-                <div className="live-monitor-meta">
-                  <span>{row.timeframe ?? "—"}</span>
-                  <span className="countdown">
-                    {age == null ? "—" : age < 120 ? `${age}s` : `${Math.floor(age / 60)}m`}
-                  </span>
-                  <span>
-                    {checked == null
-                      ? "unchecked"
-                      : checked < 120
-                        ? `seen ${checked}s`
-                        : `seen ${Math.floor(checked / 60)}m`}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="panel rise decision-live-pane" aria-label="Decided">
-        <div className="cockpit-head">
-          <h2 style={{ marginTop: 0 }}>Decided</h2>
-          <div className="decision-live-meta">
-            <span className={`status-chip ${beatFresh ? "tone-ok" : "tone-warn"}`}>
-              <i aria-hidden />
-              {beatFresh ? "Live" : "Catching up"}
-            </span>
-            <span className="muted-note countdown">
-              Ages tick every second
-            </span>
+          <div className="live-activity-col">
+            <h3 className="live-activity-title">Scan &amp; discovery log</h3>
+            {activityLog.length === 0 ? (
+              <p className="muted-note">Log fills as Argus scans and discovers.</p>
+            ) : (
+              <ul className="live-activity-list desk-log-list">
+                {activityLog.map((d) => (
+                  <li key={d.id} className={`tone-${d.tone}`}>
+                    <button
+                      type="button"
+                      disabled={!d.symbol}
+                      onClick={() => {
+                        if (!d.symbol) return;
+                        setUserPinnedUntil(Date.now() + 45_000);
+                        setSelected(d.symbol);
+                      }}
+                    >
+                      <strong>
+                        {d.at
+                          ? formatAgeLabel(new Date(d.at).toISOString(), now)
+                          : "—"}
+                      </strong>
+                      <em>{d.text}</em>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="live-activity-col">
+            <h3 className="live-activity-title">Filtered</h3>
+            {(cockpit.rejection_summary?.length ?? 0) === 0 &&
+            (md?.rejected_sample?.length ?? 0) === 0 ? (
+              <p className="muted-note">No filters this pass.</p>
+            ) : (
+              <ul className="live-activity-list rejects-tally">
+                {(cockpit.rejection_summary ?? []).slice(0, 5).map((r) => (
+                  <li key={r.code}>
+                    <strong>{r.count}×</strong>
+                    <em>{r.why}</em>
+                  </li>
+                ))}
+                {(md?.rejected_sample ?? []).slice(0, 4).map((r, i) => (
+                  <li key={`d-${r.symbol ?? i}`}>
+                    <strong>{r.symbol ?? "—"}</strong>
+                    <em>{r.primary_reason || r.reason || "filtered"}</em>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
-        <ul className="decided-list">
-          {cockpit.decided.length === 0 ? (
-            <li className="muted-note">None yet this session</li>
-          ) : (
-            cockpit.decided.slice(0, 16).map((d) => (
-              <li key={d.id} className={`tone-${d.tone}`}>
-                <div className="decision-when-stack">
-                  <span className="countdown decision-age" title={formatTimestamp(d.at)}>
-                    {formatAgeLabel(d.at, now)}
-                  </span>
-                  <time dateTime={d.at} className="decision-when-abs">
-                    {formatTimestamp(d.at)}
-                  </time>
-                </div>
-                <span>{d.text}</span>
-              </li>
-            ))
-          )}
-        </ul>
       </section>
 
       <details className="panel rise tech-panel">
@@ -1487,6 +1484,11 @@ export function TradingCockpit({
           <span className="status-chip tone-neutral">
             At risk {displayAccount.inTrades != null ? money(displayAccount.inTrades) : "—"}
           </span>
+          {md ? (
+            <span className="status-chip tone-neutral">
+              Discovery {md.markets_scanned ?? 0} scanned · {md.rejected_count ?? 0} rejected
+            </span>
+          ) : null}
         </div>
         <details className="developer-info">
           <summary>Developer</summary>
@@ -1498,6 +1500,7 @@ export function TradingCockpit({
                 scan_progress: cockpit.scan_progress,
                 next_scan_at: cockpit.next_scan_at,
                 market_data_at: cockpit.market_data_at,
+                market_discovery: md,
               },
               null,
               2,

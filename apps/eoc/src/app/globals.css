@@ -1848,6 +1848,151 @@ table.data th {
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+/* Live desk — clearer scan motion, less chrome */
+.desk-simplified .dial-row-compact {
+  justify-content: flex-start;
+  gap: 0.75rem;
+}
+.desk-simplified .action-row-compact {
+  margin-top: 0.45rem;
+}
+.desk-simplified .action-row-compact .action-card {
+  padding: 0.55rem 0.7rem;
+  min-height: auto;
+}
+.desk-simplified .action-row-compact .action-card-kicker,
+.desk-simplified .action-row-compact .action-card-hint {
+  display: none;
+}
+
+.scan-stage {
+  margin: 0.55rem 0 0.35rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-elevated) 88%, var(--accent) 12%);
+  position: relative;
+  overflow: hidden;
+}
+.scan-stage.is-scanning {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.scan-stage.is-scanning::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 45%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: scan-sweep 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+.scan-stage-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.85rem;
+  position: relative;
+  z-index: 1;
+}
+.scan-stage-kicker {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.scan-stage-symbol {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.scan-stage-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.scan-stage-bar {
+  margin-top: 0.55rem;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 80%, transparent);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+.scan-stage-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.45s ease;
+}
+.scan-stage-beam {
+  margin: 0.45rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  position: relative;
+  z-index: 1;
+}
+.scan-stage-beam em {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.wall-tile.is-scanning {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--paper-elevated));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: tile-scan-pulse 1.1s ease-in-out infinite;
+  z-index: 1;
+}
+.wall-tile.is-new-discovery {
+  animation: tile-discovery-pop 0.85s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
+  background: color-mix(in srgb, var(--ok-soft) 55%, var(--paper-elevated));
+}
+.wall-tile.is-discovered:not(.is-new-discovery):not(.is-scanning) {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+
+.desk-activity-boards {
+  margin-top: 0;
+}
+.desk-log-list button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.desk-log-list .tone-ok em { color: var(--ok); }
+.desk-log-list .tone-warn em { color: var(--warn); }
+.desk-log-list .tone-bad em { color: var(--bad); }
+
+@keyframes scan-sweep {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+@keyframes tile-scan-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+@keyframes tile-discovery-pop {
+  0% { transform: scale(0.86); opacity: 0.35; }
+  60% { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-stage.is-scanning::after,
+  .wall-tile.is-scanning,
+  .wall-tile.is-new-discovery {
+    animation: none;
+  }
+}
 .action-card {
   text-align: left;
   border: 1px solid var(--line);

@@ -13,6 +13,12 @@ export type CockpitWallTile = {
   timeframe: string | null;
   market_data_at: string | null;
   stale: boolean;
+  /** True when symbol came from Coinbase dynamic discovery (not core desk). */
+  discovered?: boolean;
+  discovery_source?: string | null;
+  opportunity_class?: string | null;
+  /** Freshly promoted this discovery cycle. */
+  newly_discovered?: boolean;
 };
 
 export type CockpitChecklistItem = {

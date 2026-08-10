@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Added
 
+- Live Desk clarity: discovery tiles pop in and log when new coins hit Radar; stronger real-time scan spotlight; denser panels collapsed into Watching / Scan log / Filtered (`live-monitor-v2.37`)
 - Dynamic Coinbase USD market discovery: periodically lists active USD products, ranks sudden interest, filters liquidity/spread/volatility/chase risk, promotes a capped set into Alpha Radar; compact Market Discovery card on Live Desk; Academy tracks discovery outcomes (`live-monitor-v2.36`)
 - Argus Academy learning loop: institutional memory consults before automatic paper entries (EXECUTE/WAIT/AVOID); decision quality independent of P&L; PAPER detectors (momentum, breakout, dip/pullback, range, peak protection); readiness uses % drawdown + memory reuse (`live-monitor-v2.33`)
 - Argus Academy surface restored on nav + `/paper-training` (learning desk, capital recovery, Advanced Learning) (`live-monitor-v2.34`)

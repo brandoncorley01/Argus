@@ -1287,6 +1287,20 @@ class MarketScanService:
         open_count, open_position_symbols = self._founder_open_positions(portfolio_id)
         open_syms = set(open_position_symbols)
         wall: list[dict[str, Any]] = []
+        discovery_svc = None
+        newly_set: set[str] = set()
+        try:
+            from app.services.market_discovery_service import MarketDiscoveryService
+
+            discovery_svc = MarketDiscoveryService(self.db)
+            snap = discovery_svc.latest_snapshot()
+            newly_set = {
+                str(n.get("symbol") if isinstance(n, dict) else n).upper()
+                for n in (snap.get("newly_discovered") or [])
+                if (isinstance(n, dict) and n.get("symbol")) or isinstance(n, str)
+            }
+        except Exception:  # noqa: BLE001
+            discovery_svc = None
         for inst in instruments:
             rows, timeframe, close_time = self._load_bar_rows(inst.id, limit=30)
             closes = [float(r.close) for r in rows]
@@ -1302,6 +1316,12 @@ class MarketScanService:
                     outlook = "Rising"
                 elif cand.bias == "Bearish":
                     outlook = "Falling"
+            enrich: dict[str, Any] = {}
+            if discovery_svc is not None:
+                try:
+                    enrich = discovery_svc.enrichment_for(inst.symbol)
+                except Exception:  # noqa: BLE001
+                    enrich = {}
             wall.append(
                 {
                     "symbol": inst.symbol,
@@ -1323,6 +1343,10 @@ class MarketScanService:
                         close_time is None
                         or (now - close_time) > STALE_BAR
                     ),
+                    "discovered": bool(enrich.get("discovered_market")),
+                    "discovery_source": enrich.get("discovery_source"),
+                    "opportunity_class": enrich.get("discovery_opportunity_class"),
+                    "newly_discovered": inst.symbol.upper() in newly_set,
                 }
             )
 
