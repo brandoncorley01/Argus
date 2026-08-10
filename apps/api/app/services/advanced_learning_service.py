@@ -627,6 +627,27 @@ class AdvancedLearningService:
             ),
         }
 
+    def discovery_learning_summary(self, portfolio_id: uuid.UUID) -> dict[str, Any]:
+        """Feed dynamic Coinbase discovery outcomes into Argus Academy (PAPER)."""
+        try:
+            from app.services.market_discovery_service import MarketDiscoveryService
+
+            return MarketDiscoveryService(self.db).academy_metrics(
+                portfolio_id=portfolio_id
+            )
+        except Exception:  # noqa: BLE001
+            return {
+                "markets_scanned": 0,
+                "newly_discovered_count": 0,
+                "promoted_count": 0,
+                "rejected_count": 0,
+                "trades_from_discovery": 0,
+                "net_pnl_from_discovery": "0.00",
+                "discovery_pattern_performance": [],
+                "paper_only": True,
+                "volume_never_triggers_trade": True,
+            }
+
     def _relative_volume(self, symbol: str) -> dict[str, Any] | None:
         """Backward-compatible alias for market quality metrics."""
         return self._market_quality(symbol)
@@ -1273,6 +1294,7 @@ class AdvancedLearningService:
             "strategy_by_regime": metrics["strategy_by_regime"],
             "pattern_performance": metrics["pattern_performance"],
             "high_volume_learning_summary": volume,
+            "market_discovery_learning": self.discovery_learning_summary(portfolio_id),
             "recent_trade_lessons": metrics["recent_lessons"],
             "learning_milestones": milestones,
             "good_vs_lucky": metrics["good_vs_lucky"],

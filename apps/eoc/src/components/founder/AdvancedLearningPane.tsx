@@ -61,6 +61,27 @@ export type AdvancedLearningPaneData = {
       relative_volume: number | null;
     }>;
   };
+  market_discovery_learning?: {
+    markets_scanned?: number;
+    newly_discovered_count?: number;
+    newly_discovered?: string[];
+    promoted_count?: number;
+    promoted_to_radar?: string[];
+    rejected_count?: number;
+    rejected_sample?: Array<{
+      symbol?: string;
+      primary_reason?: string;
+    }>;
+    trades_from_discovery?: number;
+    net_pnl_from_discovery?: string;
+    discovery_pattern_performance?: Array<{
+      pattern: string;
+      trades: number;
+      net_pnl: string;
+    }>;
+    paper_only?: boolean;
+    volume_never_triggers_trade?: boolean;
+  };
   recent_trade_lessons?: Array<{
     id: string;
     at: string;
@@ -158,6 +179,7 @@ export function AdvancedLearningPane({
   const day = data.learning_day ?? 1;
   const need = data.required_days ?? 20;
   const volume = data.high_volume_learning_summary;
+  const discovery = data.market_discovery_learning;
   const milestones = data.learning_milestones ?? [];
   const lessons = data.recent_trade_lessons ?? [];
   const board = data.strategy_leaderboard ?? [];
@@ -464,6 +486,65 @@ export function AdvancedLearningPane({
       ) : (
         <p className="muted-note">Missed-opportunity tracking fills from radar rejects.</p>
       )}
+
+      <h3>Market Discovery Learning</h3>
+      <p className="muted-note">
+        Dynamic Coinbase USD discovery feeds Alpha Radar; outcomes stay PAPER-only.
+        Volume never triggers a trade
+        {discovery?.volume_never_triggers_trade === false ? " (misconfigured)" : " ✓"}.
+      </p>
+      <div className="summary-grid" style={{ marginTop: "0.5rem" }}>
+        <div className="summary-card">
+          <span className="metric-label">Markets scanned</span>
+          <strong>{discovery?.markets_scanned ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Newly discovered</span>
+          <strong>{discovery?.newly_discovered_count ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Promoted to Radar</span>
+          <strong>{discovery?.promoted_count ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Rejected</span>
+          <strong>{discovery?.rejected_count ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Discovery trades</span>
+          <strong>{discovery?.trades_from_discovery ?? "—"}</strong>
+        </div>
+        <div className="summary-card">
+          <span className="metric-label">Discovery net P&amp;L</span>
+          <strong className={pnlClass(discovery?.net_pnl_from_discovery)}>
+            {moneyPnl(discovery?.net_pnl_from_discovery)}
+          </strong>
+        </div>
+      </div>
+      {(discovery?.discovery_pattern_performance?.length ?? 0) > 0 ? (
+        <ul className="closed-lessons">
+          {discovery!.discovery_pattern_performance!.slice(0, 6).map((p) => (
+            <li key={p.pattern}>
+              {p.pattern.replaceAll("_", " ")} — {p.trades} trades ·{" "}
+              <span className={pnlClass(p.net_pnl)}>{moneyPnl(p.net_pnl)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted-note">
+          Pattern P&amp;L appears after closed paper trades on non-core discovered markets.
+        </p>
+      )}
+      {(discovery?.rejected_sample?.length ?? 0) > 0 ? (
+        <ul className="closed-lessons">
+          {discovery!.rejected_sample!.slice(0, 5).map((r, i) => (
+            <li key={`${r.symbol ?? "x"}-${i}`}>
+              Rejected {r.symbol ?? "—"}
+              {r.primary_reason ? ` — ${r.primary_reason}` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       <h3>Recent Trade Lessons</h3>
       {lessons.length === 0 ? (

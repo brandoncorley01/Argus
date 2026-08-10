@@ -279,7 +279,13 @@ class TradingIntelligenceService:
                 "planned_stop": str(cand.stop_loss) if cand.stop_loss is not None else None,
                 "planned_target": str(cand.take_profit) if cand.take_profit is not None else None,
                 "trade_pattern": cand_detail.get("trade_pattern")
+                or cand_detail.get("discovery_opportunity_class")
                 or cand_detail.get("pattern"),
+                "discovery_source": cand_detail.get("discovery_source"),
+                "discovery_opportunity_class": cand_detail.get(
+                    "discovery_opportunity_class"
+                ),
+                "discovered_market": bool(cand_detail.get("discovered_market")),
                 "institutional_memory": memory_consult,
                 "memory_consult": memory_consult,
                 "observational_only": True,

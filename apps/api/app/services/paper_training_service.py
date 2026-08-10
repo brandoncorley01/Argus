@@ -583,6 +583,25 @@ class PaperTrainingService:
             if (cand.bias or "") != "Bullish":
                 # Long-only: never convert bearish/neutral probes into buys.
                 continue
+            cand_detail = dict(cand.detail or {})
+            # Do not chase discovery exhaustion / late highs (PAPER discipline).
+            disc_class = str(
+                cand_detail.get("discovery_opportunity_class")
+                or cand_detail.get("trade_pattern")
+                or ""
+            )
+            if disc_class in {"peak_exhaustion", "late_stage_chase"}:
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"Discovery avoid chase on {cand.symbol}",
+                    detail=(
+                        f"Labeled {disc_class.replace('_', ' ')} — "
+                        "waiting for pullback/retest, not buying the high."
+                    ),
+                    reason_code="discovery_chase_avoid",
+                )
+                continue
             # --- Institutional memory consult BEFORE paper entry (PAPER only) ---
             regime = intelligence.infer_market_regime(cand.symbol)
             delta = intelligence._paper_adaptive_delta(
@@ -604,7 +623,6 @@ class PaperTrainingService:
                 risk_reward=rr,
                 paper_confidence_delta=delta,
             )
-            cand_detail = dict(cand.detail or {})
             vol_cond = "normal"
             if factors.get("volume_ok") is True or cand_detail.get("relative_volume_high"):
                 vol_cond = "elevated"
@@ -621,6 +639,7 @@ class PaperTrainingService:
                 volume_condition=vol_cond,
                 trade_pattern=str(
                     cand_detail.get("trade_pattern")
+                    or cand_detail.get("discovery_opportunity_class")
                     or cand_detail.get("pattern")
                     or ""
                 )
@@ -816,6 +835,11 @@ class PaperTrainingService:
                 "take_profit": str(target),
                 "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else str(price),
                 "institutional_memory": memory_consult,
+                "discovery_source": (cand.detail or {}).get("discovery_source"),
+                "discovery_opportunity_class": (cand.detail or {}).get(
+                    "discovery_opportunity_class"
+                ),
+                "discovered_market": bool((cand.detail or {}).get("discovered_market")),
             },
         )
         try:

@@ -295,6 +295,46 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def run_market_discovery(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Discover Coinbase USD markets → filter → promote into Alpha Radar universe."""
+
+    def _cycle() -> dict[str, Any]:
+        factory = get_session_factory(ctx["settings"])
+        session = factory()
+        try:
+            from app.services.market_discovery_service import MarketDiscoveryService
+
+            try:
+                snap = MarketDiscoveryService(session).run_discovery_cycle(
+                    refresh_prices=True
+                )
+                return {
+                    "ok": True,
+                    "markets_scanned": snap.get("markets_scanned"),
+                    "promoted": len(snap.get("promoted_to_radar") or []),
+                    "newly_discovered": len(snap.get("newly_discovered") or []),
+                    "rejected": len(snap.get("rejected") or []),
+                    "paper_only": True,
+                }
+            except Exception as exc:  # noqa: BLE001
+                _open_failure_incident(
+                    ctx,
+                    title="Market discovery cycle failed",
+                    description=str(exc),
+                    key="market-discovery:cycle",
+                )
+                return {"ok": False, "error": str(exc)[:240]}
+        finally:
+            session.close()
+
+    return _run_logged(
+        ctx,
+        component=OperationalComponent.MARKET_DATA,
+        label="market discovery",
+        fn=_cycle,
+    )
+
+
 async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
     def _cycle() -> dict[str, Any]:
         factory = get_session_factory(ctx["settings"])
@@ -361,9 +401,10 @@ async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def run_runtime_catch_up(ctx: dict[str, Any]) -> dict[str, Any]:
-    """After host sleep/startup: refresh prices, then force a scan + exits/entries."""
+    """After host sleep/startup: discover markets, refresh prices, force scan."""
     reason = str(ctx.pop("catch_up_reason", "downtime"))
     gap_seconds = ctx.pop("catch_up_gap_seconds", None)
+    discovery = await run_market_discovery(ctx)
     prices = await run_market_price_refresh(ctx)
     ctx["force_scan"] = True
     scan = await run_market_scan_cycle(ctx)
@@ -371,6 +412,7 @@ async def run_runtime_catch_up(ctx: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "reason": reason,
         "gap_seconds": gap_seconds,
+        "discovery": discovery,
         "prices": prices,
         "scan": scan,
     }
@@ -379,10 +421,17 @@ async def run_runtime_catch_up(ctx: dict[str, Any]) -> dict[str, Any]:
 class WorkerSettings:
     """ARQ worker settings for market ops."""
 
-    functions = [run_market_scan_cycle, run_market_price_refresh, run_runtime_catch_up]
+    functions = [
+        run_market_scan_cycle,
+        run_market_price_refresh,
+        run_market_discovery,
+        run_runtime_catch_up,
+    ]
     cron_jobs = [
         cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
         cron(run_market_scan_cycle, minute=set(range(60))),
+        # Broad Coinbase USD discovery every 10 minutes (PAPER universe only).
+        cron(run_market_discovery, minute={0, 10, 20, 30, 40, 50}),
     ]
     on_startup = startup
     on_shutdown = shutdown

@@ -1809,6 +1809,45 @@ table.data th {
   gap: 0.65rem;
   margin: 0.35rem 0 0.5rem;
 }
+
+.market-discovery-card {
+  margin: 0.55rem 0 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+}
+.market-discovery-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+.market-discovery-head strong {
+  font-size: 0.95rem;
+}
+.market-discovery-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.market-discovery-metrics b {
+  color: var(--text);
+  font-weight: 600;
+}
+.market-discovery-line {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+}
+.market-discovery-rejects {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 .action-card {
   text-align: left;
   border: 1px solid var(--line);

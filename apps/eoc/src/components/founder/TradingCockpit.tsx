@@ -847,6 +847,66 @@ export function TradingCockpit({
           />
         </div>
 
+        {(() => {
+          const md = cockpit.market_discovery;
+          if (!md) return null;
+          const newly = (md.newly_discovered ?? [])
+            .map((n) => (typeof n === "string" ? n : n.symbol))
+            .filter(Boolean)
+            .slice(0, 4);
+          const promoted = (md.promoted_to_radar ?? []).slice(0, 4);
+          const rejected = (md.rejected_sample ?? []).slice(0, 3);
+          return (
+            <div className="market-discovery-card" aria-label="Market Discovery">
+              <div className="market-discovery-head">
+                <strong>Market Discovery</strong>
+                <span className="muted-note">Coinbase USD · PAPER</span>
+              </div>
+              <div className="market-discovery-metrics">
+                <span>
+                  Scanned <b>{md.markets_scanned ?? 0}</b>
+                </span>
+                <span>
+                  Active <b>{md.active_opportunities ?? 0}</b>
+                </span>
+                <span>
+                  Promoted <b>{(md.promoted_to_radar ?? []).length}</b>
+                </span>
+                <span>
+                  Rejected <b>{md.rejected_count ?? 0}</b>
+                </span>
+              </div>
+              {newly.length > 0 ? (
+                <p className="market-discovery-line">
+                  New movers: {newly.join(", ")}
+                </p>
+              ) : (
+                <p className="market-discovery-line muted-note">
+                  No new discovery promotions this cycle.
+                </p>
+              )}
+              {promoted.length > 0 ? (
+                <p className="market-discovery-line">
+                  On Radar: {promoted.join(", ")}
+                  {(md.promoted_to_radar?.length ?? 0) > promoted.length
+                    ? "…"
+                    : ""}
+                </p>
+              ) : null}
+              {rejected.length > 0 ? (
+                <ul className="market-discovery-rejects">
+                  {rejected.map((r, i) => (
+                    <li key={`${r.symbol ?? "r"}-${i}`}>
+                      {r.symbol ?? "—"} —{" "}
+                      {r.primary_reason || r.reason || "filtered"}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          );
+        })()}
+
         <div className="action-card-row" aria-label="Manual controls">
           <button
             type="button"

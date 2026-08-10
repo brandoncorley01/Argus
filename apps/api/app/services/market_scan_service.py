@@ -197,7 +197,36 @@ class MarketScanService:
                 "Start once; it keeps scanning until you Stop. "
                 "Home reads persisted cycles only — it does not invent activity."
             ),
+            "market_discovery": self._discovery_status(),
         }
+
+    def _discovery_status(self) -> dict[str, Any]:
+        try:
+            from app.services.market_discovery_service import MarketDiscoveryService
+
+            snap = MarketDiscoveryService(self.db).latest_snapshot()
+            rejected = snap.get("rejected") or []
+            return {
+                "markets_scanned": snap.get("markets_scanned") or 0,
+                "stats_probed": snap.get("stats_probed"),
+                "active_opportunities": len(snap.get("active_opportunities") or []),
+                "active_opportunity_rows": (snap.get("active_opportunities") or [])[:8],
+                "newly_discovered": snap.get("newly_discovered") or [],
+                "promoted_to_radar": snap.get("promoted_to_radar") or [],
+                "rejected_count": len(rejected),
+                "rejected_sample": rejected[:8],
+                "generated_at": snap.get("generated_at"),
+                "paper_only": True,
+            }
+        except Exception:  # noqa: BLE001
+            return {
+                "markets_scanned": 0,
+                "active_opportunities": 0,
+                "newly_discovered": [],
+                "promoted_to_radar": [],
+                "rejected_count": 0,
+                "paper_only": True,
+            }
 
     @staticmethod
     def _next_scan_at(
@@ -1409,6 +1438,7 @@ class MarketScanService:
             ),
             "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
             "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
+            "market_discovery": self._discovery_status(),
         }
 
     def _founder_watch_plan(
@@ -1822,6 +1852,30 @@ class MarketScanService:
         detail: dict[str, Any] | None = None,
         strategy_key: str | None = None,
     ) -> MarketScanCandidate:
+        merged = dict(detail or {})
+        try:
+            from app.services.market_discovery_service import MarketDiscoveryService
+
+            enrichment = MarketDiscoveryService(self.db).enrichment_for(symbol)
+            for k, v in enrichment.items():
+                merged.setdefault(k, v)
+            # Discovery chase/exhaustion: keep visible but do not promote as Watching.
+            opp = str(merged.get("discovery_opportunity_class") or "")
+            if (
+                stage in {"Watching", "Risk Review", "Evaluating"}
+                and opp in {"peak_exhaustion", "late_stage_chase"}
+                and merged.get("discovery_source") == "coinbase_dynamic"
+            ):
+                stage = "Rejected"
+                risk_status = "blocked"
+                reason_code = reason_code or opp
+                reason_text = reason_text or (
+                    "Discovery labeled this as exhaustion/chasing — "
+                    "watching for a better entry, not buying the high."
+                )
+                score = min(score, Decimal("35"))
+        except Exception:  # noqa: BLE001
+            pass
         cand = MarketScanCandidate(
             cycle_id=cycle.id,
             symbol=symbol,
@@ -1839,7 +1893,7 @@ class MarketScanService:
             take_profit=take_profit,
             market_data_at=market_data_at,
             evaluated_at=_utcnow(),
-            detail=detail or {},
+            detail=merged,
         )
         self.db.add(cand)
         self.db.flush()

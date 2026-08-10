@@ -92,6 +92,7 @@ class ScanStatusRead(BaseModel):
     possible_trades_found: int | None = None
     next_step: str | None = None
     top_watching: list[dict[str, Any]] | None = None
+    market_discovery: dict[str, Any] | None = None
 
 
 class ScanBarRead(BaseModel):
@@ -163,3 +164,4 @@ class CockpitSnapshotRead(BaseModel):
     decided: list[dict[str, Any]]
     scan_interval_seconds: int
     watch_ttl_seconds: int
+    market_discovery: dict[str, Any] | None = None

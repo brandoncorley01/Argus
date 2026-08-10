@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import InstitutionalRole, User, UserRole
+from app.models.market_intelligence import MarketInstrument
 from app.schemas.market import IngestBatchRequest, OhlcvBarIngest
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthenticatedPrincipal
@@ -135,7 +136,23 @@ class MarketPriceRefreshService:
         """
         principal = self._resolve_actor(actor)
         self.ensure_default_instruments()
-        target = [s.upper() for s in (symbols or list(DEFAULT_SYMBOLS))]
+        if symbols is None:
+            # Dynamic discovery may have activated additional USD markets.
+            active = list(
+                self.db.scalars(
+                    select(MarketInstrument)
+                    .where(MarketInstrument.is_active.is_(True))
+                    .order_by(MarketInstrument.symbol.asc())
+                )
+            )
+            target = [i.symbol.upper() for i in active] or list(DEFAULT_SYMBOLS)
+        else:
+            target = [s.upper() for s in symbols]
+        # Cap refresh size so discovery cannot blow the 2-minute price cron.
+        if len(target) > 48:
+            core = [s for s in DEFAULT_SYMBOLS if s in target]
+            extra = [s for s in target if s not in core][: 48 - len(core)]
+            target = list(core) + extra
         frames = timeframes or REFRESH_TIMEFRAMES
         now = datetime.now(UTC).replace(microsecond=0)
         accepted = 0

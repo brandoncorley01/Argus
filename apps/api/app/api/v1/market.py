@@ -309,6 +309,7 @@ def scan_status(
             possible_trades_found=snap.get("possible_trades_found"),
             next_step=snap.get("next_step"),
             top_watching=snap.get("top_watching"),
+            market_discovery=snap.get("market_discovery"),
         )
     except Exception as exc:  # noqa: BLE001 — never blank Home on status shape issues
         raise HTTPException(

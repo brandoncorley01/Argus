@@ -113,4 +113,33 @@ export type CockpitSnapshot = {
   last_cycle_completed_at?: string | null;
   scan_interval_seconds: number;
   watch_ttl_seconds: number;
+  market_discovery?: {
+    markets_scanned?: number;
+    stats_probed?: number | null;
+    active_opportunities?: number;
+    active_opportunity_rows?: Array<{
+      symbol?: string;
+      opportunity_class?: string;
+      primary_reason?: string;
+      change_pct?: string;
+    }>;
+    newly_discovered?: Array<
+      | string
+      | {
+          symbol?: string;
+          opportunity_class?: string;
+          primary_reason?: string;
+        }
+    >;
+    promoted_to_radar?: string[];
+    rejected_count?: number;
+    rejected_sample?: Array<{
+      symbol?: string;
+      primary_reason?: string;
+      reason?: string;
+      opportunity_class?: string;
+    }>;
+    generated_at?: string | null;
+    paper_only?: boolean;
+  } | null;
 };
