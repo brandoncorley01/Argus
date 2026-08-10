@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { usePaperLiveOptional } from "@/components/founder/PaperLiveProvider";
 import { moneyPnl, pnlClass } from "@/lib/founder/simple";
 import { todayPnlWindowLabel } from "@/lib/founder/todayPnl";
+
+const BRIEFING_POLL_MS = 15_000;
 
 type Opportunity = {
   symbol: string;
@@ -44,6 +46,7 @@ type Briefing = {
   };
   thinking?: Array<{ text: string; kind?: string }>;
   mode?: string;
+  error?: string;
 };
 
 function statusMeaning(status: string): string {
@@ -62,14 +65,14 @@ function statusMeaning(status: string): string {
 }
 
 export function ExecutiveBriefing({
-  briefing,
+  briefing: initialBriefing = null,
   todayPnl,
   openPositions,
   institutionStatus,
   institutionExplanation,
   institutionFix,
 }: {
-  briefing: Briefing | null;
+  briefing?: Briefing | null;
   todayPnl: number | null;
   openPositions: number;
   institutionStatus: string;
@@ -80,6 +83,39 @@ export function ExecutiveBriefing({
 }) {
   const [open, setOpen] = useState(true);
   const [intelOpen, setIntelOpen] = useState(false);
+  const [briefing, setBriefing] = useState<Briefing | null>(initialBriefing);
+  const [loaded, setLoaded] = useState(Boolean(initialBriefing));
+
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const load = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const res = await fetch("/api/founder/briefing", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(50_000),
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as Briefing;
+        if (cancelled) return;
+        setBriefing(data);
+        setLoaded(true);
+      } catch {
+        /* keep last good briefing */
+      } finally {
+        inFlight = false;
+      }
+    };
+    void load();
+    const id = window.setInterval(load, BRIEFING_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
   const mission = briefing?.trading_mission;
   const cert = briefing?.certification_progress;
   const days = cert?.trading_days_counted ?? mission?.certification_progress?.days ?? 0;
@@ -87,8 +123,11 @@ export function ExecutiveBriefing({
     cert?.required_trading_days ?? mission?.certification_progress?.required ?? 30;
   const summary =
     briefing?.trading_intelligence_summary ?? briefing?.bullets ?? [];
-  const top = briefing?.highest_priority_opportunity;
   const watch = briefing?.watchlist_intelligence;
+  const top =
+    briefing?.highest_priority_opportunity ??
+    watch?.top_opportunities?.[0] ??
+    null;
   const statusWhy =
     (institutionExplanation && institutionExplanation.trim()) ||
     statusMeaning(institutionStatus);
@@ -124,6 +163,7 @@ export function ExecutiveBriefing({
       </button>
       <p className="muted-note" style={{ marginTop: "0.35rem" }}>
         {briefing?.institution_status ?? institutionStatus} · PROVE mode · Live locked
+        {loaded ? "" : " · loading…"}
       </p>
       <p className="institution-status-why" style={{ marginTop: "0.35rem" }}>
         {statusWhy}
@@ -140,11 +180,17 @@ export function ExecutiveBriefing({
               <div className="metric-value" style={{ fontSize: "1.15rem" }}>
                 {institutionStatus}
               </div>
-              <p className="muted-note institution-status-detail" style={{ margin: "0.35rem 0 0" }}>
+              <p
+                className="muted-note institution-status-detail"
+                style={{ margin: "0.35rem 0 0" }}
+              >
                 {statusWhy}
               </p>
               {statusFix ? (
-                <p className="institution-status-fix" style={{ marginTop: "0.45rem" }}>
+                <p
+                  className="institution-status-fix"
+                  style={{ marginTop: "0.45rem" }}
+                >
                   {statusFix}
                 </p>
               ) : null}
@@ -180,20 +226,32 @@ export function ExecutiveBriefing({
 
           <div className="briefing-block">
             <h3>Trading mission</h3>
-            <p>{mission?.trading_objective ?? "Protect capital first; paper only."}</p>
-            <p className="muted-note">{mission?.market_outlook}</p>
-            <p className="muted-note">Risk: {mission?.risk_environment ?? "Unavailable"}</p>
+            <p>
+              {mission?.trading_objective ??
+                "Protect capital first; take only high-confidence paper setups."}
+            </p>
+            <p className="muted-note">
+              {mission?.market_outlook ??
+                (loaded ? "Market outlook unavailable" : "Loading market outlook…")}
+            </p>
+            <p className="muted-note">
+              Risk: {mission?.risk_environment ?? (loaded ? "Unavailable" : "Loading…")}
+            </p>
           </div>
 
           <div className="briefing-block">
             <h3>Trading intelligence</h3>
             <ul className="ops-confidence-list">
               {summary.length > 0 ? (
-                summary.slice(0, 5).map((b, i) => (
+                summary.slice(0, 6).map((b, i) => (
                   <li key={`sum-${i}-${b.slice(0, 32)}`}>{b}</li>
                 ))
               ) : (
-                <li className="muted-note">No closed-paper intelligence yet.</li>
+                <li className="muted-note">
+                  {loaded
+                    ? "No intelligence bullets yet — scans will fill this."
+                    : "Loading paper intelligence…"}
+                </li>
               )}
             </ul>
             {(briefing?.thinking ?? []).slice(0, 3).map((t, i) => (
@@ -211,17 +269,28 @@ export function ExecutiveBriefing({
             {top ? (
               <p>
                 <strong>{top.symbol}</strong> · {top.confidence_label ?? "—"} (
-                {top.confidence?.toFixed?.(0) ?? top.confidence}) · {top.stage} ·{" "}
-                {top.recommendation}
+                {typeof top.confidence === "number"
+                  ? top.confidence.toFixed(0)
+                  : (top.confidence ?? "—")}
+                ) · {top.stage} · {top.recommendation}
               </p>
             ) : (
-              <p className="muted-note">No opportunity currently meets Ready standards.</p>
+              <p className="muted-note">
+                {!loaded
+                  ? "Loading opportunities…"
+                  : (watch?.markets_watching ?? 0) > 0
+                    ? `Watching ${watch?.markets_watching} markets — none Ready yet (${watch?.current_recommendation ?? "WAIT"}).`
+                    : "No opportunity currently meets Ready standards."}
+              </p>
             )}
           </div>
 
           <div className="briefing-block">
             <h3>Founder action required</h3>
-            <p>{briefing?.founder_action_required ?? "None — continue observing."}</p>
+            <p>
+              {briefing?.founder_action_required ??
+                (loaded ? "None — continue observing." : "Loading…")}
+            </p>
           </div>
 
           <details
@@ -231,8 +300,9 @@ export function ExecutiveBriefing({
           >
             <summary>Live Market Intelligence</summary>
             <p className="muted-note">
-              Watching {watch?.markets_watching ?? 0} · Ready {watch?.markets_ready ?? 0} ·
-              Recommendation {watch?.current_recommendation ?? "WAIT"}
+              Watching {watch?.markets_watching ?? 0} · Ready{" "}
+              {watch?.markets_ready ?? 0} · Recommendation{" "}
+              {watch?.current_recommendation ?? "WAIT"}
             </p>
             {(watch?.waiting_conditions ?? []).slice(0, 3).map((w, i) => (
               <p key={`wait-${i}-${w.slice(0, 24)}`} className="muted-note">

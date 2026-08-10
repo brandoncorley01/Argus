@@ -14,6 +14,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Fixed
 
+- Executive Briefing on Home was hardcoded empty (`briefing={null}`); it now loads/polls live briefing with watchlist + discovery context (`live-monitor-v2.40`)
 - Market discovery actually runs on Start Argus: register discovery cron on the health-supervisor worker (the process Start launches) and persist discovery state under repo `runtime/` (`live-monitor-v2.39`)
 - Fix paper portfolio list 500: use SQLAlchemy `case(...)` (not `func.case`) so Home/Academy can load desks (`live-monitor-v2.38`)
 - Cockpit load + capital story: OHLCV bar queries use LIMIT (fixes 15s cockpit 502); Home explains $300→remaining cash via paper fills; auto-enter pauses when cash below notional (`live-monitor-v2.24`)

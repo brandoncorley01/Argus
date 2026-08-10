@@ -797,19 +797,52 @@ class TradingIntelligenceService:
                 else "Recommendation: certification criteria met for review (live still locked)"
             ),
         ]
-        top_opp = watch.get("highest_confidence_opportunity") or {}
-        top_symbol = top_opp.get("symbol", "—")
+        # Always surface live desk / discovery context (not only closed-trade stats).
+        watching_n = int(watch.get("markets_watching") or 0)
+        ready_n = int(watch.get("markets_ready") or 0)
+        bullets.insert(
+            0,
+            f"Watchlist: {watching_n} watching · {ready_n} ready · "
+            f"{watch.get('current_recommendation') or 'WAIT'}",
+        )
+        try:
+            from app.services.market_discovery_service import MarketDiscoveryService
+
+            disc = MarketDiscoveryService(self.db).latest_snapshot()
+            promoted = disc.get("promoted_to_radar") or []
+            newly = disc.get("newly_discovered") or []
+            if promoted or newly:
+                sample = [
+                    (n.get("symbol") if isinstance(n, dict) else n)
+                    for n in (newly or promoted)[:4]
+                ]
+                sample = [s for s in sample if s]
+                bullets.insert(
+                    1,
+                    (
+                        f"Discovery: {len(promoted)} on Radar"
+                        + (f" · new {', '.join(sample)}" if sample else "")
+                    ),
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        # Prefer Ready; otherwise show best Watching so Home is not blank.
+        top_opp = watch.get("highest_confidence_opportunity")
+        if not top_opp:
+            tops = watch.get("top_opportunities") or []
+            top_opp = tops[0] if tops else None
+        top_symbol = (top_opp or {}).get("symbol", "—")
         action_required = mission.get("founder_action_required") or (
             "None — continue observing paper standards."
-            if watch.get("recommendation") == "WAIT"
+            if watch.get("current_recommendation") == "WAIT" or not top_opp
             else f"Review highest-priority opportunity ({top_symbol})."
         )
         return {
-            "bullets": bullets[:5],
+            "bullets": bullets[:6],
             "institution_status": mission.get("institution_status"),
             "trading_mission": mission,
-            "trading_intelligence_summary": bullets[:5],
-            "highest_priority_opportunity": watch.get("highest_confidence_opportunity"),
+            "trading_intelligence_summary": bullets[:6],
+            "highest_priority_opportunity": top_opp,
             "certification_progress": cert,
             "founder_action_required": action_required,
             "watchlist_intelligence": watch,
