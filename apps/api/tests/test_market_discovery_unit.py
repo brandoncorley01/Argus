@@ -9,19 +9,21 @@ from app.services.market_discovery_service import (
 )
 
 
-def test_classify_peak_exhaustion_on_extended_high() -> None:
+def test_classify_peak_exhaustion_only_on_extreme_tip() -> None:
     label = classify_opportunity(
-        last=Decimal("112"),
+        last=Decimal("118.5"),
         open_24h=Decimal("100"),
-        high_24h=Decimal("112.5"),
+        high_24h=Decimal("118.8"),
         low_24h=Decimal("99"),
-        change_pct=Decimal("0.12"),
-        range_pct=Decimal("0.12"),
+        change_pct=Decimal("0.185"),
+        range_pct=Decimal("0.19"),
     )
     assert label == "peak_exhaustion"
 
 
-def test_classify_late_stage_chase() -> None:
+def test_classify_strong_day_near_high_is_breakout_not_rejected() -> None:
+    # Former late_stage_chase zone (~9% up near high) must reach Radar as
+    # breakout/continuation — not invisible "exhaustion".
     label = classify_opportunity(
         last=Decimal("109"),
         open_24h=Decimal("100"),
@@ -29,6 +31,18 @@ def test_classify_late_stage_chase() -> None:
         low_24h=Decimal("99"),
         change_pct=Decimal("0.09"),
         range_pct=Decimal("0.10"),
+    )
+    assert label == "breakout_continuation"
+
+
+def test_classify_late_stage_chase_only_when_extended() -> None:
+    label = classify_opportunity(
+        last=Decimal("113"),
+        open_24h=Decimal("100"),
+        high_24h=Decimal("113.5"),
+        low_24h=Decimal("99"),
+        change_pct=Decimal("0.13"),
+        range_pct=Decimal("0.14"),
     )
     assert label == "late_stage_chase"
 
@@ -69,7 +83,7 @@ def test_classify_breakout_continuation() -> None:
     assert label == "breakout_continuation"
 
 
-def test_rank_score_penalizes_exhaustion() -> None:
+def test_rank_score_penalizes_exhaustion_more_than_late_chase() -> None:
     base = RankedMarket(
         symbol="AAA-USD",
         dollar_volume=Decimal("5000000"),
@@ -85,7 +99,16 @@ def test_rank_score_penalizes_exhaustion() -> None:
         rank_score=Decimal("0"),
     )
     good = rank_score_for(base)
-    bad = rank_score_for(
+    late = rank_score_for(
+        RankedMarket(
+            **{
+                **base.__dict__,
+                "opportunity_class": "late_stage_chase",
+                "rank_score": Decimal("0"),
+            }
+        )
+    )
+    peak = rank_score_for(
         RankedMarket(
             **{
                 **base.__dict__,
@@ -94,4 +117,4 @@ def test_rank_score_penalizes_exhaustion() -> None:
             }
         )
     )
-    assert good > bad
+    assert good > late > peak

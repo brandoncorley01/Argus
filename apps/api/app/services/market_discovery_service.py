@@ -1,8 +1,12 @@
 """Dynamic Coinbase USD market discovery — PAPER observation only.
 
 Discovers active Coinbase USD spot markets, ranks sudden interest, filters
-aggressively for liquidity/spread/volatility, then promotes a capped set into
+for liquidity/spread/extreme tip risk, then promotes a capped set into
 the existing instrument universe for Alpha Radar / market scan.
+
+Strong-day runners near highs are labeled and score-demoted — not erased —
+so Argus can watch continuation/pullback structure. Extreme peak exhaustion
+still stays off the promote list.
 
 Never places orders. Never unlocks live trading. Volume alone never triggers entries.
 """
@@ -34,12 +38,13 @@ COINBASE_TICKER_URL = "https://api.exchange.coinbase.com/products/{product_id}/t
 # Core always-on desk — never deactivated by discovery rotation.
 CORE_SYMBOLS: frozenset[str] = frozenset(s.upper() for s in DEFAULT_SYMBOLS)
 
-# Caps keep scan/refresh within existing cycle budgets.
-MAX_DISCOVERY_ACTIVE = 20
-MAX_STATS_PROBE = 72
-MIN_DOLLAR_VOLUME_24H = Decimal("250000")  # reject thin books
+# Caps keep scan/refresh within cycle budgets — widened so strong-day
+# Coinbase runners are not left outside Alpha Radar.
+MAX_DISCOVERY_ACTIVE = 35
+MAX_STATS_PROBE = 140
+MIN_DOLLAR_VOLUME_24H = Decimal("150000")  # reject thin books
 MAX_SPREAD_PCT = Decimal("0.012")  # 1.2%
-MAX_RANGE_PCT = Decimal("0.28")  # extreme 24h range
+MAX_RANGE_PCT = Decimal("0.35")  # extreme 24h range (allow hotter movers)
 MIN_RANGE_PCT = Decimal("0.008")  # need some movement to be "interesting"
 STABLE_BASES = frozenset(
     {
@@ -112,17 +117,17 @@ def classify_opportunity(
         return "insufficient_data"
     dist_from_high = (high_24h - last) / high_24h
     dist_from_low = (last - low_24h) / high_24h if high_24h > 0 else Decimal("1")
-    # Late chase / exhaustion: extended up-move sitting on the highs.
-    if change_pct >= Decimal("0.12") and dist_from_high <= Decimal("0.01"):
+    # Extreme tip only — normal strong-day runners must still reach Radar.
+    if change_pct >= Decimal("0.18") and dist_from_high <= Decimal("0.005"):
         return "peak_exhaustion"
-    if change_pct >= Decimal("0.08") and dist_from_high <= Decimal("0.015"):
+    if change_pct >= Decimal("0.12") and dist_from_high <= Decimal("0.01"):
         return "late_stage_chase"
     # Pullback/retest after a push.
     if change_pct >= Decimal("0.03") and Decimal("0.02") <= dist_from_high <= Decimal(
         "0.06"
     ):
         return "pullback_retest"
-    # Early / continuation breakout structure.
+    # Early / continuation breakout structure (covers most "new high" runs).
     if change_pct >= Decimal("0.04") and dist_from_high <= Decimal("0.025"):
         if range_pct >= Decimal("0.06"):
             return "breakout_continuation"
@@ -139,7 +144,12 @@ def rank_score_for(m: RankedMarket) -> Decimal:
     score = (m.dollar_volume / Decimal("1000000")).quantize(Decimal("0.01"))
     score += abs(m.change_pct) * Decimal("40")
     score += m.relative_volume * Decimal("8")
-    if m.opportunity_class in {"peak_exhaustion", "late_stage_chase", "weak_or_dump"}:
+    if m.opportunity_class == "peak_exhaustion":
+        score *= Decimal("0.35")
+    elif m.opportunity_class == "late_stage_chase":
+        # Still caution — but do not bury hot runners under quiet names.
+        score *= Decimal("0.7")
+    elif m.opportunity_class == "weak_or_dump":
         score *= Decimal("0.35")
     if m.opportunity_class in {"early_breakout", "breakout_continuation", "pullback_retest"}:
         score *= Decimal("1.15")
@@ -347,13 +357,14 @@ class MarketDiscoveryService:
                     }
                 )
                 continue
-            if opp in {"peak_exhaustion", "late_stage_chase"} and pid not in CORE_SYMBOLS:
-                # Keep visible as rejected/downgraded — do not promote chase.
+            if opp == "peak_exhaustion" and pid not in CORE_SYMBOLS:
+                # Extreme tip only — keep off Radar. late_stage_chase promotes
+                # with a demoted score so strong-day runs are not invisible.
                 rejected.append(
                     {
                         "symbol": pid,
                         "reason": opp,
-                        "primary_reason": "exhaustion/chasing risk",
+                        "primary_reason": "extreme peak exhaustion",
                         "opportunity_class": opp,
                         "dollar_volume": str(dollar),
                     }

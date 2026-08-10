@@ -588,14 +588,14 @@ class PaperTrainingService:
                     MarketScanCandidate.risk_status == "clear",
                 )
                 .order_by(desc(MarketScanCandidate.score))
-                .limit(12)
+                .limit(24)
             )
         )
         # Prefer freshest Watching candidates with usable score.
         cands = [
             c
             for c in cands
-            if float(c.score or 0) >= 55.0
+            if float(c.score or 0) >= 50.0
         ] or cands
         open_syms = {
             p.symbol
@@ -608,7 +608,7 @@ class PaperTrainingService:
         }
         # Cool-off after exit so the same symbol is not flipped every minute.
         recently_exited = self._symbols_exited_since(
-            portfolio_id, within_seconds=600
+            portfolio_id, within_seconds=300
         )
         resolved = self._resolve_actor(actor, portfolio)
         if resolved is None:
@@ -629,20 +629,21 @@ class PaperTrainingService:
                 # Long-only: never convert bearish/neutral probes into buys.
                 continue
             cand_detail = dict(cand.detail or {})
-            # Do not chase discovery exhaustion / late highs (PAPER discipline).
+            # Do not chase extreme peak tips (PAPER discipline). Extended
+            # late-stage runners stay eligible — memory + reward gates still apply.
             disc_class = str(
                 cand_detail.get("discovery_opportunity_class")
                 or cand_detail.get("trade_pattern")
                 or ""
             )
-            if disc_class in {"peak_exhaustion", "late_stage_chase"}:
+            if disc_class == "peak_exhaustion":
                 self._emit_decision_event(
                     symbol=cand.symbol,
                     outcome="info",
-                    title=f"Discovery avoid chase on {cand.symbol}",
+                    title=f"Discovery avoid tip on {cand.symbol}",
                     detail=(
-                        f"Labeled {disc_class.replace('_', ' ')} — "
-                        "waiting for pullback/retest, not buying the high."
+                        "Labeled peak exhaustion — waiting for pullback/retest, "
+                        "not buying the absolute high."
                     ),
                     reason_code="discovery_chase_avoid",
                 )

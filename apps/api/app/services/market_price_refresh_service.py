@@ -149,9 +149,11 @@ class MarketPriceRefreshService:
         else:
             target = [s.upper() for s in symbols]
         # Cap refresh size so discovery cannot blow the 2-minute price cron.
-        if len(target) > 48:
+        # Raised with MAX_DISCOVERY_ACTIVE so promoted runners keep fresh bars.
+        _MAX_REFRESH = 72
+        if len(target) > _MAX_REFRESH:
             core = [s for s in DEFAULT_SYMBOLS if s in target]
-            extra = [s for s in target if s not in core][: 48 - len(core)]
+            extra = [s for s in target if s not in core][: _MAX_REFRESH - len(core)]
             target = list(core) + extra
         frames = timeframes or REFRESH_TIMEFRAMES
         now = datetime.now(UTC).replace(microsecond=0)

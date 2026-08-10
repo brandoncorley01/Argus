@@ -25,12 +25,12 @@ SCAN_INTERVAL = timedelta(minutes=1)
 STALE_BAR = timedelta(minutes=5)
 MIN_BARS = 25
 EVENT_RETENTION = timedelta(days=7)
-MAX_EVENTS_PER_CYCLE = 120
+MAX_EVENTS_PER_CYCLE = 200
 STRATEGY_KEY = "sma_crossover"
 # Prefer 1m/5m charts so Argus re-evaluates often (not stuck on 15m closes).
 TIMEFRAME_PREF = ("1m", "5m", "15m")
-# Server-side watch window — short for 1m/5m cadence (was 20m; felt stuck).
-CANDIDATE_WATCH_TTL = timedelta(minutes=20)
+# Longer watch window so strong-day runners are not expired before entry.
+CANDIDATE_WATCH_TTL = timedelta(minutes=45)
 # Default candle length when timeframe is unknown.
 CANDLE_LENGTH = timedelta(minutes=1)
 
@@ -1883,21 +1883,34 @@ class MarketScanService:
             enrichment = MarketDiscoveryService(self.db).enrichment_for(symbol)
             for k, v in enrichment.items():
                 merged.setdefault(k, v)
-            # Discovery chase/exhaustion: keep visible but do not promote as Watching.
+            # Discovery peak tip: keep visible but do not promote as Watching.
+            # late_stage_chase stays Watching with a soft score haircut so
+            # Coinbase strong-day runners are not erased from Alpha Radar.
             opp = str(merged.get("discovery_opportunity_class") or "")
             if (
                 stage in {"Watching", "Risk Review", "Evaluating"}
-                and opp in {"peak_exhaustion", "late_stage_chase"}
+                and opp == "peak_exhaustion"
                 and merged.get("discovery_source") == "coinbase_dynamic"
             ):
                 stage = "Rejected"
                 risk_status = "blocked"
                 reason_code = reason_code or opp
                 reason_text = reason_text or (
-                    "Discovery labeled this as exhaustion/chasing — "
-                    "watching for a better entry, not buying the high."
+                    "Discovery labeled extreme peak exhaustion — "
+                    "waiting for a better entry, not buying the tip."
                 )
                 score = min(score, Decimal("35"))
+            elif (
+                stage in {"Watching", "Risk Review", "Evaluating"}
+                and opp == "late_stage_chase"
+                and merged.get("discovery_source") == "coinbase_dynamic"
+            ):
+                merged["chase_caution"] = True
+                score = (score * Decimal("0.85")).quantize(Decimal("0.01"))
+                reason_text = reason_text or (
+                    "Extended move near highs — Watching with chase caution, "
+                    "not auto-rejected."
+                )
         except Exception:  # noqa: BLE001
             pass
         cand = MarketScanCandidate(
