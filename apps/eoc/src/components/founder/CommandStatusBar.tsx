@@ -28,7 +28,7 @@ function Feedback({ result }: { result: ActionResult | null }) {
   );
 }
 
-type Busy = "start" | "stop" | "pause" | null;
+type Busy = "start" | "stop" | "pause" | "update" | null;
 
 async function fetchLiveBuildId(): Promise<string | null> {
   try {
@@ -261,23 +261,39 @@ export function CommandStatusBar({
         </p>
       ) : null}
 
+      {liveBuildId && buildId && liveBuildId !== buildId ? (
+        <p className="command-status-fix" role="alert">
+          Build mismatch: page expects {buildId}, live file shows {liveBuildId}.
+          Press <strong>Update from GitHub</strong> (or desktop Update-Argus.cmd),
+          wait ~15s, then Ctrl+F5.
+        </p>
+      ) : null}
+
       <div className="command-actions">
         <button
           type="button"
           className="btn control-btn control-btn-start"
-          disabled={busy === "start" || argusStatus !== "Stopped"}
+          disabled={busy === "start" || busy === "update"}
           title={
             argusStatus === "Stopped"
-              ? "Start Argus"
-              : "Argus is already Running. Press Stop only when you want it off."
+              ? "Start Argus and hard-sync GitHub main"
+              : "Hard-sync GitHub main now (cloud-agent merges). Does not require Stop."
           }
-          onClick={() => run("start", () => startArgusAction(), true)}
+          onClick={() =>
+            run(
+              argusStatus === "Stopped" ? "start" : "update",
+              () => startArgusAction(),
+              true,
+            )
+          }
         >
-          {busy === "start"
-            ? "Starting…"
+          {busy === "start" || busy === "update"
+            ? argusStatus === "Stopped"
+              ? "Starting…"
+              : "Updating…"
             : argusStatus === "Stopped"
               ? "Start Argus"
-              : "Running"}
+              : "Update from GitHub"}
         </button>
         <button
           type="button"
@@ -307,9 +323,11 @@ export function CommandStatusBar({
           {busy === "stop" ? "Stopping…" : "Stop Argus"}
         </button>
       </div>
-      {busy === "start" ? (
+      {busy === "start" || busy === "update" ? (
         <p className="muted-note" role="status">
-          Starting… button will show Running when Argus is up.
+          {busy === "update"
+            ? "Updating from GitHub… hard-refresh Home (Ctrl+F5) when done."
+            : "Starting… button will show Update from GitHub when Argus is up."}
         </p>
       ) : null}
       <Feedback result={result} />

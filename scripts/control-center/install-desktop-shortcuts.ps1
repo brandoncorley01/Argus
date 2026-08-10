@@ -20,12 +20,13 @@ function New-ArgusShortcut([string]$Name, [string]$ScriptLeaf, [string]$Descript
 }
 
 Write-Host "=== ARGUS - DAILY ==="
-New-ArgusShortcut "Start Argus" "start-argus.ps1" "ARGUS DAILY - Start"
+New-ArgusShortcut "Start Argus" "start-argus.ps1" "ARGUS DAILY - Start (hard-syncs GitHub main)"
 New-ArgusShortcut "Open Argus" "open-dashboard.ps1" "ARGUS DAILY - Open Home"
 New-ArgusShortcut "End Trading Day" "end-trading-day.ps1" "ARGUS DAILY - Report + Backup"
 New-ArgusShortcut "Stop Argus" "stop-argus.ps1" "ARGUS DAILY - Stop"
 
 Write-Host "=== ARGUS - TOOLS ==="
+New-ArgusShortcut "Update Argus Now" "update-argus-now.ps1" "ARGUS TOOLS - Nuclear hard-reset to GitHub main"
 New-ArgusShortcut "Argus Status" "status-argus.ps1" "ARGUS TOOLS - Status"
 New-ArgusShortcut "Restart Argus" "restart-argus.ps1" "ARGUS TOOLS - Restart"
 New-ArgusShortcut "Backup Argus" "backup-argus.ps1" "ARGUS TOOLS - Backup"

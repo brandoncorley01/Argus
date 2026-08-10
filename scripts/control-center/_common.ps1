@@ -181,14 +181,18 @@ function Write-ArgusPublicBuildStamp([string]$Root) {
 
 function Test-ArgusBehindOriginMain([string]$Root) {
   # Returns $true when origin/main SHA or build stamp differs from this PC (after fetch).
-  if (-not (Test-Path (Join-Path $Root ".git"))) { return $false }
+  # Fetch failure returns $true so Start hard-syncs instead of falsely claiming "up to date".
+  if (-not (Test-Path (Join-Path $Root ".git"))) { return $true }
   Push-Location $Root
   try {
     git fetch origin 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { return $false }
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: git fetch failed — treating PC as behind so Start will hard-sync."
+      return $true
+    }
     $local = (git rev-parse HEAD 2>$null).Trim()
     $remote = (git rev-parse "origin/main" 2>$null).Trim()
-    if (-not $local -or -not $remote) { return $false }
+    if (-not $local -or -not $remote) { return $true }
     if ($local -ne $remote) { return $true }
 
     # Same SHA should match, but also catch a stale working tree / wrong build.ts.
@@ -205,20 +209,19 @@ function Test-ArgusBehindOriginMain([string]$Root) {
     }
     return $false
   } catch {
-    return $false
+    Write-Host "WARN: behind-check error — treating PC as behind so Start will hard-sync."
+    return $true
   } finally {
     Pop-Location
   }
 }
 
 function Sync-ArgusCode([string]$Root) {
-  # Founder cadence: Start Argus pulls GitHub main. Returns $true only when SHA changed.
-  # Never hard-resets a dirty tree unless ARGUS_FORCE_SYNC=1 (explicit wipe).
-  # When this PC is behind origin/main, Start enables force sync so Founder
-  # is never stuck on a stale build stamp (e.g. v2.11 while main is newer).
+  # Founder cadence: Start Argus ALWAYS lands GitHub main (cloud-agent merges).
+  # Returns $true when HEAD SHA changed. Force sync throws on failure — never
+  # silently continues on a stale tree (that left Founders stuck on v2.40).
   if (-not (Test-Path (Join-Path $Root ".git"))) {
-    Write-Host "Code update skipped (not a git checkout)."
-    return $false
+    throw "Not a git checkout at $Root. Cloud-agent updates cannot land here."
   }
   $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
   if (-not $forceSync -and (Test-ArgusGitDirty $Root)) {
@@ -230,26 +233,37 @@ function Sync-ArgusCode([string]$Root) {
   try {
     $null = git rev-parse --abbrev-ref HEAD 2>$null
     if ($LASTEXITCODE -ne 0) {
+      if ($forceSync) { throw "git unavailable — cannot sync cloud-agent merges from GitHub." }
       Write-Host "WARN: git unavailable - continuing with local files."
       return $false
+    }
+    $originUrl = (git remote get-url origin 2>$null)
+    if ($originUrl -and ($originUrl -notmatch "brandoncorley01/Argus")) {
+      Write-Host ("WARN: origin is '{0}' — expected brandoncorley01/Argus." -f $originUrl)
+      if ($forceSync) {
+        throw "Wrong git origin ($originUrl). Point origin at github.com/brandoncorley01/Argus then Start again."
+      }
     }
     $before = (git rev-parse HEAD).Trim()
     git fetch origin 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
+      if ($forceSync) {
+        throw "git fetch failed — check internet / GitHub access. Cloud-agent merges cannot land until fetch works."
+      }
       Write-Host "WARN: could not reach GitHub - continuing with local files."
       return $false
     }
     if ($forceSync) {
       git checkout -f -B main "origin/main" 2>&1 | Out-Host
       if ($LASTEXITCODE -ne 0) {
-        Write-Host "WARN: could not checkout origin/main - continuing with local files."
-        return $false
+        throw "Could not checkout origin/main."
       }
       git reset --hard "origin/main" 2>&1 | Out-Host
       if ($LASTEXITCODE -ne 0) {
-        Write-Host "WARN: could not reset to origin/main - continuing with local files."
-        return $false
+        throw "Could not reset to origin/main."
       }
+      # Drop untracked junk that can shadow synced files (keep secrets/runtime).
+      git clean -fd -e .env -e .env.* -e runtime -e backups -e "*.local" 2>&1 | Out-Host
     } else {
       git checkout main 2>&1 | Out-Host
       if ($LASTEXITCODE -ne 0) {
@@ -270,11 +284,63 @@ function Sync-ArgusCode([string]$Root) {
     Write-Host "OK  Already on main @ $sha"
     return $false
   } catch {
+    if ($forceSync) { throw }
     Write-Host "WARN: code update skipped: $($_.Exception.Message)"
     return $false
   } finally {
     Pop-Location
   }
+}
+
+function Write-ArgusStartReport(
+  [string]$Root,
+  [string]$BuildId,
+  [bool]$Updated,
+  [string]$Outcome = "ok"
+) {
+  # Desktop + runtime proof that this PC matches GitHub (or why it does not).
+  $sha = "unknown"
+  $remoteSha = "unknown"
+  $originUrl = "unknown"
+  try {
+    Push-Location $Root
+    $sha = (git rev-parse --short HEAD 2>$null).Trim()
+    $remoteSha = (git rev-parse --short "origin/main" 2>$null).Trim()
+    $originUrl = (git remote get-url origin 2>$null)
+  } catch {
+  } finally {
+    Pop-Location -ErrorAction SilentlyContinue
+  }
+  $match = if ($sha -and $remoteSha -and ($sha -eq $remoteSha)) { "MATCH" } else { "MISMATCH" }
+  $lines = @(
+    "Argus Start report",
+    ("Time: {0:u}" -f (Get-Date).ToUniversalTime()),
+    ("Outcome: {0}" -f $Outcome),
+    ("Folder: {0}" -f $Root),
+    ("Origin: {0}" -f $originUrl),
+    ("Local SHA: {0}" -f $sha),
+    ("origin/main SHA: {0}" -f $remoteSha),
+    ("Build: {0}" -f $BuildId),
+    ("Code updated this Start: {0}" -f $Updated),
+    ("GitHub sync: {0}" -f $match),
+    "If Build stays old: run Update-Argus.cmd or",
+    '  irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1" | iex'
+  )
+  $text = ($lines -join "`r`n") + "`r`n"
+  try {
+    $runtime = Get-ArgusRuntimeDir $Root
+    Set-Content -Path (Join-Path $runtime "last-start-report.txt") -Value $text -Encoding ascii
+  } catch { }
+  try {
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    if ($desktop) {
+      Set-Content -Path (Join-Path $desktop "Argus-last-start.txt") -Value $text -Encoding ascii
+    }
+  } catch { }
+  Write-Host "---- Start report ----"
+  $lines | ForEach-Object { Write-Host $_ }
+  Write-Host "----------------------"
+  return $match
 }
 
 function Stop-ArgusPortListeners([int[]]$Ports) {

@@ -24,9 +24,34 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       @{ Name = "keep-awake-argus.ps1"; Required = $true },
       @{ Name = "recycle-eoc.ps1"; Required = $false },
       @{ Name = "update-argus-now.ps1"; Required = $false },
-      @{ Name = "repair-argus-api.ps1"; Required = $false }
+      @{ Name = "repair-argus-api.ps1"; Required = $false },
+      @{ Name = "install-desktop-shortcuts.ps1"; Required = $false }
     )
     $changed = $false
+    # Also refresh root launcher cmds so Founder gets Update-Argus.cmd + force-sync Start.
+    try {
+      $repoRoot = Split-Path $scriptDir -Parent | Split-Path -Parent
+      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd")) {
+        $dest = Join-Path $repoRoot $leaf
+        $tmp = Join-Path $env:TEMP ("argus-{0}-{1}" -f $leaf, [guid]::NewGuid().ToString("N"))
+        try {
+          Invoke-WebRequest -Uri ("https://raw.githubusercontent.com/brandoncorley01/Argus/main/{0}?{1}" -f $leaf, (Get-Random)) -OutFile $tmp -UseBasicParsing -TimeoutSec 30
+          $remote = Get-Content -Raw $tmp
+          if ($remote) {
+            $local = if (Test-Path $dest) { Get-Content -Raw $dest } else { "" }
+            if ($remote -ne $local) {
+              Copy-Item -LiteralPath $tmp -Destination $dest -Force
+              $changed = $true
+              Write-Host ("Updated {0}" -f $leaf)
+            }
+          }
+        } catch {
+          Write-Host ("WARN: could not refresh {0}: {1}" -f $leaf, $_.Exception.Message)
+        } finally {
+          Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+      }
+    } catch { }
     try {
       Write-Host "Downloading latest Start scripts from GitHub (always overwrite)..."
       foreach ($f in $files) {
@@ -96,65 +121,39 @@ try {
     throw "Docker infrastructure is not healthy. Open Docker Desktop and Start again."
   }
 
-  # Car model: if Argus is already running, Start must not stall on git sync /
-  # cache wipe / full recycle — UNLESS GitHub main is ahead of this PC.
-  # Founder was stuck on stale build stamps (e.g. v2.11) because Fast Start
-  # skipped sync while services were healthy.
-  $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
-  $localBuild = Get-ArgusLocalBuildId $Root
+  # Cloud-agent merges only work if THIS PC hard-syncs to GitHub main on every
+  # Start. Fast Start used to skip git while services were healthy — Founder
+  # stayed on v2.40 while main already had v2.43+. Always force-sync unless
+  # ARGUS_ALLOW_STALE=1 (emergency offline escape hatch).
   $publicBuildBefore = Get-ArgusPublicBuildId $Root
-  if (-not $forceSync) {
-    try {
-      if (Test-ArgusBehindOriginMain $Root) {
-        $remoteBuildText = ""
-        try {
-          Push-Location $Root
-          $remoteBuildText = git show "origin/main:apps/eoc/src/lib/build.ts" 2>$null
-        } finally {
-          Pop-Location -ErrorAction SilentlyContinue
-        }
-        $remoteBuild = Get-ArgusBuildIdFromText "$remoteBuildText"
-        Write-Host ("This PC is behind GitHub main (local build {0}; public {1}; remote {2}) — forcing code refresh." -f $(if ($localBuild) { $localBuild } else { "?" }), $(if ($publicBuildBefore) { $publicBuildBefore } else { "?" }), $(if ($remoteBuild) { $remoteBuild } else { "?" }))
-        $forceSync = $true
-        $env:ARGUS_FORCE_SYNC = "1"
-      } else {
-        Write-Host ("Code matches GitHub main (build {0})." -f $(if ($localBuild) { $localBuild } else { "?" }))
-      }
-    } catch {
-      Write-Host "WARN: could not compare to GitHub main: $($_.Exception.Message)"
-    }
+  $localBuild = Get-ArgusLocalBuildId $Root
+  $allowStale = $env:ARGUS_ALLOW_STALE -eq "1"
+  if ($allowStale) {
+    Write-Host "ARGUS_ALLOW_STALE=1 — skipping GitHub hard-sync (emergency)."
+    $forceSync = $false
+    $env:ARGUS_FORCE_SYNC = "0"
+    $updated = $false
+  } else {
+    $forceSync = $true
+    $env:ARGUS_FORCE_SYNC = "1"
+    Write-Host ("Hard-syncing this PC to GitHub main (was build {0})..." -f $(if ($localBuild) { $localBuild } else { "?" }))
+    $updated = Sync-ArgusCode $Root
   }
 
-  # Belt-and-suspenders: raw GitHub build.ts (works even when git fetch/auth fails).
-  if (-not $forceSync) {
-    try {
-      $rawUrl = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/apps/eoc/src/lib/build.ts?{0}" -f (Get-Random)
-      $rawText = (Invoke-WebRequest -Uri $rawUrl -UseBasicParsing -TimeoutSec 20).Content
-      $rawBuild = Get-ArgusBuildIdFromText "$rawText"
-      if ($rawBuild -and (
-          ($localBuild -and $localBuild -ne $rawBuild) -or
-          ($publicBuildBefore -and $publicBuildBefore -ne $rawBuild)
-        )) {
-        Write-Host ("GitHub raw build is {0} (local {1}, public {2}) — forcing code refresh." -f $rawBuild, $(if ($localBuild) { $localBuild } else { "?" }), $(if ($publicBuildBefore) { $publicBuildBefore } else { "?" }))
-        $forceSync = $true
-        $env:ARGUS_FORCE_SYNC = "1"
-      }
-    } catch {
-      Write-Host "WARN: could not read raw GitHub build stamp: $($_.Exception.Message)"
-    }
-  }
-
-  if ($forceSync) {
-    Write-Host ("Force sync armed — hard refresh from GitHub main (local build {0})." -f $(if ($localBuild) { $localBuild } else { "?" }))
+  # Stamp + Desktop report BEFORE any fast-path exit so Founder can prove sync.
+  $buildId = Write-ArgusPublicBuildStamp $Root
+  $syncMatch = Write-ArgusStartReport -Root $Root -BuildId $buildId -Updated ([bool]$updated) -Outcome "synced"
+  if ($syncMatch -eq "MISMATCH" -and -not $allowStale) {
+    throw "GitHub sync MISMATCH after reset. Wrong folder or origin. See Desktop Argus-last-start.txt"
   }
 
   $apiReadyNow = Test-HttpOk (Get-ArgusApiReadyUrl) 3
   $eocReadyNow = (Test-HttpOk "http://127.0.0.1:3000/login" 3) -or (Test-HttpOk "http://127.0.0.1:3000/" 3) -or (Test-HttpOk (Get-ArgusDashboardUrl) 3)
   $workerReadyNow = Test-ArgusWorkerFresh $Root
 
-  # Light repair: API + dashboard up, only worker missing — do NOT git sync.
-  if ($apiReadyNow -and $eocReadyNow -and -not $workerReadyNow -and -not $forceSync) {
-    Write-Host "API + dashboard up; worker down — repairing worker only (no git sync)."
+  # Light repair: API + dashboard up, only worker missing — code already synced.
+  if ($apiReadyNow -and $eocReadyNow -and -not $workerReadyNow -and -not $updated) {
+    Write-Host "API + dashboard up; worker down — repairing worker only."
     $pids = Read-ArgusPids $Root
     if (-not (Test-HttpOk (Get-ArgusApiReadyUrl) 3)) {
       $apiPid = Start-ArgusApiProcess $Root
@@ -172,9 +171,9 @@ try {
     exit 0
   }
 
-  # Light repair: dashboard up, API down — restart infra + API, no git sync.
-  if ($eocReadyNow -and -not $apiReadyNow -and -not $forceSync) {
-    Write-Host "Dashboard up; API down — repairing infra + API (no git sync)."
+  # Light repair: dashboard up, API down — code already synced.
+  if ($eocReadyNow -and -not $apiReadyNow -and -not $updated) {
+    Write-Host "Dashboard up; API down — repairing infra + API."
     if (-not (Ensure-ArgusInfra $Root)) {
       throw "Docker infrastructure is not healthy. Open Docker Desktop and Start again."
     }
@@ -196,8 +195,10 @@ try {
     exit 0
   }
 
-  if ($apiReadyNow -and $eocReadyNow -and $workerReadyNow -and -not $forceSync) {
-    Write-Host "Argus is already running — fast Start (no git sync / no cache wipe)."
+  # Fast path ONLY when already on the synced SHA (no code change this Start).
+  # Never skip sync — that was the cloud-agent "rarely works" bug.
+  if ($apiReadyNow -and $eocReadyNow -and $workerReadyNow -and -not $updated) {
+    Write-Host ("Argus already running on GitHub main — build {0} (no recycle needed)." -f $buildId)
     $pids = Read-ArgusPids $Root
     # uvicorn/arq each spawn a child with the same cmdline. Count tree roots only —
     # never treat parent+child as "duplicates" (that killed the only worker).
@@ -260,21 +261,27 @@ try {
         }
       } catch { }
     }
-    $buildId = Write-ArgusPublicBuildStamp $Root
-    Write-Host "Build $buildId (fast Start)"
     $null = Start-ArgusKeepAwake $Root
     if (-not $KeepDashboard) {
       Start-Process (Get-ArgusDashboardUrl)
     } else {
+      # Still recycle dashboard if public stamp changed vs before sync.
+      $publicNow = Get-ArgusPublicBuildId $Root
+      if ($publicBuildBefore -and $publicNow -and ($publicBuildBefore -ne $publicNow)) {
+        $recycle = Join-Path $PSScriptRoot "recycle-eoc.ps1"
+        try {
+          Start-ArgusHiddenPowerShell -ScriptPath $recycle -WorkingDirectory $Root -ExtraArgs @("5")
+          Write-Host "Scheduled dashboard recycle for new build stamp."
+        } catch { }
+      }
       Write-Host "REFRESH_HOME_SOFT"
     }
     Write-Host "=== Argus started ==="
     exit 0
   }
 
-  # Pull GitHub main only when the tree is clean (or ARGUS_FORCE_SYNC=1).
-  # Never silently hard-reset local work — that wiped keepalive/login fixes before.
-  $updated = Sync-ArgusCode $Root
+  # Code changed (or services down) — full recycle path below.
+  Write-Host "Continuing with full service recycle..."
 
   # Re-register keepalive after sync so the task action picks up run-hidden.vbs
   # (older installs still pointed at a flashing powershell.exe).
@@ -425,7 +432,8 @@ try {
     # updated (or Home was advertising a stale public stamp), recycle so the
     # compile-time Build chip and /argus-build.txt both show the new id.
     $publicNow = Get-ArgusPublicBuildId $Root
-    $needsRecycle = $updated -or $forceSync -or (
+    # forceSync is always on now — recycle only when code/stamp actually changed.
+    $needsRecycle = $updated -or (
       $publicBuildBefore -and $publicNow -and ($publicBuildBefore -ne $publicNow)
     )
     if ($needsRecycle) {
