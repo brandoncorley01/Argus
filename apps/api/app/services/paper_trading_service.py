@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.execution.contracts import (
@@ -147,7 +147,7 @@ class PaperTradingService:
             .correlate(PaperPortfolio)
             .scalar_subquery()
         )
-        learning_rank = func.case(
+        learning_rank = case(
             (PaperPortfolio.name == "Founder Learning Desk", 0),
             else_=1,
         )
