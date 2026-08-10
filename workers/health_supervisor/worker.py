@@ -298,6 +298,7 @@ from app.services.runtime_continuity import (  # noqa: E402
     wall_clock_gap,
 )
 from workers.market_ops.worker import (  # noqa: E402
+    run_market_discovery,
     run_market_price_refresh,
     run_market_scan_cycle,
     run_runtime_catch_up,
@@ -313,6 +314,7 @@ class WorkerSettings:
         generate_daily_report_cycle,
         run_market_scan_cycle,
         run_market_price_refresh,
+        run_market_discovery,
         run_runtime_catch_up,
     ]
     cron_jobs = [
@@ -321,6 +323,8 @@ class WorkerSettings:
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
         cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
         cron(run_market_scan_cycle, minute=set(range(60))),
+        # Dynamic Coinbase USD discovery — same process as Start Argus.
+        cron(run_market_discovery, minute={0, 10, 20, 30, 40, 50}),
     ]
     on_startup = startup
     on_shutdown = shutdown

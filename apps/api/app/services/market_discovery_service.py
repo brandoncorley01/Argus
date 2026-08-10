@@ -56,6 +56,10 @@ STABLE_BASES = frozenset(
 
 HTTP_TIMEOUT_SEC = 12
 
+# Repo root = Argus/ (apps/api/app/services → four parents up from services is apps; five is repo).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_DEFAULT_STATE = _REPO_ROOT / "runtime" / "market-discovery" / "latest.json"
+
 
 @dataclass
 class RankedMarket:
@@ -151,7 +155,7 @@ class MarketDiscoveryService:
         self.db = db
         self.market = MarketIntelligenceService(db)
         self.audit = AuditService(db)
-        self.state_path = state_path or Path("runtime") / "market-discovery" / "latest.json"
+        self.state_path = state_path or _DEFAULT_STATE
 
     def _load_state(self) -> dict[str, Any]:
         try:
