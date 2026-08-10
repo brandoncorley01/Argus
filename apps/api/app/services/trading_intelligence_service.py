@@ -812,11 +812,11 @@ class TradingIntelligenceService:
             promoted = disc.get("promoted_to_radar") or []
             newly = disc.get("newly_discovered") or []
             if promoted or newly:
-                sample = [
-                    (n.get("symbol") if isinstance(n, dict) else n)
-                    for n in (newly or promoted)[:4]
-                ]
-                sample = [s for s in sample if s]
+                sample: list[str] = []
+                for n in (newly or promoted)[:4]:
+                    sym = n.get("symbol") if isinstance(n, dict) else n
+                    if sym:
+                        sample.append(str(sym))
                 bullets.insert(
                     1,
                     (

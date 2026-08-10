@@ -170,7 +170,8 @@ class MarketDiscoveryService:
     def _load_state(self) -> dict[str, Any]:
         try:
             if self.state_path.is_file():
-                return json.loads(self.state_path.read_text(encoding="utf-8"))
+                raw = json.loads(self.state_path.read_text(encoding="utf-8"))
+                return raw if isinstance(raw, dict) else {}
         except Exception:  # noqa: BLE001
             pass
         return {}

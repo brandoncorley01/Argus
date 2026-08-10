@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- CI mypy green: harden discovery state load and discovery sample join types (`live-monitor-v2.43`)
 - Widen Alpha Radar for Coinbase strong-day runners: discovery every 5m; probe 140 / promote 35; refresh 72 symbols; stop hard-rejecting late-stage near-highs (only extreme peak tip blocked); longer Watching TTL; slightly easier memory EXECUTE — so Argus stops missing runs while still refusing tip-chase (`live-monitor-v2.42`)
 - Meaningful paper P&L sizing: Founder Learning Desk default practice size $30→$100 (~33% of $300 book); enforce 1.5% minimum stop distance and $3 minimum planned reward so winning days are dollars, not pennies; auto-upgrade legacy $30 desks when cash allows (`live-monitor-v2.41`)
 
