@@ -218,7 +218,7 @@ def reseed_learning(
 ) -> dict[str, object]:
     """Flatten paper risk and reset the learning desk to $300 starting cash.
 
-    Live trading stays locked. Default practice size becomes $30 (~10% of book).
+    Live trading stays locked. Default practice size becomes $100 (~33% of book).
     """
     try:
         result = service.reseed_learning_desk(portfolio_id, actor=principal)

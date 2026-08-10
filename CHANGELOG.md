@@ -5,6 +5,10 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ## [Unreleased]
 
+### Changed
+
+- Meaningful paper P&L sizing: Founder Learning Desk default practice size $30→$100 (~33% of $300 book); enforce 1.5% minimum stop distance and $3 minimum planned reward so winning days are dollars, not pennies; auto-upgrade legacy $30 desks when cash allows (`live-monitor-v2.41`)
+
 ### Added
 
 - Dynamic Coinbase USD market discovery: periodically lists active USD products, ranks sudden interest, filters liquidity/spread/volatility/chase risk, promotes a capped set into Alpha Radar; compact Market Discovery card on Live Desk; Academy tracks discovery outcomes (`live-monitor-v2.36`)

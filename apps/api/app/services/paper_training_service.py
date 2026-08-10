@@ -37,14 +37,59 @@ MIN_BARS = 25
 # Match anticipated live connected-account size for Founder learning.
 FOUNDER_LEARNING_DESK_NAME = "Founder Learning Desk"
 LEARNING_STARTING_CASH = Decimal("300")
-LEARNING_DEFAULT_NOTIONAL = Decimal("30")  # ~10% of $300 book per practice entry
+# ~33% of the $300 book — small enough to keep 2–3 concurrent slots,
+# large enough that a clean 2R win is dollars, not pennies.
+LEARNING_DEFAULT_NOTIONAL = Decimal("100")
+# Legacy practice size that produced ~$0.25 days; auto-upgraded when cash allows.
+LEGACY_TINY_NOTIONAL = Decimal("30")
 # Dig-out: keep trading with remaining cash (never invents capital).
 MIN_DIG_OUT_CASH = Decimal("5")
 DIG_OUT_NOTIONAL_FRACTION = Decimal("0.25")  # up to 25% of remaining buying power
 # Take-profit must clear at least this reward:risk multiple of stop distance.
 MIN_TAKE_PROFIT_R = Decimal("2")
+# Floor stop distance so 2R targets cannot collapse into micro-scalps.
+MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
+# Skip automatic entries whose planned dollar reward is still trivial.
+MIN_EXPECTED_REWARD_USD = Decimal("3")
 # Do not take-profit a brand-new entry in the same automation pass.
 TAKE_PROFIT_MIN_HOLD_SECONDS = 120
+
+
+def normalize_exit_levels(
+    price: Decimal,
+    stop: Decimal | None,
+    target: Decimal | None,
+    *,
+    min_stop_pct: Decimal = MIN_STOP_DISTANCE_PCT,
+    min_r: Decimal = MIN_TAKE_PROFIT_R,
+) -> tuple[Decimal, Decimal]:
+    """Widen microscopic stops and enforce a minimum reward:risk target."""
+    if price <= 0:
+        raise ValueError("price must be positive")
+    min_risk = price * min_stop_pct
+    if stop is None or stop >= price:
+        stop = price - min_risk
+    else:
+        risk = price - stop
+        if risk < min_risk:
+            stop = price - min_risk
+    risk = price - stop
+    if risk <= 0:
+        stop = price - min_risk
+        risk = min_risk
+    min_target = price + (risk * min_r)
+    if target is None or target < min_target:
+        target = min_target
+    return stop, target
+
+
+def expected_reward_usd(
+    *, price: Decimal, target: Decimal, notional: Decimal
+) -> Decimal:
+    """Dollar reward implied by notional at the planned take-profit."""
+    if price <= 0 or notional <= 0 or target <= price:
+        return Decimal("0")
+    return (notional * ((target - price) / price)).quantize(Decimal("0.01"))
 FEEDBACK_CODES = {
     "good_decision",
     "bad_decision",
@@ -676,6 +721,36 @@ class PaperTrainingService:
                     reason_code=f"memory_{action.lower()}",
                 )
                 continue
+            # Refuse penny economics: normalize stops/targets, then require a
+            # meaningful planned dollar reward at the desk notional.
+            entry_px = cand.current_price or cand.entry_zone
+            if entry_px is None or entry_px <= 0:
+                continue
+            norm_stop, norm_target = normalize_exit_levels(
+                entry_px, cand.stop_loss, cand.take_profit
+            )
+            reward_usd = expected_reward_usd(
+                price=entry_px,
+                target=norm_target,
+                notional=settings.default_notional,
+            )
+            if reward_usd < MIN_EXPECTED_REWARD_USD:
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"Skipped thin target on {cand.symbol}",
+                    detail=(
+                        f"Planned reward ${reward_usd} is below the "
+                        f"${MIN_EXPECTED_REWARD_USD} minimum at "
+                        f"${settings.default_notional} notional. "
+                        "Waiting for a setup with real dollar upside."
+                    ),
+                    reason_code="reward_too_small",
+                )
+                continue
+            # Persist normalized levels onto the candidate for the exit plan.
+            cand.stop_loss = norm_stop
+            cand.take_profit = norm_target
             try:
                 order = self._open_paper_from_candidate(
                     portfolio_id=portfolio_id,
@@ -804,15 +879,9 @@ class PaperTrainingService:
                 "long_only_bias",
                 "Long-only paper mode refuses bearish or neutral signals as buys.",
             )
-        stop = cand.stop_loss
-        target = cand.take_profit
-        if stop is None or stop >= price:
-            stop = price * (Decimal("1") - Decimal("0.01"))
-        if target is None or target <= price:
-            risk = price - stop
-            if risk <= 0:
-                risk = price * Decimal("0.01")
-            target = price + (risk * MIN_TAKE_PROFIT_R)
+        stop, target = normalize_exit_levels(
+            price, cand.stop_loss, cand.take_profit
+        )
         order = self.paper.submit_order(
             portfolio_id=portfolio_id,
             actor=actor,
@@ -883,16 +952,11 @@ class PaperTrainingService:
             plan = self.paper._exit_plan_levels(portfolio_id, pos.symbol)
             stop = plan.get("stop_loss")
             target = plan.get("take_profit")
-            if (
-                target is None
-                and stop is not None
-                and pos.average_cost
-                and pos.average_cost > stop
-            ):
-                risk = pos.average_cost - stop
-                target = pos.average_cost + (risk * MIN_TAKE_PROFIT_R)
             if stop is None and target is None:
                 continue
+            avg = getattr(pos, "average_cost", None)
+            if avg is not None and avg > 0:
+                stop, target = normalize_exit_levels(avg, stop, target)
             mark, _mark_at = self.paper._latest_mark(pos.symbol)
             if mark is None:
                 continue
@@ -1126,6 +1190,7 @@ class PaperTrainingService:
             )
         )
         if existing is not None:
+            self._upgrade_legacy_tiny_notional(existing)
             return existing
         portfolio = self.paper.create_portfolio(
             name=FOUNDER_LEARNING_DESK_NAME,
@@ -1138,6 +1203,36 @@ class PaperTrainingService:
         self.db.commit()
         self.db.refresh(portfolio)
         return portfolio
+
+    def _upgrade_legacy_tiny_notional(self, portfolio: PaperPortfolio) -> None:
+        """Bump legacy $30 practice size when the desk still has enough cash.
+
+        Dig-out desks with reduced cash are left alone so notional stays
+        within buying power.
+        """
+        settings = self.get_or_create_settings(portfolio.id)
+        if settings.default_notional > LEGACY_TINY_NOTIONAL:
+            return
+        buying_power = portfolio.cash_balance - (
+            portfolio.reserved_cash or Decimal("0")
+        )
+        if buying_power < LEARNING_DEFAULT_NOTIONAL:
+            return
+        previous = settings.default_notional
+        settings.default_notional = LEARNING_DEFAULT_NOTIONAL
+        self.audit.append(
+            action="paper.training.notional_upgraded",
+            resource_type="paper_portfolio",
+            resource_id=str(portfolio.id),
+            actor_user_id=portfolio.owner_user_id,
+            payload={
+                "previous_default_notional": str(previous),
+                "default_notional": str(LEARNING_DEFAULT_NOTIONAL),
+                "reason": "legacy_tiny_notional_unacceptable_daily_pnl",
+                "paper_only": True,
+            },
+        )
+        self.db.commit()
 
     def reseed_learning_desk(
         self,
