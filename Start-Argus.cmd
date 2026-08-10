@@ -3,11 +3,8 @@ setlocal EnableExtensions
 title Start Argus
 echo.
 echo === Start Argus ===
-echo This brings the dashboard back when the browser says
-echo "127.0.0.1 refused to connect".
-echo.
-echo When finished, open:  http://127.0.0.1:3000/today
-echo (must include :3000)
+echo Pulls latest GitHub main (cloud-agent merges), then starts Argus.
+echo Dashboard:  http://127.0.0.1:3000/today
 echo.
 
 set "ROOT=%~dp0"
@@ -17,6 +14,9 @@ REM Browser KeepDashboard must stay unset here so desktop Start can
 REM start / restart the dashboard on port 3000.
 set "ARGUS_KEEP_DASHBOARD="
 set "ARGUS_START_SELF_UPDATED="
+REM Always hard-sync GitHub main — Fast Start must never skip cloud merges.
+set "ARGUS_FORCE_SYNC=1"
+set "ARGUS_ALLOW_STALE="
 
 if not exist "%STARTER%" (
   echo Could not find Start script inside this Argus folder.
@@ -33,12 +33,15 @@ if errorlevel 1 (
   echo.
   echo Start failed. Read the messages above.
   echo If Docker is not running, start Docker Desktop, then try again.
+  echo Nuclear update:
+  echo   Update-Argus.cmd
   pause
   exit /b 1
 )
 
 echo.
 echo === Start finished ===
+echo Confirm Build on Home matches Desktop Argus-last-start.txt
 echo Open this exact address in the browser:
 echo   http://127.0.0.1:3000/today
 echo.
