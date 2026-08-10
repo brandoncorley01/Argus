@@ -13,6 +13,7 @@ import {
   AdvancedLearningPane,
   type AdvancedLearningPaneData,
 } from "@/components/founder/AdvancedLearningPane";
+import { CapitalRecoveryControls } from "@/components/founder/CapitalRecoveryControls";
 import { FEEDBACK_OPTIONS } from "@/lib/founder/plainLanguage";
 import { money, moneyPnl, pnlClass } from "@/lib/founder/simple";
 
@@ -69,6 +70,11 @@ export function PaperTrainingClient({
   closedTrades,
   readinessNextStep,
   advancedLearning,
+  cashAvailable = null,
+  reseedCount = 0,
+  digOutCount = 0,
+  recoveryLevel = "ok",
+  recoveryNote = null,
 }: {
   portfolioId: string;
   mode: "automatic" | "coaching";
@@ -78,6 +84,11 @@ export function PaperTrainingClient({
   closedTrades: ClosedTrade[];
   readinessNextStep: string | null;
   advancedLearning?: AdvancedLearningPaneData | null;
+  cashAvailable?: number | null;
+  reseedCount?: number;
+  digOutCount?: number;
+  recoveryLevel?: string;
+  recoveryNote?: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -99,6 +110,17 @@ export function PaperTrainingClient({
           {readinessNextStep}
         </p>
       ) : null}
+
+      <section className="panel rise" aria-label="Capital recovery">
+        <CapitalRecoveryControls
+          portfolioId={portfolioId}
+          cashAvailable={cashAvailable}
+          reseedCount={reseedCount}
+          digOutCount={digOutCount}
+          recoveryLevel={recoveryLevel}
+          recoveryNote={recoveryNote}
+        />
+      </section>
 
       <section className="panel rise" aria-label="Practice modes">
         <h2 style={{ marginTop: 0 }}>Choose how you practice</h2>
@@ -355,8 +377,8 @@ export function PaperTrainingClient({
 
       <AdvancedLearningPane data={advancedLearning ?? null} />
 
-      <section className="panel rise" aria-label="Paper Training Scorecard">
-        <h2 style={{ marginTop: 0 }}>Paper Training Scorecard</h2>
+      <section className="panel rise" aria-label="Argus Academy Scorecard">
+        <h2 style={{ marginTop: 0 }}>Argus Academy Scorecard</h2>
         {!scorecard ? (
           <p className="muted-note">Scorecard unavailable.</p>
         ) : (

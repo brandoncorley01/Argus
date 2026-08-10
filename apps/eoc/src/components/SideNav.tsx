@@ -9,7 +9,7 @@ import type { CurrentUser } from "@/lib/types";
 
 const PRIMARY = [
   { href: "/today", label: "Home" },
-  { href: "/paper-training", label: "Paper Training" },
+  { href: "/paper-training", label: "Argus Academy" },
   { href: "/trades", label: "Trades" },
   { href: "/reports", label: "Reports" },
   { href: "/settings", label: "Settings" },

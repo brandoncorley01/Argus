@@ -283,3 +283,59 @@ export async function teachScanAction(input: {
     return { ok: false, message };
   }
 }
+
+export async function reseedLearningDeskAction(
+  portfolioId: string,
+): Promise<PaperActionResult> {
+  try {
+    const result = await apiFetch<{ message: string; reseed_count?: number }>(
+      `/api/v1/paper/training/${portfolioId}/reseed-learning`,
+      { method: "POST", requireCsrf: true },
+    );
+    revalidatePath("/paper-training");
+    revalidatePath("/today");
+    revalidatePath("/trades");
+    return {
+      ok: true,
+      message:
+        result.message ||
+        `Learning desk reseeded to $300. Reseed count: ${result.reseed_count ?? "—"}.`,
+    };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not reseed the learning desk.";
+    return { ok: false, message };
+  }
+}
+
+export async function digOutLearningDeskAction(
+  portfolioId: string,
+): Promise<PaperActionResult> {
+  try {
+    const result = await apiFetch<{ message: string }>(
+      `/api/v1/paper/training/${portfolioId}/dig-out`,
+      { method: "POST", requireCsrf: true },
+    );
+    revalidatePath("/paper-training");
+    revalidatePath("/today");
+    revalidatePath("/trades");
+    return {
+      ok: true,
+      message:
+        result.message ||
+        "Dig-out enabled — Argus will practice with remaining paper cash.",
+    };
+  } catch (err) {
+    const message =
+      err instanceof ApiClientError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Could not enable dig-out mode.";
+    return { ok: false, message };
+  }
+}

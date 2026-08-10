@@ -88,7 +88,7 @@ export function CapitalStrip() {
       {explanation ? (
         <p className="attention-box capital-strip-story" style={{ marginTop: "0.75rem" }}>
           {explanation}{" "}
-          <Link href="/paper-training">Open Paper Training</Link> to reseed if you want a
+          <Link href="/paper-training">Open Argus Academy</Link> to dig out or reseed if you want a
           fresh $300 practice book.
         </p>
       ) : (

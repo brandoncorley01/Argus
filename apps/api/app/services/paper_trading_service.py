@@ -251,6 +251,49 @@ class PaperTradingService:
             or 0
         )
         net_vs_start = total_value - starting_cash
+        reseed_count = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PaperCashLedger)
+                .where(
+                    PaperCashLedger.portfolio_id == portfolio_id,
+                    PaperCashLedger.entry_type == "learning_reseed",
+                )
+            )
+            or 0
+        )
+        dig_out_count = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PaperCashLedger)
+                .where(
+                    PaperCashLedger.portfolio_id == portfolio_id,
+                    PaperCashLedger.entry_type == "learning_dig_out",
+                )
+            )
+            or 0
+        )
+        if reseed_count >= 5:
+            pressure_level = "critical"
+            pressure_note = (
+                f"{reseed_count} reseeds recorded. Argus is repeatedly exhausting "
+                "paper capital — overall training failure until expectancy improves."
+            )
+        elif reseed_count >= 3:
+            pressure_level = "elevated"
+            pressure_note = (
+                f"{reseed_count} reseeds recorded. Prefer Dig out with remaining cash "
+                "before another full $300 reset."
+            )
+        elif reseed_count >= 1:
+            pressure_level = "watch"
+            pressure_note = (
+                f"{reseed_count} reseed(s); {dig_out_count} dig-out(s). "
+                "Track recovery carefully."
+            )
+        else:
+            pressure_level = "ok"
+            pressure_note = "No reseed pressure yet."
         if position_rows:
             capital_explanation = (
                 f"Started at ${starting_cash:.2f} paper cash. "
@@ -266,7 +309,8 @@ class PaperTradingService:
                 f"{fill_count} paper fills across {order_count} orders "
                 f"(net {net_vs_start:+.2f} vs start). "
                 f"Money was used in paper buys/sells — not withdrawn. "
-                f"Use Reseed learning desk to reset to $300 practice cash."
+                f"Reseeds: {reseed_count}. Dig-outs: {dig_out_count}. "
+                f"{pressure_note}"
             )
         else:
             capital_explanation = (
@@ -293,6 +337,10 @@ class PaperTradingService:
             "fill_count": fill_count,
             "order_count": order_count,
             "capital_explanation": capital_explanation,
+            "reseed_count": reseed_count,
+            "dig_out_count": dig_out_count,
+            "recovery_pressure_level": pressure_level,
+            "recovery_pressure_note": pressure_note,
         }
 
     def _starting_cash(self, portfolio_id: uuid.UUID) -> Decimal:

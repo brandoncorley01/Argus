@@ -231,7 +231,7 @@ export default async function TradesPage() {
           Home
         </Link>
         <Link className="btn" href="/paper-training">
-          Paper Training
+          Argus Academy
         </Link>
         <Link className="btn secondary" href="/paper">
           Advanced paper details

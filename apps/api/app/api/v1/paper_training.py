@@ -228,7 +228,29 @@ def reseed_learning(
         "ok": True,
         "message": (
             f"Learning desk reset to ${result['cash_balance']} with "
-            f"${result['default_notional']} per practice entry."
+            f"${result['default_notional']} per practice entry. "
+            f"Lifetime reseed count: {result.get('reseed_count', 0)}."
+        ),
+        **result,
+    }
+
+
+@router.post("/{portfolio_id}/dig-out")
+def dig_out_learning(
+    portfolio_id: uuid.UUID,
+    principal: AuthenticatedPrincipal = Depends(RequireFounder),
+    service: PaperTrainingService = Depends(get_service),
+) -> dict[str, object]:
+    """Keep practicing with remaining paper cash — no capital invented."""
+    try:
+        result = service.dig_out_with_remaining(portfolio_id, actor=principal)
+    except PaperTrainingError as exc:
+        raise _http(exc) from exc
+    return {
+        "ok": True,
+        "message": (
+            f"Dig-out enabled with ${result['buying_power']} remaining "
+            f"(${result['default_notional']} per entry). No cash was added."
         ),
         **result,
     }

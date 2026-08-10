@@ -90,6 +90,10 @@ class PortfolioSummaryRead(BaseModel):
     fill_count: int | None = None
     order_count: int | None = None
     capital_explanation: str | None = None
+    reseed_count: int | None = None
+    dig_out_count: int | None = None
+    recovery_pressure_level: str | None = None
+    recovery_pressure_note: str | None = None
 
 
 class PositionSummaryRead(BaseModel):

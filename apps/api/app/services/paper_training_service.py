@@ -38,6 +38,9 @@ MIN_BARS = 25
 FOUNDER_LEARNING_DESK_NAME = "Founder Learning Desk"
 LEARNING_STARTING_CASH = Decimal("300")
 LEARNING_DEFAULT_NOTIONAL = Decimal("30")  # ~10% of $300 book per practice entry
+# Dig-out: keep trading with remaining cash (never invents capital).
+MIN_DIG_OUT_CASH = Decimal("5")
+DIG_OUT_NOTIONAL_FRACTION = Decimal("0.25")  # up to 25% of remaining buying power
 # Take-profit must clear at least this reward:risk multiple of stop distance.
 MIN_TAKE_PROFIT_R = Decimal("2")
 # Do not take-profit a brand-new entry in the same automation pass.
@@ -1188,6 +1191,147 @@ class PaperTrainingService:
             "cash_balance": str(starting_cash),
             "default_notional": str(default_notional),
             "cleared_symbols": cleared,
+            "reseed_count": self.count_learning_reseeds(portfolio_id),
+            "dig_out_count": self.count_learning_dig_outs(portfolio_id),
+            "recovery_pressure": self.recovery_pressure(portfolio_id),
+        }
+
+    def count_learning_reseeds(self, portfolio_id: uuid.UUID) -> int:
+        from app.models.paper_trading import PaperCashLedger
+
+        return int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PaperCashLedger)
+                .where(
+                    PaperCashLedger.portfolio_id == portfolio_id,
+                    PaperCashLedger.entry_type == "learning_reseed",
+                )
+            )
+            or 0
+        )
+
+    def count_learning_dig_outs(self, portfolio_id: uuid.UUID) -> int:
+        from app.models.paper_trading import PaperCashLedger
+
+        return int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PaperCashLedger)
+                .where(
+                    PaperCashLedger.portfolio_id == portfolio_id,
+                    PaperCashLedger.entry_type == "learning_dig_out",
+                )
+            )
+            or 0
+        )
+
+    def recovery_pressure(self, portfolio_id: uuid.UUID) -> dict[str, Any]:
+        reseeds = self.count_learning_reseeds(portfolio_id)
+        dig_outs = self.count_learning_dig_outs(portfolio_id)
+        level = "ok"
+        note = "No reseed pressure yet — paper recovery is healthy."
+        if reseeds >= 5:
+            level = "critical"
+            note = (
+                f"{reseeds} reseeds recorded. Argus is repeatedly exhausting paper capital "
+                "— treat this as overall training failure until expectancy improves."
+            )
+        elif reseeds >= 3:
+            level = "elevated"
+            note = (
+                f"{reseeds} reseeds recorded. Prefer Dig out with remaining cash "
+                "before another full reset."
+            )
+        elif reseeds >= 1:
+            level = "watch"
+            note = (
+                f"{reseeds} reseed(s) on this desk. Dig-out attempts: {dig_outs}."
+            )
+        return {
+            "level": level,
+            "reseed_count": reseeds,
+            "dig_out_count": dig_outs,
+            "note": note,
+            "paper_only": True,
+        }
+
+    def dig_out_with_remaining(
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        actor: AuthenticatedPrincipal,
+    ) -> dict[str, Any]:
+        """Continue paper learning with remaining cash — no invented capital."""
+        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        if portfolio is None:
+            raise PaperTrainingError("portfolio_not_found", str(portfolio_id))
+        buying_power = portfolio.cash_balance - (portfolio.reserved_cash or Decimal("0"))
+        if buying_power < MIN_DIG_OUT_CASH:
+            raise PaperTrainingError(
+                "insufficient_cash_for_dig_out",
+                (
+                    f"Only ${buying_power:.2f} available. Need at least "
+                    f"${MIN_DIG_OUT_CASH:.2f} to dig out — use Reseed for a fresh $300 book."
+                ),
+            )
+        raw = (buying_power * DIG_OUT_NOTIONAL_FRACTION).quantize(Decimal("0.01"))
+        notional = max(MIN_DIG_OUT_CASH, min(LEARNING_DEFAULT_NOTIONAL, raw))
+        if notional > buying_power:
+            notional = buying_power.quantize(Decimal("0.01"))
+        settings = self.get_or_create_settings(portfolio_id)
+        settings.mode = "automatic"
+        settings.default_notional = notional
+        if portfolio.pause_new_entries_active:
+            portfolio.pause_new_entries_active = False
+        from app.models.paper_trading import PaperCashLedger
+
+        self.db.add(
+            PaperCashLedger(
+                portfolio_id=portfolio.id,
+                entry_type="learning_dig_out",
+                amount=Decimal("0"),
+                balance_after=portfolio.cash_balance,
+                note=(
+                    f"Dig-out with remaining ${buying_power:.2f}; "
+                    f"practice size set to ${notional:.2f} (paper only; live locked)."
+                ),
+            )
+        )
+        self.audit.append(
+            action="paper.training.learning_dig_out",
+            resource_type="paper_portfolio",
+            resource_id=str(portfolio_id),
+            actor_user_id=actor.user.id,
+            payload={
+                "buying_power": str(buying_power),
+                "default_notional": str(notional),
+                "cash_balance": str(portfolio.cash_balance),
+            },
+        )
+        self._emit_decision_event(
+            symbol="*",
+            outcome="info",
+            title="Dig-out mode enabled",
+            detail=(
+                f"Argus will keep practicing with ${buying_power:.2f} remaining "
+                f"(${notional:.2f} per entry). No cash was added."
+            ),
+            reason_code="learning_dig_out",
+        )
+        self.db.commit()
+        pressure = self.recovery_pressure(portfolio_id)
+        return {
+            "portfolio_id": str(portfolio_id),
+            "cash_balance": str(portfolio.cash_balance),
+            "buying_power": str(buying_power),
+            "default_notional": str(notional),
+            "mode": "automatic",
+            "reseed_count": pressure["reseed_count"],
+            "dig_out_count": pressure["dig_out_count"],
+            "recovery_pressure": pressure,
+            "cash_added": False,
+            "live_trading_enabled": False,
         }
 
     def trade_lesson_for_candidate(self, cand: MarketScanCandidate) -> dict[str, Any]:
