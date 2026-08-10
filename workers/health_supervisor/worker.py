@@ -323,8 +323,8 @@ class WorkerSettings:
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
         cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
         cron(run_market_scan_cycle, minute=set(range(60))),
-        # Dynamic Coinbase USD discovery — same process as Start Argus.
-        cron(run_market_discovery, minute={0, 10, 20, 30, 40, 50}),
+        # Dynamic Coinbase USD discovery every 5 minutes — same process as Start Argus.
+        cron(run_market_discovery, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
     ]
     on_startup = startup
     on_shutdown = shutdown

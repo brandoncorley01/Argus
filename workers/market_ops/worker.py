@@ -430,8 +430,8 @@ class WorkerSettings:
     cron_jobs = [
         cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
         cron(run_market_scan_cycle, minute=set(range(60))),
-        # Broad Coinbase USD discovery every 10 minutes (PAPER universe only).
-        cron(run_market_discovery, minute={0, 10, 20, 30, 40, 50}),
+        # Broad Coinbase USD discovery every 5 minutes (PAPER universe only).
+        cron(run_market_discovery, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
     ]
     on_startup = startup
     on_shutdown = shutdown

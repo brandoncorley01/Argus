@@ -107,7 +107,13 @@ export type CockpitSnapshot = {
   watches: CockpitWatch[];
   monitor?: CockpitMonitorRow[];
   doing: Array<{ text: string; tone: string }>;
-  decided: Array<{ id: string; at: string; text: string; tone: string }>;
+  decided: Array<{
+    id: string;
+    at: string;
+    text: string;
+    tone: string;
+    symbol?: string | null;
+  }>;
   rejection_summary?: Array<{ code: string; count: number; why: string }>;
   rejected_live?: Array<{
     symbol: string;

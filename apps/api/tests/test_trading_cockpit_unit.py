@@ -80,7 +80,7 @@ def test_short_timeframe_preference_and_candle_lengths() -> None:
     assert TIMEFRAME_PREF[1] == "5m"
     assert candle_length_for("1m") == timedelta(minutes=1)
     assert candle_length_for("5m") == timedelta(minutes=5)
-    assert CANDIDATE_WATCH_TTL == timedelta(minutes=20)
+    assert CANDIDATE_WATCH_TTL == timedelta(minutes=45)
 
 
 def test_doing_lines_are_live_cadence() -> None:

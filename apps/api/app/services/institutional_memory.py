@@ -25,7 +25,7 @@ from app.services.advanced_learning_service import (
 )
 from app.services.trading_intelligence_service import SIMULATED_COST_BPS
 
-EXECUTE_SCORE = Decimal("62")
+EXECUTE_SCORE = Decimal("58")
 WAIT_SCORE = Decimal("48")
 MIN_EVIDENCE_FOR_HARD_AVOID = 5
 WEAK_EXPECTANCY = Decimal("-0.5")
@@ -60,7 +60,8 @@ def confidence_bucket(score: Decimal | float | None) -> str:
 
 def volume_condition_from_detail(detail: dict[str, Any] | None) -> str:
     d = detail or {}
-    factors = d.get("contributing_factors") if isinstance(d.get("contributing_factors"), dict) else {}
+    raw_factors = d.get("contributing_factors")
+    factors = raw_factors if isinstance(raw_factors, dict) else {}
     if factors.get("volume_ok") is True or d.get("relative_volume_high") is True:
         return "elevated"
     if factors.get("volume_ok") is False:
@@ -412,7 +413,10 @@ class InstitutionalMemoryService:
             elif strategy_regime_expectancy > Decimal("0.25"):
                 learned_adj += 3
 
-        base = float(confidence_label_score) if confidence_label_score is not None else float(base_score)
+        if confidence_label_score is not None:
+            base = float(confidence_label_score)
+        else:
+            base = float(base_score)
         learned_score = Decimal(str(round(max(0.0, min(100.0, base + learned_adj)), 2)))
 
         action = "WAIT"

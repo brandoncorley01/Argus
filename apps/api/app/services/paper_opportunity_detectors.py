@@ -7,9 +7,10 @@ through Alpha Radar / scan pipeline alongside sma_crossover.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -51,14 +52,23 @@ def _sma(values: list[Decimal], n: int) -> Decimal | None:
     return sum(values[-n:], Decimal("0")) / Decimal(n)
 
 
+# Keep detector geometry aligned with paper-training economics:
+# microscopic stops produced penny take-profits on the learning desk.
+_MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
+
+
 def _rr_levels(
     price: Decimal, *, stop: Decimal, min_r: Decimal = Decimal("2")
 ) -> tuple[Decimal, Decimal]:
+    min_risk = price * _MIN_STOP_DISTANCE_PCT
     if stop >= price:
-        stop = price * (Decimal("1") - Decimal("0.01"))
+        stop = price - min_risk
     risk = price - stop
+    if risk < min_risk:
+        stop = price - min_risk
+        risk = min_risk
     if risk <= 0:
-        risk = price * Decimal("0.01")
+        risk = min_risk
         stop = price - risk
     target = price + (risk * min_r)
     return stop, target
@@ -227,7 +237,8 @@ def detect_peak_exhaustion_protection(bars: Sequence[Any]) -> DetectorSignal | N
         return None
     avg_vol = _sma(vols[:-1], 15)
     vol_fade = bool(avg_vol and vols[-1] < avg_vol)
-    # Bearish/Neutral protection — does not open longs; scan stores as Neutral Rejected/Expired helper.
+    # Bearish/Neutral protection — does not open longs; scan stores as
+    # Neutral Rejected/Expired helper.
     return DetectorSignal(
         strategy_key="peak_exhaustion_protection",
         bias="Neutral",

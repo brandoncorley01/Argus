@@ -756,13 +756,14 @@ export function TradingCockpit({
   }, [cockpit?.wall, cockpit?.current_market, popSymbols, displayOpenSymbols]);
 
   const activityLog = useMemo(() => {
-    const fromApi = (cockpit?.decided ?? []).slice(0, 12).map((d) => ({
+    const fromApi: DeskLogItem[] = (cockpit?.decided ?? []).slice(0, 12).map((d) => ({
       id: d.id,
       at: Date.parse(d.at) || 0,
       text: d.text,
       tone: (d.tone === "ok" || d.tone === "warn" || d.tone === "bad"
         ? d.tone
         : "info") as DeskLogItem["tone"],
+      symbol: d.symbol ?? undefined,
     }));
     return [...deskLog, ...fromApi]
       .sort((a, b) => b.at - a.at)
