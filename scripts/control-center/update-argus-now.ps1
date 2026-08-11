@@ -172,8 +172,8 @@ function Find-AllArgusRoots {
       (Join-Path $env:USERPROFILE "source\Argus"),
       (Join-Path $env:USERPROFILE "src\Argus"),
       (Join-Path $env:USERPROFILE "Argus"),
-      (Join-Path "C:\Argus"),
-      (Join-Path "D:\Argus"),
+      "C:\Argus",
+      "D:\Argus",
       # Legacy OneDrive trees — discovered so we can sync/migrate .env, never Start from here.
       (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
       (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
@@ -373,7 +373,7 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v14"
+  Log "Script revision: update-argus-now-v15"
   Log "Uses GitHub API only (no raw CDN fallback)."
   Log "CANONICAL folder: %USERPROFILE%\Desktop\Argus (NOT OneDrive)."
   Log "If OneDrive\Desktop\Argus is serving :3000, it will be stopped; Start uses Desktop only."
