@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Bring Argus up:** `bring-argus-up.ps1` / `Bring-Argus-Up.cmd` finds or clones folder and Start (`live-monitor-v2.52`)
 - **No folder / cannot find file:** updater v11 clones `Desktop\Argus` from GitHub when no git checkout exists; reports written to Desktop + OneDrive Desktop + profile (`live-monitor-v2.51`)
 - **WinPS GitHub parse:** updater v10 decodes `[byte[]]` / JSON+base64 Contents API bodies and prefers plain `public/argus-build.txt` for TARGET (`live-monitor-v2.50`)
 - **404 stamp proof:** `/argus-build.txt` App Router route + `/api/argus-build` so a missing `public/` file cannot 404 forever; 404 = stale PC tree still not on main (`live-monitor-v2.49`)

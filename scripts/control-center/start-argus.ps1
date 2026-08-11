@@ -56,6 +56,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       @{ Name = "keep-awake-argus.ps1"; Path = "scripts/control-center/keep-awake-argus.ps1"; Required = $true },
       @{ Name = "recycle-eoc.ps1"; Path = "scripts/control-center/recycle-eoc.ps1"; Required = $false },
       @{ Name = "update-argus-now.ps1"; Path = "scripts/control-center/update-argus-now.ps1"; Required = $false },
+      @{ Name = "bring-argus-up.ps1"; Path = "scripts/control-center/bring-argus-up.ps1"; Required = $false },
       @{ Name = "diagnose-argus-folder.ps1"; Path = "scripts/control-center/diagnose-argus-folder.ps1"; Required = $false },
       @{ Name = "repair-argus-api.ps1"; Path = "scripts/control-center/repair-argus-api.ps1"; Required = $false },
       @{ Name = "install-desktop-shortcuts.ps1"; Path = "scripts/control-center/install-desktop-shortcuts.ps1"; Required = $false }
@@ -64,7 +65,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
     # Also refresh root launcher cmds so Founder gets Update-Argus.cmd + force-sync Start.
     try {
       $repoRoot = Split-Path $scriptDir -Parent | Split-Path -Parent
-      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd", "GET-LATEST.cmd", "Diagnose-Argus.cmd", "FIX-PC.cmd")) {
+      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd", "GET-LATEST.cmd", "Diagnose-Argus.cmd", "FIX-PC.cmd", "Bring-Argus-Up.cmd")) {
         $dest = Join-Path $repoRoot $leaf
         try {
           $remote = Get-ArgusGitHubText $leaf
