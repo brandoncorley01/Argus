@@ -185,18 +185,65 @@ function Sync-OneRoot([string]$Root, [string]$TargetBuild) {
   return [pscustomobject]@{ Root = $Root; Build = $buildId; Sha = $sha }
 }
 
+function Get-ServingArgusRoot {
+  # Which checkout is actually running the dashboard on :3000?
+  try {
+    $conns = @(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)
+    foreach ($c in $conns) {
+      $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue
+      if (-not $proc -or -not $proc.CommandLine) { continue }
+      Log ("Port 3000 PID {0}: {1}" -f $c.OwningProcess, $proc.CommandLine)
+      if ($proc.CommandLine -match "Set-Location\s+'([^']+)'") {
+        $cand = $Matches[1]
+        if ((Test-Path (Join-Path $cand ".git")) -and (Test-Path (Join-Path $cand "apps\eoc"))) {
+          return $cand
+        }
+      }
+      if ($proc.CommandLine -match '-File\s+"([^"]+control-center\\[^"]+\.ps1)"') {
+        $cand = (Resolve-Path (Join-Path (Split-Path $Matches[1] -Parent) "..\..") -ErrorAction SilentlyContinue).Path
+        if ($cand -and (Test-Path (Join-Path $cand ".git"))) { return $cand }
+      }
+      if ($proc.CommandLine -match '([A-Za-z]:\\(?:Users|[^"\s]+)\\[^"]*?\\Argus)(?:\\|"|\s)') {
+        $cand = $Matches[1]
+        if ((Test-Path (Join-Path $cand ".git")) -and (Test-Path (Join-Path $cand "apps\eoc"))) {
+          return $cand
+        }
+      }
+    }
+  } catch {
+    Log ("WARN: could not inspect :3000 — {0}" -f $_.Exception.Message)
+  }
+  return $null
+}
+
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v6"
+  Log "Script revision: update-argus-now-v7"
   Log "Uses GitHub API (avoids raw.githubusercontent.com CDN lag)."
-  Log "This bypasses stale local Start scripts (fixes stuck v2.40)."
+  Log "Prefers the folder currently serving http://127.0.0.1:3000."
 
   $TargetBuild = Get-GitHubTargetBuild
   Log ("GitHub TARGET build: {0}" -f $TargetBuild)
 
+  # Capture serving folder BEFORE killing :3000.
+  $servingRoot = Get-ServingArgusRoot
+  if ($servingRoot) {
+    Log ("ACTIVE dashboard folder (:3000): {0}" -f $servingRoot)
+  } else {
+    Log "No live :3000 folder detected — will use Start shortcut / first found."
+  }
+
   $found = @(Find-AllArgusRoots)
   if ($found.Count -eq 0) {
     throw "No Argus folder found (.git + apps\eoc). Open PowerShell in your Argus folder and run again."
+  }
+
+  # Put the folder that is actually serving Home first.
+  if ($servingRoot) {
+    $found = @(
+      ($found | Where-Object { $_.Root -eq $servingRoot }) +
+      ($found | Where-Object { $_.Root -ne $servingRoot })
+    )
   }
 
   Log "Stopping API/dashboard locks..."
@@ -212,12 +259,11 @@ try {
   }
   Start-Sleep -Seconds 2
 
-  # Sync every found checkout that is not already on target (shortcut first).
+  # Sync every found checkout (serving / shortcut first).
   $synced = @()
   foreach ($item in $found) {
     if ($item.Build -eq $TargetBuild) {
       Log ("Already on target: {0}" -f $item.Root)
-      # Still rewrite stamp + clear cache so browser cannot serve stale .next
       $synced += (Sync-OneRoot -Root $item.Root -TargetBuild $TargetBuild)
     } else {
       Log ("Behind target ({0} -> {1}): {2}" -f $(if ($item.Build) { $item.Build } else { "?" }), $TargetBuild, $item.Root)
@@ -229,7 +275,8 @@ try {
   $buildId = $synced[0].Build
   $sha = $synced[0].Sha
   Set-Location $Root
-  Log ("Primary Start folder: {0}" -f $Root)
+  Log ("Primary Start folder (will run Start here): {0}" -f $Root)
+  Log ("Cloud agent does NOT write to this PC — only GitHub. This folder must pull main.")
 
   $env:ARGUS_FORCE_SYNC = "1"
   Remove-Item Env:ARGUS_START_SELF_UPDATED -ErrorAction SilentlyContinue
