@@ -194,14 +194,46 @@ function Write-ArgusPublicBuildStamp([string]$Root) {
   return $buildId
 }
 
+function Invoke-ArgusGit {
+  # Run git without treating stderr progress ("From https://...") as terminating
+  # errors when $ErrorActionPreference is Stop (WinPS NativeCommandError).
+  param(
+    [Parameter(Mandatory = $true)][string[]]$GitArgs,
+    [string]$Root = $null
+  )
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    if ($Root) {
+      Push-Location $Root
+    }
+    $output = & git @GitArgs 2>&1
+    $code = $LASTEXITCODE
+    foreach ($line in @($output)) {
+      if ($null -eq $line) { continue }
+      if ($line -is [System.Management.Automation.ErrorRecord]) {
+        Write-Host ("  {0}" -f $line.ToString())
+      } else {
+        Write-Host ("  {0}" -f $line)
+      }
+    }
+    return $code
+  } finally {
+    if ($Root) {
+      Pop-Location -ErrorAction SilentlyContinue
+    }
+    $ErrorActionPreference = $prev
+  }
+}
+
 function Test-ArgusBehindOriginMain([string]$Root) {
   # Returns $true when origin/main SHA or build stamp differs from this PC (after fetch).
   # Fetch failure returns $true so Start hard-syncs instead of falsely claiming "up to date".
   if (-not (Test-Path (Join-Path $Root ".git"))) { return $true }
   Push-Location $Root
   try {
-    git fetch origin 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) {
+    $fetchCode = Invoke-ArgusGit -GitArgs @("fetch", "origin")
+    if ($fetchCode -ne 0) {
       Write-Host "WARN: git fetch failed — treating PC as behind so Start will hard-sync."
       return $true
     }
@@ -212,7 +244,13 @@ function Test-ArgusBehindOriginMain([string]$Root) {
 
     # Same SHA should match, but also catch a stale working tree / wrong build.ts.
     $localBuild = Get-ArgusLocalBuildId $Root
-    $remoteBuildText = git show "origin/main:apps/eoc/src/lib/build.ts" 2>$null
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+      $remoteBuildText = git show "origin/main:apps/eoc/src/lib/build.ts" 2>$null
+    } finally {
+      $ErrorActionPreference = $prev
+    }
     $remoteBuild = Get-ArgusBuildIdFromText "$remoteBuildText"
     if ($localBuild -and $remoteBuild -and ($localBuild -ne $remoteBuild)) {
       return $true
@@ -260,8 +298,8 @@ function Sync-ArgusCode([string]$Root) {
       }
     }
     $before = (git rev-parse HEAD).Trim()
-    git fetch origin 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) {
+    $fetchCode = Invoke-ArgusGit -GitArgs @("fetch", "origin")
+    if ($fetchCode -ne 0) {
       if ($forceSync) {
         throw "git fetch failed — check internet / GitHub access. Cloud-agent merges cannot land until fetch works."
       }
@@ -269,23 +307,23 @@ function Sync-ArgusCode([string]$Root) {
       return $false
     }
     if ($forceSync) {
-      git checkout -f -B main "origin/main" 2>&1 | Out-Host
-      if ($LASTEXITCODE -ne 0) {
+      $code = Invoke-ArgusGit -GitArgs @("checkout", "-f", "-B", "main", "origin/main")
+      if ($code -ne 0) {
         throw "Could not checkout origin/main."
       }
-      git reset --hard "origin/main" 2>&1 | Out-Host
-      if ($LASTEXITCODE -ne 0) {
+      $code = Invoke-ArgusGit -GitArgs @("reset", "--hard", "origin/main")
+      if ($code -ne 0) {
         throw "Could not reset to origin/main."
       }
       # Drop untracked junk that can shadow synced files (keep secrets/runtime).
-      git clean -fd -e .env -e .env.* -e runtime -e backups -e "*.local" 2>&1 | Out-Host
+      $null = Invoke-ArgusGit -GitArgs @("clean", "-fd", "-e", ".env", "-e", ".env.*", "-e", "runtime", "-e", "backups", "-e", "*.local")
     } else {
-      git checkout main 2>&1 | Out-Host
-      if ($LASTEXITCODE -ne 0) {
-        git checkout -B main "origin/main" 2>&1 | Out-Host
+      $code = Invoke-ArgusGit -GitArgs @("checkout", "main")
+      if ($code -ne 0) {
+        $null = Invoke-ArgusGit -GitArgs @("checkout", "-B", "main", "origin/main")
       }
-      git merge --ff-only "origin/main" 2>&1 | Out-Host
-      if ($LASTEXITCODE -ne 0) {
+      $code = Invoke-ArgusGit -GitArgs @("merge", "--ff-only", "origin/main")
+      if ($code -ne 0) {
         Write-Host "WARN: could not fast-forward to origin/main - continuing with local files."
         return $false
       }
