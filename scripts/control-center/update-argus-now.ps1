@@ -278,12 +278,25 @@ function Stop-PortListeners([int[]]$Ports) {
 
 function Invoke-GitAt([string]$Root, [string[]]$GitArgs) {
   Log ("> git " + ($GitArgs -join " "))
+  # WinPS + ErrorAction Stop treats git stderr ("From https://...") as fatal.
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   Push-Location $Root
   try {
-    & git @GitArgs 2>&1 | ForEach-Object { Log ("  $_") }
-    return $LASTEXITCODE
+    $output = & git @GitArgs 2>&1
+    $code = $LASTEXITCODE
+    foreach ($line in @($output)) {
+      if ($null -eq $line) { continue }
+      if ($line -is [System.Management.Automation.ErrorRecord]) {
+        Log ("  {0}" -f $line.ToString())
+      } else {
+        Log ("  {0}" -f $line)
+      }
+    }
+    return $code
   } finally {
     Pop-Location
+    $ErrorActionPreference = $prev
   }
 }
 
@@ -360,10 +373,11 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v13"
+  Log "Script revision: update-argus-now-v14"
   Log "Uses GitHub API only (no raw CDN fallback)."
   Log "CANONICAL folder: %USERPROFILE%\Desktop\Argus (NOT OneDrive)."
   Log "If OneDrive\Desktop\Argus is serving :3000, it will be stopped; Start uses Desktop only."
+  Log "Git stderr no longer aborts Start (WinPS NativeCommandError fix)."
   Log "TARGET read tolerates WinPS byte[] / JSON+base64 API quirks."
 
   $canonicalRoot = Get-ArgusLocalRoot
