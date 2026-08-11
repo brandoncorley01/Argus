@@ -136,42 +136,56 @@ export async function startArgusAction(): Promise<ActionResult> {
   const root = repoRoot();
   const updater = path.join(root, "scripts", "control-center", "update-argus-now.ps1");
   const useNuclear = fs.existsSync(updater);
-  const res = useNuclear
-    ? await spawnHiddenPs1({
-        repoRoot: root,
-        scriptLeaf: "update-argus-now.ps1",
-        timeoutMs: 420_000,
-        env: { ARGUS_FORCE_SYNC: "1" },
-      })
-    : await runPs1("start-argus.ps1", 300_000, {
-        ARGUS_FORCE_SYNC: "1",
-        ARGUS_KEEP_DASHBOARD: "0",
-      });
 
-  revalidatePath("/today");
-  revalidatePath("/control");
-
-  // After nuclear update the old Next process may be dead — still tell Founder
-  // to hard-refresh and read Desktop reports.
-  if (!res.ok) {
-    // Updater may kill this dashboard mid-flight; treat "killed" as check reports.
-    const detail = (res.detail || "").toLowerCase();
-    const maybeKilled =
-      detail.includes("timed out") ||
-      detail.includes("econnreset") ||
-      detail.includes("aborted") ||
-      detail.includes("socket");
-    if (useNuclear && maybeKilled) {
+  if (useNuclear) {
+    const res = await spawnHiddenPs1({
+      repoRoot: root,
+      scriptLeaf: "update-argus-now.ps1",
+      timeoutMs: 420_000,
+      env: { ARGUS_FORCE_SYNC: "1" },
+    });
+    revalidatePath("/today");
+    revalidatePath("/control");
+    if (!res.ok) {
+      const detail = (res.detail || "").toLowerCase();
+      const maybeKilled =
+        detail.includes("timed out") ||
+        detail.includes("econnreset") ||
+        detail.includes("aborted") ||
+        detail.includes("socket");
+      if (maybeKilled) {
+        return {
+          ok: true,
+          message:
+            "Update launched (dashboard may restart). Wait ~30s, open Desktop Argus-update-report.txt, then Ctrl+F5. Build must show live-monitor-v2.48+.",
+          detail: res.detail,
+        };
+      }
       return {
-        ok: true,
-        message:
-          "Update launched (dashboard may restart). Wait ~30s, open Desktop Argus-update-report.txt, then Ctrl+F5. Build must show live-monitor-v2.48+.",
-        detail: res.detail,
+        ok: false,
+        message: res.detail || `Update failed (exit ${res.code ?? "?"}).`,
+        detail:
+          (res.detail || "") +
+          " | Open Desktop Argus-folder-report.txt and Argus-update-report.txt. Or run FIX-PC.cmd.",
       };
     }
     return {
+      ok: true,
+      message: `Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show ${ARGUS_UI_BUILD}.`,
+      detail: res.detail,
+    };
+  }
+
+  const res = await runPs1("start-argus.ps1", 300_000, {
+    ARGUS_FORCE_SYNC: "1",
+    ARGUS_KEEP_DASHBOARD: "0",
+  });
+  revalidatePath("/today");
+  revalidatePath("/control");
+  if (!res.ok) {
+    return {
       ok: false,
-      message: res.detail || `Update failed (exit ${res.code ?? "?"}).`,
+      message: res.message,
       detail:
         (res.detail || "") +
         " | Open Desktop Argus-folder-report.txt and Argus-update-report.txt. Or run FIX-PC.cmd.",
