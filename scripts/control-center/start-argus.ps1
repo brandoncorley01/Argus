@@ -14,18 +14,32 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
   if ($skipSelfUpdate) {
     Write-Host "Skipping Start script self-update (ARGUS_SKIP_START_SELF_UPDATE=1)."
   } else {
-    $baseUrl = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center"
+    function Get-ArgusGitHubText([string]$RepoPath) {
+      # GitHub Contents API — raw.githubusercontent.com CDN can lag main (stuck v2.40/v2.44).
+      $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
+      try {
+        $resp = Invoke-WebRequest -Uri $api -Headers @{
+          Accept = "application/vnd.github.raw"
+          "User-Agent" = "ArgusStartSelfUpdate"
+        } -UseBasicParsing -TimeoutSec 45
+        if ($resp.Content) { return [string]$resp.Content }
+      } catch { }
+      $raw = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/{0}?{1}" -f $RepoPath.TrimStart('/'), (Get-Random)
+      $resp2 = Invoke-WebRequest -Uri $raw -UseBasicParsing -TimeoutSec 45
+      return [string]$resp2.Content
+    }
+
     $files = @(
-      @{ Name = "start-argus.ps1"; Required = $true },
-      @{ Name = "_common.ps1"; Required = $true },
-      @{ Name = "run-hidden.vbs"; Required = $true },
-      @{ Name = "install-keepalive-task.ps1"; Required = $true },
-      @{ Name = "keep-argus-alive.ps1"; Required = $true },
-      @{ Name = "keep-awake-argus.ps1"; Required = $true },
-      @{ Name = "recycle-eoc.ps1"; Required = $false },
-      @{ Name = "update-argus-now.ps1"; Required = $false },
-      @{ Name = "repair-argus-api.ps1"; Required = $false },
-      @{ Name = "install-desktop-shortcuts.ps1"; Required = $false }
+      @{ Name = "start-argus.ps1"; Path = "scripts/control-center/start-argus.ps1"; Required = $true },
+      @{ Name = "_common.ps1"; Path = "scripts/control-center/_common.ps1"; Required = $true },
+      @{ Name = "run-hidden.vbs"; Path = "scripts/control-center/run-hidden.vbs"; Required = $true },
+      @{ Name = "install-keepalive-task.ps1"; Path = "scripts/control-center/install-keepalive-task.ps1"; Required = $true },
+      @{ Name = "keep-argus-alive.ps1"; Path = "scripts/control-center/keep-argus-alive.ps1"; Required = $true },
+      @{ Name = "keep-awake-argus.ps1"; Path = "scripts/control-center/keep-awake-argus.ps1"; Required = $true },
+      @{ Name = "recycle-eoc.ps1"; Path = "scripts/control-center/recycle-eoc.ps1"; Required = $false },
+      @{ Name = "update-argus-now.ps1"; Path = "scripts/control-center/update-argus-now.ps1"; Required = $false },
+      @{ Name = "repair-argus-api.ps1"; Path = "scripts/control-center/repair-argus-api.ps1"; Required = $false },
+      @{ Name = "install-desktop-shortcuts.ps1"; Path = "scripts/control-center/install-desktop-shortcuts.ps1"; Required = $false }
     )
     $changed = $false
     # Also refresh root launcher cmds so Founder gets Update-Argus.cmd + force-sync Start.
@@ -33,45 +47,38 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       $repoRoot = Split-Path $scriptDir -Parent | Split-Path -Parent
       foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd", "GET-LATEST.cmd")) {
         $dest = Join-Path $repoRoot $leaf
-        $tmp = Join-Path $env:TEMP ("argus-{0}-{1}" -f $leaf, [guid]::NewGuid().ToString("N"))
         try {
-          Invoke-WebRequest -Uri ("https://raw.githubusercontent.com/brandoncorley01/Argus/main/{0}?{1}" -f $leaf, (Get-Random)) -OutFile $tmp -UseBasicParsing -TimeoutSec 30
-          $remote = Get-Content -Raw $tmp
+          $remote = Get-ArgusGitHubText $leaf
           if ($remote) {
             $local = if (Test-Path $dest) { Get-Content -Raw $dest } else { "" }
             if ($remote -ne $local) {
-              Copy-Item -LiteralPath $tmp -Destination $dest -Force
+              Set-Content -Path $dest -Value $remote -Encoding ascii
               $changed = $true
               Write-Host ("Updated {0}" -f $leaf)
             }
           }
         } catch {
           Write-Host ("WARN: could not refresh {0}: {1}" -f $leaf, $_.Exception.Message)
-        } finally {
-          Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
       }
     } catch { }
     try {
-      Write-Host "Downloading latest Start scripts from GitHub (always overwrite)..."
+      Write-Host "Downloading latest Start scripts from GitHub API (not CDN)..."
       foreach ($f in $files) {
         $dest = Join-Path $scriptDir $f.Name
-        $tmp = Join-Path $env:TEMP ("argus-{0}-{1}" -f $f.Name, [guid]::NewGuid().ToString("N"))
         try {
-          Invoke-WebRequest -Uri ("{0}/{1}?{2}" -f $baseUrl, $f.Name, (Get-Random)) -OutFile $tmp -UseBasicParsing -TimeoutSec 45
-          $remote = Get-Content -Raw $tmp
+          $remote = Get-ArgusGitHubText $f.Path
           if (-not $remote) { throw "empty download for $($f.Name)" }
           $local = if (Test-Path $dest) { Get-Content -Raw $dest } else { "" }
           if ($remote -ne $local) {
-            Copy-Item -LiteralPath $tmp -Destination $dest -Force
+            # Preserve UTF-8 for .ps1; ascii for .vbs is fine via Set-Content utf8
+            Set-Content -Path $dest -Value $remote -Encoding utf8
             $changed = $true
             Write-Host ("Updated {0}" -f $f.Name)
           }
         } catch {
           if ($f.Required) { throw }
           Write-Host ("WARN: optional {0} not downloaded: {1}" -f $f.Name, $_.Exception.Message)
-        } finally {
-          Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
       }
       if ($changed) {
@@ -84,8 +91,8 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       Write-Host "ERROR: could not self-update Start scripts: $($_.Exception.Message)"
       Write-Host "Refusing to Fast-Start on stale local scripts (this is how PCs get stuck on v2.40)."
       Write-Host "Paste this in PowerShell, then Ctrl+F5 Home:"
-      Write-Host '  irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1?$(Get-Random)" | iex'
-      throw "Start aborted: self-update failed. Run update-argus-now.ps1 via irm | iex."
+      Write-Host '  iex (irm -Headers @{Accept=''application/vnd.github.raw''} ''https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/update-argus-now.ps1?ref=main'')'
+      throw "Start aborted: self-update failed. Run update-argus-now via GitHub API irm | iex."
     }
   }
 }

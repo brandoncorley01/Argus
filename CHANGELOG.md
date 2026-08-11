@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **CDN lag root cause:** Start/updater now pull scripts + TARGET build via GitHub Contents API (raw.githubusercontent.com was still serving v2.44 after main was v2.45); `update-argus-now-v6` + `GET-LATEST.cmd` (`live-monitor-v2.46`)
 - **Stuck-on-v2.40 escape:** `update-argus-now-v5` syncs every Argus checkout to GitHub TARGET build, verifies HTTP `/argus-build.txt`, refuses Start when script self-update fails; add `GET-LATEST.cmd` (`live-monitor-v2.45`)
 - **Cloud-agent sync hard fix:** every Start hard-resets to GitHub main before Fast Start; fetch failures no longer pretend “up to date”; Desktop `Argus-last-start.txt` proves MATCH/MISMATCH; Home **Update from GitHub** works while Running; add `Update-Argus.cmd` (`live-monitor-v2.44`)
 - CI mypy green: harden discovery state load and discovery sample join types (`live-monitor-v2.43`)
