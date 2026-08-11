@@ -13,12 +13,22 @@ function Log([string]$m) {
 }
 
 function Save-Report {
-  $desktop = [Environment]::GetFolderPath("Desktop")
-  if (-not $desktop) { $desktop = $env:USERPROFILE }
-  $path = Join-Path $desktop "Argus-folder-report.txt"
-  ($Report -join "`r`n") | Set-Content -Path $path -Encoding utf8
-  Write-Host ""
-  Write-Host "REPORT SAVED: $path"
+  $text = ($Report -join "`r`n")
+  $dirs = @(
+    [Environment]::GetFolderPath("Desktop"),
+    (Join-Path $env:USERPROFILE "Desktop"),
+    (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
+    $env:USERPROFILE
+  ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+  foreach ($dir in $dirs) {
+    $path = Join-Path $dir "Argus-folder-report.txt"
+    try {
+      Set-Content -Path $path -Value $text -Encoding utf8
+      Write-Host "REPORT SAVED: $path"
+    } catch {
+      Write-Host ("WARN: could not write {0}" -f $path)
+    }
+  }
 }
 
 function Get-BuildIdFromText([string]$Text) {
