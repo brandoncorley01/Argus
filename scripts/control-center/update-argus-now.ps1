@@ -212,7 +212,7 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v8"
+  Log "Script revision: update-argus-now-v9"
   Log "Uses GitHub API only (no raw CDN fallback)."
   Log "Prefers the folder currently serving http://127.0.0.1:3000."
 
@@ -310,7 +310,14 @@ try {
     $httpBuild = ($resp.Content.Trim() -split '\s+')[0]
     Log ("HTTP /argus-build.txt => {0}" -f $resp.Content.Trim())
   } catch {
-    Log ("WARN: could not fetch http://127.0.0.1:3000/argus-build.txt: {0}" -f $_.Exception.Message)
+    Log ("WARN: /argus-build.txt failed: {0}" -f $_.Exception.Message)
+    try {
+      $resp2 = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/api/argus-build?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 15
+      $httpBuild = ($resp2.Content.Trim() -split '\s+')[0]
+      Log ("HTTP /api/argus-build => {0}" -f $resp2.Content.Trim())
+    } catch {
+      Log ("WARN: could not fetch build stamp from :3000: {0}" -f $_.Exception.Message)
+    }
   }
 
   Log ""

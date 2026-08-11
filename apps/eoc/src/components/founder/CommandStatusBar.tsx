@@ -31,18 +31,24 @@ function Feedback({ result }: { result: ActionResult | null }) {
 type Busy = "start" | "stop" | "pause" | "update" | null;
 
 async function fetchLiveBuildId(): Promise<string | null> {
-  try {
-    const res = await fetch(`/argus-build.txt?t=${Date.now()}`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const text = (await res.text()).trim();
-    // File may be "live-monitor-v2.17" or "live-monitor-v2.17 abc1234"
-    const token = text.split(/\s+/)[0]?.trim();
-    return token || null;
-  } catch {
-    return null;
+  // Prefer public stamp (rewritten on Start), then App Router route (never 404
+  // once this process is on a build that includes the route), then /api alias.
+  const urls = [
+    `/argus-build.txt?t=${Date.now()}`,
+    `/api/argus-build?t=${Date.now()}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const text = (await res.text()).trim();
+      const token = text.split(/\s+/)[0]?.trim();
+      if (token) return token;
+    } catch {
+      /* try next */
+    }
   }
+  return null;
 }
 
 export function CommandStatusBar({

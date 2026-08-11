@@ -157,14 +157,17 @@ function Get-ArgusPublicBuildId([string]$Root) {
 
 function Get-ArgusHttpBuildId {
   # What the browser actually sees on :3000 (may be a different Argus folder).
-  try {
-    $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/argus-build.txt?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 5
-    $raw = ($resp.Content).Trim()
-    if (-not $raw) { return $null }
-    return ($raw -split '\s+')[0].Trim()
-  } catch {
-    return $null
+  foreach ($path in @("argus-build.txt", "api/argus-build")) {
+    try {
+      $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/{0}?{1}" -f $path, (Get-Random)) -UseBasicParsing -TimeoutSec 5
+      $raw = ($resp.Content).Trim()
+      if (-not $raw) { continue }
+      return ($raw -split '\s+')[0].Trim()
+    } catch {
+      continue
+    }
   }
+  return $null
 }
 
 function Write-ArgusPublicBuildStamp([string]$Root) {

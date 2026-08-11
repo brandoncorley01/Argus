@@ -157,7 +157,7 @@ export async function startArgusAction(): Promise<ActionResult> {
         return {
           ok: true,
           message:
-            "Update launched (dashboard may restart). Wait ~30s, open Desktop Argus-update-report.txt, then Ctrl+F5. Build must show live-monitor-v2.48+.",
+            "Update launched (dashboard may restart). Wait ~30s, open Desktop Argus-update-report.txt, then Ctrl+F5. Build must show live-monitor-v2.49+.",
           detail: res.detail,
         };
       }
