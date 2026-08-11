@@ -1,9 +1,9 @@
 # FORCE this PC onto current GitHub main (build stamp + dashboard).
-# Run in PowerShell:
+# Paste this ENTIRE line in PowerShell (bypasses stale local Start scripts):
 #   irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1?$(Get-Random)" | iex
 #
-# Writes a report to your Desktop: Argus-update-report.txt
-$ErrorActionPreference = "Continue"
+# Writes Desktop: Argus-update-report.txt
+$ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $ReportLines = New-Object System.Collections.Generic.List[string]
@@ -25,42 +25,51 @@ function Save-Report {
   }
 }
 
-Log "=== Argus UPDATE NOW ==="
-Log "Script revision: update-argus-now-v3"
+function Get-BuildIdFromText([string]$Text) {
+  if (-not $Text) { return $null }
+  if ($Text -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { return $Matches[1] }
+  return $null
+}
 
 function Get-BuildIdFromRoot([string]$Root) {
   $p = Join-Path $Root "apps\eoc\src\lib\build.ts"
   if (-not (Test-Path $p)) { return $null }
-  $t = Get-Content -Raw $p
-  if ($t -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { return $Matches[1] }
-  return $null
+  return Get-BuildIdFromText (Get-Content -Raw $p)
+}
+
+function Get-GitHubTargetBuild {
+  $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/apps/eoc/src/lib/build.ts?{0}" -f (Get-Random)
+  $text = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30).Content
+  $id = Get-BuildIdFromText "$text"
+  if (-not $id) { throw "Could not read ARGUS_UI_BUILD from GitHub raw build.ts" }
+  return $id
 }
 
 function Get-ShortcutArgusRoots {
-  $roots = @()
+  $roots = New-Object System.Collections.Generic.List[string]
   $desktop = [Environment]::GetFolderPath("Desktop")
-  $lnk = Join-Path $desktop "Start Argus.lnk"
-  if (-not (Test-Path $lnk)) { return $roots }
-  try {
-    $w = New-Object -ComObject WScript.Shell
-    $sc = $w.CreateShortcut($lnk)
-    Log ("Desktop shortcut Target: {0}" -f $sc.TargetPath)
-    Log ("Desktop shortcut Args: {0}" -f $sc.Arguments)
-    Log ("Desktop shortcut WorkDir: {0}" -f $sc.WorkingDirectory)
-    if ($sc.WorkingDirectory -and (Test-Path (Join-Path $sc.WorkingDirectory ".git"))) {
-      $roots += $sc.WorkingDirectory
-    }
-    if ($sc.Arguments -match '-File\s+"([^"]+start-argus\.ps1)"') {
-      $scriptPath = $Matches[1]
-      $cand = Resolve-Path (Join-Path (Split-Path $scriptPath -Parent) "..\..") -ErrorAction SilentlyContinue
-      if ($cand -and (Test-Path (Join-Path $cand.Path ".git"))) {
-        $roots += $cand.Path
+  foreach ($name in @("Start Argus.lnk", "Update Argus Now.lnk")) {
+    $lnk = Join-Path $desktop $name
+    if (-not (Test-Path $lnk)) { continue }
+    try {
+      $w = New-Object -ComObject WScript.Shell
+      $sc = $w.CreateShortcut($lnk)
+      Log ("Shortcut {0} WorkDir: {1}" -f $name, $sc.WorkingDirectory)
+      if ($sc.WorkingDirectory -and (Test-Path (Join-Path $sc.WorkingDirectory ".git"))) {
+        $roots.Add($sc.WorkingDirectory) | Out-Null
       }
+      if ($sc.Arguments -match '-File\s+"([^"]+\.ps1)"') {
+        $scriptPath = $Matches[1]
+        $cand = Resolve-Path (Join-Path (Split-Path $scriptPath -Parent) "..\..") -ErrorAction SilentlyContinue
+        if ($cand -and (Test-Path (Join-Path $cand.Path ".git"))) {
+          $roots.Add($cand.Path) | Out-Null
+        }
+      }
+    } catch {
+      Log ("WARN: shortcut read failed: {0}" -f $_.Exception.Message)
     }
-  } catch {
-    Log ("WARN: could not read Start Argus shortcut: {0}" -f $_.Exception.Message)
   }
-  return $roots
+  return @($roots)
 }
 
 function Find-AllArgusRoots {
@@ -73,6 +82,7 @@ function Find-AllArgusRoots {
       (Join-Path $env:USERPROFILE "Documents\Argus"),
       (Join-Path $env:USERPROFILE "source\Argus"),
       (Join-Path $env:USERPROFILE "src\Argus"),
+      (Join-Path $env:USERPROFILE "Argus"),
       (Get-Location).Path
     )) {
     if ($c) { $candidates.Add($c) | Out-Null }
@@ -127,128 +137,147 @@ function Invoke-GitAt([string]$Root, [string[]]$GitArgs) {
   }
 }
 
-$found = @(Find-AllArgusRoots)
-if ($found.Count -eq 0) {
-  Log "ERROR: No Argus folder found (.git + apps\eoc)."
-  Save-Report
-  throw "Could not find Argus folder. cd into Argus and run again."
-}
-
-# Prefer shortcut WorkingDirectory, else the newest git sha / first found.
-$Root = $found[0].Root
-Log ("Using Argus folder: $Root")
-Set-Location $Root
-
-Log "Stopping API/dashboard locks..."
-Stop-PortListeners @(3000, 8000)
-Get-Process -Name node -ErrorAction SilentlyContinue | ForEach-Object {
-  try {
-    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-    if ($cmd -and ($cmd -like "*eoc*" -or $cmd -like "*next*" -or $cmd -like "*Argus*")) {
-      Log ("  kill node PID {0}" -f $_.Id)
-      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
-  } catch {}
-}
-Start-Sleep -Seconds 2
-
-$code = Invoke-GitAt $Root @("remote", "-v")
-$code = Invoke-GitAt $Root @("fetch", "origin")
-if ($code -ne 0) {
-  Log "ERROR: git fetch failed — check internet / GitHub access / credentials."
-  Save-Report
-  throw "git fetch failed"
-}
-
-Log "Hard reset to origin/main..."
-$null = Invoke-GitAt $Root @("checkout", "-f", "-B", "main", "origin/main")
-$code = Invoke-GitAt $Root @("reset", "--hard", "origin/main")
-if ($code -ne 0) {
-  Log "ERROR: git reset failed"
-  Save-Report
-  throw "git reset --hard origin/main failed"
-}
-$null = Invoke-GitAt $Root @("clean", "-fd", "--exclude=.env", "--exclude=runtime", "--exclude=backups")
-
-$sha = (& git -C $Root rev-parse --short HEAD).Trim()
-$branch = (& git -C $Root rev-parse --abbrev-ref HEAD).Trim()
-$buildId = Get-BuildIdFromRoot $Root
-Log ("OK  Now on {0} @ {1}" -f $branch, $sha)
-Log ("OK  build.ts stamp: {0}" -f $(if ($buildId) { $buildId } else { "MISSING" }))
-if ($branch -ne "main") {
-  Save-Report
-  throw "Expected branch main, got $branch"
-}
-if (-not $buildId) {
-  Save-Report
-  throw "build.ts missing ARGUS_UI_BUILD after reset"
-}
-
-# Mirror stamp into public file (served without Next rebuild).
-$publicBuild = Join-Path $Root "apps\eoc\public\argus-build.txt"
-$publicDir = Split-Path $publicBuild -Parent
-if (-not (Test-Path $publicDir)) { New-Item -ItemType Directory -Force -Path $publicDir | Out-Null }
-Set-Content -Path $publicBuild -Value "$buildId $sha" -Encoding ascii
-Log ("Wrote {0}" -f $publicBuild)
-
-$nextCache = Join-Path $Root "apps\eoc\.next"
-if (Test-Path $nextCache) {
-  Log "Clearing Next.js cache..."
-  Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-$env:ARGUS_FORCE_SYNC = "1"
-$env:ARGUS_START_SELF_UPDATED = $null
-$env:ARGUS_SKIP_START_SELF_UPDATE = $null
-$env:ARGUS_KEEP_DASHBOARD = $null
-
-$starter = Join-Path $Root "scripts\control-center\start-argus.ps1"
-if (-not (Test-Path $starter)) {
-  Save-Report
-  throw "Start script missing: $starter"
-}
-
-Log "Starting Argus from updated tree..."
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $starter
-$startExit = $LASTEXITCODE
-Log ("Start exit code: {0}" -f $startExit)
-
-# Source helpers from the refreshed tree for API verification/repair.
-. (Join-Path $Root "scripts\control-center\_common.ps1")
-
-$apiOk = Test-HttpOk (Get-ArgusApiReadyUrl) 5
-if (-not $apiOk) {
-  Log "API /ready failed after Start — running repair..."
-  Log (Get-ArgusApiLogTail $Root 40)
-  if (Repair-ArgusRuntime -Root $Root -IncludeWorker) {
-    $apiOk = $true
-    $startExit = 0
-    Log "OK  API repaired"
-  } else {
-    Log "FAIL API still down after repair"
-    Log (Get-ArgusApiLogTail $Root 60)
-    Log "Next: open Docker Desktop, then run repair-argus-api.ps1 via irm | iex"
+function Sync-OneRoot([string]$Root, [string]$TargetBuild) {
+  Log ("---- Syncing {0} ----" -f $Root)
+  Set-Location $Root
+  $origin = (& git -C $Root remote get-url origin 2>$null)
+  Log ("origin: {0}" -f $(if ($origin) { $origin } else { "?" }))
+  if ($origin -and ($origin -notmatch "brandoncorley01/Argus")) {
+    throw "Wrong git origin at $Root : $origin (expected brandoncorley01/Argus)"
   }
-} else {
-  Log "OK  API /ready"
+  $code = Invoke-GitAt $Root @("fetch", "origin")
+  if ($code -ne 0) { throw "git fetch failed for $Root" }
+  $null = Invoke-GitAt $Root @("checkout", "-f", "-B", "main", "origin/main")
+  $code = Invoke-GitAt $Root @("reset", "--hard", "origin/main")
+  if ($code -ne 0) { throw "git reset failed for $Root" }
+  $null = Invoke-GitAt $Root @("clean", "-fd", "--exclude=.env", "--exclude=.env.*", "--exclude=runtime", "--exclude=backups")
+  $sha = (& git -C $Root rev-parse --short HEAD).Trim()
+  $buildId = Get-BuildIdFromRoot $Root
+  Log ("OK  {0} @ {1} build={2}" -f $Root, $sha, $buildId)
+  if ($buildId -ne $TargetBuild) {
+    throw "After reset, build is '$buildId' but GitHub target is '$TargetBuild' at $Root"
+  }
+  $publicBuild = Join-Path $Root "apps\eoc\public\argus-build.txt"
+  $publicDir = Split-Path $publicBuild -Parent
+  if (-not (Test-Path $publicDir)) { New-Item -ItemType Directory -Force -Path $publicDir | Out-Null }
+  Set-Content -Path $publicBuild -Value "$buildId $sha" -Encoding ascii
+  $nextCache = Join-Path $Root "apps\eoc\.next"
+  if (Test-Path $nextCache) {
+    Log "Clearing Next.js cache..."
+    Remove-Item -LiteralPath $nextCache -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  return [pscustomobject]@{ Root = $Root; Build = $buildId; Sha = $sha }
 }
 
-# Verify what the browser will see.
-Start-Sleep -Seconds 5
 try {
-  $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/argus-build.txt?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 10
-  Log ("HTTP /argus-build.txt => {0}" -f $resp.Content.Trim())
+  Log "=== Argus UPDATE NOW ==="
+  Log "Script revision: update-argus-now-v5"
+  Log "This bypasses stale local Start scripts (fixes stuck v2.40)."
+
+  $TargetBuild = Get-GitHubTargetBuild
+  Log ("GitHub TARGET build: {0}" -f $TargetBuild)
+
+  $found = @(Find-AllArgusRoots)
+  if ($found.Count -eq 0) {
+    throw "No Argus folder found (.git + apps\eoc). Open PowerShell in your Argus folder and run again."
+  }
+
+  Log "Stopping API/dashboard locks..."
+  Stop-PortListeners @(3000, 8000)
+  Get-Process -Name node -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+      if ($cmd -and ($cmd -like "*eoc*" -or $cmd -like "*next*" -or $cmd -like "*Argus*")) {
+        Log ("  kill node PID {0}" -f $_.Id)
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+      }
+    } catch {}
+  }
+  Start-Sleep -Seconds 2
+
+  # Sync every found checkout that is not already on target (shortcut first).
+  $synced = @()
+  foreach ($item in $found) {
+    if ($item.Build -eq $TargetBuild) {
+      Log ("Already on target: {0}" -f $item.Root)
+      # Still rewrite stamp + clear cache so browser cannot serve stale .next
+      $synced += (Sync-OneRoot -Root $item.Root -TargetBuild $TargetBuild)
+    } else {
+      Log ("Behind target ({0} -> {1}): {2}" -f $(if ($item.Build) { $item.Build } else { "?" }), $TargetBuild, $item.Root)
+      $synced += (Sync-OneRoot -Root $item.Root -TargetBuild $TargetBuild)
+    }
+  }
+
+  $Root = $synced[0].Root
+  $buildId = $synced[0].Build
+  $sha = $synced[0].Sha
+  Set-Location $Root
+  Log ("Primary Start folder: {0}" -f $Root)
+
+  $env:ARGUS_FORCE_SYNC = "1"
+  Remove-Item Env:ARGUS_START_SELF_UPDATED -ErrorAction SilentlyContinue
+  Remove-Item Env:ARGUS_SKIP_START_SELF_UPDATE -ErrorAction SilentlyContinue
+  Remove-Item Env:ARGUS_KEEP_DASHBOARD -ErrorAction SilentlyContinue
+  Remove-Item Env:ARGUS_ALLOW_STALE -ErrorAction SilentlyContinue
+
+  $starter = Join-Path $Root "scripts\control-center\start-argus.ps1"
+  if (-not (Test-Path $starter)) { throw "Start script missing: $starter" }
+
+  Log "Starting Argus from updated tree..."
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $starter
+  $startExit = $LASTEXITCODE
+  Log ("Start exit code: {0}" -f $startExit)
+
+  . (Join-Path $Root "scripts\control-center\_common.ps1")
+  $apiOk = Test-HttpOk (Get-ArgusApiReadyUrl) 5
+  if (-not $apiOk) {
+    Log "API /ready failed after Start — running repair..."
+    Log (Get-ArgusApiLogTail $Root 40)
+    if (Repair-ArgusRuntime -Root $Root -IncludeWorker) {
+      $apiOk = $true
+      $startExit = 0
+      Log "OK  API repaired"
+    } else {
+      Log "FAIL API still down after repair"
+      Log (Get-ArgusApiLogTail $Root 60)
+    }
+  } else {
+    Log "OK  API /ready"
+  }
+
+  Start-Sleep -Seconds 6
+  $httpBuild = $null
+  try {
+    $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/argus-build.txt?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 15
+    $httpBuild = ($resp.Content.Trim() -split '\s+')[0]
+    Log ("HTTP /argus-build.txt => {0}" -f $resp.Content.Trim())
+  } catch {
+    Log ("WARN: could not fetch http://127.0.0.1:3000/argus-build.txt: {0}" -f $_.Exception.Message)
+  }
+
+  Log ""
+  Log "=== DONE ==="
+  Log ("TARGET build: {0}" -f $TargetBuild)
+  Log ("LOCAL build:  {0}" -f $buildId)
+  Log ("HTTP build:   {0}" -f $(if ($httpBuild) { $httpBuild } else { "?" }))
+  Log ("API ready: {0}" -f $apiOk)
+  Log "Open: http://127.0.0.1:3000/today"
+  Log "Hard-refresh Home (Ctrl+F5)."
+  if ($httpBuild -and ($httpBuild -ne $TargetBuild)) {
+    Log "ERROR: browser still serving old build after update."
+    Save-Report
+    throw "HTTP build '$httpBuild' != target '$TargetBuild'. Wrong Argus folder may still be running on :3000."
+  }
+  if ($buildId -ne $TargetBuild) {
+    Save-Report
+    throw "Local build '$buildId' != target '$TargetBuild'."
+  }
+  Save-Report
+  if (-not $apiOk) { exit 1 }
+  if ($startExit -ne 0) { exit $startExit }
+  exit 0
 } catch {
-  Log ("WARN: could not fetch http://127.0.0.1:3000/argus-build.txt: {0}" -f $_.Exception.Message)
+  Log ("ERROR: {0}" -f $_.Exception.Message)
+  Save-Report
+  throw
 }
-
-Log ""
-Log "=== DONE ==="
-Log ("Expected Home build after Ctrl+F5: {0}" -f $buildId)
-Log ("API ready: {0}" -f $apiOk)
-Log "Open: http://127.0.0.1:3000/today"
-Log "If API failed: irm repair-argus-api.ps1 | iex (see Desktop report)."
-Save-Report
-
-if (-not $apiOk) { exit 1 }
-if ($startExit -ne 0) { exit $startExit }

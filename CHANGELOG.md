@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Stuck-on-v2.40 escape:** `update-argus-now-v5` syncs every Argus checkout to GitHub TARGET build, verifies HTTP `/argus-build.txt`, refuses Start when script self-update fails; add `GET-LATEST.cmd` (`live-monitor-v2.45`)
 - **Cloud-agent sync hard fix:** every Start hard-resets to GitHub main before Fast Start; fetch failures no longer pretend “up to date”; Desktop `Argus-last-start.txt` proves MATCH/MISMATCH; Home **Update from GitHub** works while Running; add `Update-Argus.cmd` (`live-monitor-v2.44`)
 - CI mypy green: harden discovery state load and discovery sample join types (`live-monitor-v2.43`)
 - Widen Alpha Radar for Coinbase strong-day runners: discovery every 5m; probe 140 / promote 35; refresh 72 symbols; stop hard-rejecting late-stage near-highs (only extreme peak tip blocked); longer Watching TTL; slightly easier memory EXECUTE — so Argus stops missing runs while still refusing tip-chase (`live-monitor-v2.42`)

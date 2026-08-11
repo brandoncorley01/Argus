@@ -31,7 +31,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
     # Also refresh root launcher cmds so Founder gets Update-Argus.cmd + force-sync Start.
     try {
       $repoRoot = Split-Path $scriptDir -Parent | Split-Path -Parent
-      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd")) {
+      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd", "GET-LATEST.cmd")) {
         $dest = Join-Path $repoRoot $leaf
         $tmp = Join-Path $env:TEMP ("argus-{0}-{1}" -f $leaf, [guid]::NewGuid().ToString("N"))
         try {
@@ -81,9 +81,11 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
       }
       Write-Host "Start scripts already current."
     } catch {
-      Write-Host "WARN: could not self-update Start scripts: $($_.Exception.Message)"
-      Write-Host "If Home stays on an old build, run:"
-      Write-Host '  irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1" | iex'
+      Write-Host "ERROR: could not self-update Start scripts: $($_.Exception.Message)"
+      Write-Host "Refusing to Fast-Start on stale local scripts (this is how PCs get stuck on v2.40)."
+      Write-Host "Paste this in PowerShell, then Ctrl+F5 Home:"
+      Write-Host '  irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1?$(Get-Random)" | iex'
+      throw "Start aborted: self-update failed. Run update-argus-now.ps1 via irm | iex."
     }
   }
 }
