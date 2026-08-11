@@ -22,8 +22,31 @@ function Save-Report {
 }
 
 function Get-BuildIdFromText([string]$Text) {
+  if (-not $Text) { return $null }
   if ($Text -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { return $Matches[1] }
+  $token = (($Text.Trim() -split '\s+')[0]).Trim()
+  if ($token -match '^live-monitor-v[0-9]') { return $token }
   return $null
+}
+
+function ConvertTo-ArgusUtf8Text($Content) {
+  if ($null -eq $Content) { return $null }
+  if ($Content -is [byte[]]) {
+    return [System.Text.Encoding]::UTF8.GetString($Content)
+  }
+  if ($Content -is [System.Array] -and $Content.Length -gt 0 -and ($Content[0] -is [byte])) {
+    return [System.Text.Encoding]::UTF8.GetString([byte[]]$Content)
+  }
+  $s = [string]$Content
+  if ($s.TrimStart().StartsWith('{') -and $s -match '"encoding"\s*:\s*"base64"' -and $s -match '"content"\s*:\s*"([^"]+)"') {
+    $b64 = ($Matches[1] -replace '\\n', '')
+    try {
+      return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+    } catch {
+      return $s
+    }
+  }
+  return $s
 }
 
 function Get-BuildIdFromRoot([string]$Root) {
@@ -41,16 +64,24 @@ function Get-PublicBuildFromRoot([string]$Root) {
 }
 
 function Get-GitHubTarget {
-  $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/apps/eoc/src/lib/build.ts?ref=main"
-  try {
-    $resp = Invoke-WebRequest -Uri $api -Headers @{
-      Accept = "application/vnd.github.raw"
-      "User-Agent" = "ArgusFolderDiagnose"
-    } -UseBasicParsing -TimeoutSec 30
-    return Get-BuildIdFromText ([string]$resp.Content)
-  } catch {
-    return $null
+  foreach ($path in @(
+      "apps/eoc/public/argus-build.txt",
+      "apps/eoc/src/lib/build.ts"
+    )) {
+    try {
+      $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $path
+      $resp = Invoke-WebRequest -Uri $api -Headers @{
+        Accept = "application/vnd.github.raw"
+        "User-Agent" = "ArgusFolderDiagnose"
+      } -UseBasicParsing -TimeoutSec 30
+      $text = ConvertTo-ArgusUtf8Text $resp.Content
+      $id = Get-BuildIdFromText $text
+      if ($id) { return $id }
+    } catch {
+      continue
+    }
   }
+  return $null
 }
 
 Log "=== Argus FOLDER DIAGNOSE ==="

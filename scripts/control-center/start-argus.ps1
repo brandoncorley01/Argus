@@ -14,16 +14,37 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
   if ($skipSelfUpdate) {
     Write-Host "Skipping Start script self-update (ARGUS_SKIP_START_SELF_UPDATE=1)."
   } else {
+    function ConvertTo-ArgusUtf8Text($Content) {
+      if ($null -eq $Content) { return $null }
+      if ($Content -is [byte[]]) {
+        return [System.Text.Encoding]::UTF8.GetString($Content)
+      }
+      if ($Content -is [System.Array] -and $Content.Length -gt 0 -and ($Content[0] -is [byte])) {
+        return [System.Text.Encoding]::UTF8.GetString([byte[]]$Content)
+      }
+      $s = [string]$Content
+      if ($s.TrimStart().StartsWith('{') -and $s -match '"encoding"\s*:\s*"base64"' -and $s -match '"content"\s*:\s*"([^"]+)"') {
+        $b64 = ($Matches[1] -replace '\\n', '')
+        try {
+          return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+        } catch {
+          return $s
+        }
+      }
+      return $s
+    }
+
     function Get-ArgusGitHubText([string]$RepoPath) {
-      # GitHub Contents API only — raw.githubusercontent.com CDN can lag main
-      # and previously re-poisoned PCs with older Start scripts.
+      # GitHub Contents API — decode WinPS byte[] / JSON+base64 quirks.
       $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
       $resp = Invoke-WebRequest -Uri $api -Headers @{
         Accept = "application/vnd.github.raw"
         "User-Agent" = "ArgusStartSelfUpdate"
       } -UseBasicParsing -TimeoutSec 45
       if (-not $resp.Content) { throw "empty GitHub API body for $RepoPath" }
-      return [string]$resp.Content
+      $text = ConvertTo-ArgusUtf8Text $resp.Content
+      if (-not $text) { throw "could not decode GitHub body for $RepoPath" }
+      return $text
     }
 
     $files = @(
