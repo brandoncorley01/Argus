@@ -1,6 +1,6 @@
 # FORCE this PC onto current GitHub main (build stamp + dashboard).
-# Paste this ENTIRE line in PowerShell (bypasses stale local Start scripts):
-#   irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1?$(Get-Random)" | iex
+# Paste this ENTIRE line in PowerShell (uses GitHub API — NOT raw CDN cache):
+#   iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/update-argus-now.ps1?ref=main')
 #
 # Writes Desktop: Argus-update-report.txt
 $ErrorActionPreference = "Stop"
@@ -37,11 +37,27 @@ function Get-BuildIdFromRoot([string]$Root) {
   return Get-BuildIdFromText (Get-Content -Raw $p)
 }
 
+function Get-GitHubFileText([string]$RepoPath) {
+  # Prefer GitHub Contents API — raw.githubusercontent.com can lag main by minutes/hours.
+  $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
+  try {
+    $resp = Invoke-WebRequest -Uri $api -Headers @{
+      Accept = "application/vnd.github.raw"
+      "User-Agent" = "ArgusUpdateNow"
+    } -UseBasicParsing -TimeoutSec 45
+    if ($resp.Content) { return [string]$resp.Content }
+  } catch {
+    Log ("WARN: GitHub API read failed for {0}: {1}" -f $RepoPath, $_.Exception.Message)
+  }
+  $raw = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/{0}?{1}" -f $RepoPath.TrimStart('/'), (Get-Random)
+  $resp2 = Invoke-WebRequest -Uri $raw -UseBasicParsing -TimeoutSec 45
+  return [string]$resp2.Content
+}
+
 function Get-GitHubTargetBuild {
-  $url = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/apps/eoc/src/lib/build.ts?{0}" -f (Get-Random)
-  $text = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30).Content
+  $text = Get-GitHubFileText "apps/eoc/src/lib/build.ts"
   $id = Get-BuildIdFromText "$text"
-  if (-not $id) { throw "Could not read ARGUS_UI_BUILD from GitHub raw build.ts" }
+  if (-not $id) { throw "Could not read ARGUS_UI_BUILD from GitHub build.ts" }
   return $id
 }
 
@@ -171,7 +187,8 @@ function Sync-OneRoot([string]$Root, [string]$TargetBuild) {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v5"
+  Log "Script revision: update-argus-now-v6"
+  Log "Uses GitHub API (avoids raw.githubusercontent.com CDN lag)."
   Log "This bypasses stale local Start scripts (fixes stuck v2.40)."
 
   $TargetBuild = Get-GitHubTargetBuild
