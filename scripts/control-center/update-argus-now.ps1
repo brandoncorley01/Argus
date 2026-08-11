@@ -28,7 +28,34 @@ function Save-Report {
 function Get-BuildIdFromText([string]$Text) {
   if (-not $Text) { return $null }
   if ($Text -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { return $Matches[1] }
+  if ($Text -match 'ARGUS_UI_BUILD\s*=\s*''([^'']+)''') { return $Matches[1] }
+  # Plain stamp file: "live-monitor-v2.50" or "live-monitor-v2.50 abc1234"
+  $token = (($Text.Trim() -split '\s+')[0]).Trim()
+  if ($token -match '^live-monitor-v[0-9]') { return $token }
   return $null
+}
+
+function ConvertTo-ArgusUtf8Text($Content) {
+  # Windows PowerShell 5.1 often returns [byte[]] for raw GitHub bodies.
+  # [string]$bytes => "System.Byte[]" which broke TARGET parse on Founder PC.
+  if ($null -eq $Content) { return $null }
+  if ($Content -is [byte[]]) {
+    return [System.Text.Encoding]::UTF8.GetString($Content)
+  }
+  if ($Content -is [System.Array] -and $Content.Length -gt 0 -and ($Content[0] -is [byte])) {
+    return [System.Text.Encoding]::UTF8.GetString([byte[]]$Content)
+  }
+  $s = [string]$Content
+  # If Accept: raw was ignored, Contents API returns JSON + base64 "content".
+  if ($s.TrimStart().StartsWith('{') -and $s -match '"encoding"\s*:\s*"base64"' -and $s -match '"content"\s*:\s*"([^"]+)"') {
+    $b64 = ($Matches[1] -replace '\\n', '')
+    try {
+      return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+    } catch {
+      return $s
+    }
+  }
+  return $s
 }
 
 function Get-BuildIdFromRoot([string]$Root) {
@@ -38,20 +65,34 @@ function Get-BuildIdFromRoot([string]$Root) {
 }
 
 function Get-GitHubFileText([string]$RepoPath) {
-  # GitHub Contents API only — never fall back to raw CDN (lag re-poisoned PCs).
+  # GitHub Contents API — decode byte[] / JSON+base64 (WinPS 5.1 quirks).
   $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
   $resp = Invoke-WebRequest -Uri $api -Headers @{
     Accept = "application/vnd.github.raw"
     "User-Agent" = "ArgusUpdateNow"
   } -UseBasicParsing -TimeoutSec 45
   if (-not $resp.Content) { throw "empty GitHub API body for $RepoPath" }
-  return [string]$resp.Content
+  $text = ConvertTo-ArgusUtf8Text $resp.Content
+  if (-not $text) { throw "could not decode GitHub body for $RepoPath" }
+  return $text
 }
 
 function Get-GitHubTargetBuild {
+  # Prefer plain public stamp (no regex on TypeScript).
+  try {
+    $stamp = Get-GitHubFileText "apps/eoc/public/argus-build.txt"
+    $id = Get-BuildIdFromText "$stamp"
+    if ($id) { return $id }
+    Log ("WARN: public stamp unparseable, head={0}" -f ($(if ($stamp.Length -gt 80) { $stamp.Substring(0,80) } else { $stamp })))
+  } catch {
+    Log ("WARN: public stamp fetch failed: {0}" -f $_.Exception.Message)
+  }
   $text = Get-GitHubFileText "apps/eoc/src/lib/build.ts"
   $id = Get-BuildIdFromText "$text"
-  if (-not $id) { throw "Could not read ARGUS_UI_BUILD from GitHub build.ts" }
+  if (-not $id) {
+    $head = if ($text -and $text.Length -gt 160) { $text.Substring(0, 160) } else { $text }
+    throw "Could not read ARGUS_UI_BUILD from GitHub build.ts. Got: $head"
+  }
   return $id
 }
 
@@ -212,9 +253,10 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v9"
+  Log "Script revision: update-argus-now-v10"
   Log "Uses GitHub API only (no raw CDN fallback)."
   Log "Prefers the folder currently serving http://127.0.0.1:3000."
+  Log "TARGET read tolerates WinPS byte[] / JSON+base64 API quirks."
 
   $TargetBuild = Get-GitHubTargetBuild
   Log ("GitHub TARGET build: {0}" -f $TargetBuild)
