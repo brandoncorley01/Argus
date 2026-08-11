@@ -13,14 +13,17 @@ function Log([string]$msg) {
 }
 
 function Save-Report {
-  # OneDrive Desktop vs %USERPROFILE%\Desktop often differ — write to all.
+  # Canonical report location: %USERPROFILE%\Desktop (not OneDrive).
   $text = $ReportLines -join "`r`n"
   $dirs = @(
-    [Environment]::GetFolderPath("Desktop"),
     (Join-Path $env:USERPROFILE "Desktop"),
-    (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
     $env:USERPROFILE
   ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+  # Also write to special-folder Desktop only if it is NOT OneDrive (duplicate).
+  $special = [Environment]::GetFolderPath("Desktop")
+  if ($special -and (Test-Path $special) -and ($special -notmatch '(?i)OneDrive')) {
+    $dirs = @($dirs + $special) | Select-Object -Unique
+  }
   $saved = $false
   foreach ($dir in $dirs) {
     $path = Join-Path $dir "Argus-update-report.txt"
@@ -35,6 +38,25 @@ function Save-Report {
   if (-not $saved) {
     Write-Host "WARN: could not write Argus-update-report.txt anywhere"
   }
+}
+
+function Get-ArgusLocalDesktop {
+  # Canonical PC Desktop — NEVER [Environment]::GetFolderPath("Desktop"),
+  # which returns OneDrive\Desktop when Files On-Demand is enabled.
+  $d = Join-Path $env:USERPROFILE "Desktop"
+  if (-not (Test-Path $d)) {
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+  }
+  return $d
+}
+
+function Get-ArgusLocalRoot {
+  return (Join-Path (Get-ArgusLocalDesktop) "Argus")
+}
+
+function Test-IsOneDrivePath([string]$Path) {
+  if (-not $Path) { return $false }
+  return [bool]($Path -match '(?i)[\\/]OneDrive([\\/]|$)')
 }
 
 function Get-BuildIdFromText([string]$Text) {
@@ -110,26 +132,29 @@ function Get-GitHubTargetBuild {
 
 function Get-ShortcutArgusRoots {
   $roots = New-Object System.Collections.Generic.List[string]
-  $desktop = [Environment]::GetFolderPath("Desktop")
-  foreach ($name in @("Start Argus.lnk", "Update Argus Now.lnk")) {
-    $lnk = Join-Path $desktop $name
-    if (-not (Test-Path $lnk)) { continue }
-    try {
-      $w = New-Object -ComObject WScript.Shell
-      $sc = $w.CreateShortcut($lnk)
-      Log ("Shortcut {0} WorkDir: {1}" -f $name, $sc.WorkingDirectory)
-      if ($sc.WorkingDirectory -and (Test-Path (Join-Path $sc.WorkingDirectory ".git"))) {
-        $roots.Add($sc.WorkingDirectory) | Out-Null
-      }
-      if ($sc.Arguments -match '-File\s+"([^"]+\.ps1)"') {
-        $scriptPath = $Matches[1]
-        $cand = Resolve-Path (Join-Path (Split-Path $scriptPath -Parent) "..\..") -ErrorAction SilentlyContinue
-        if ($cand -and (Test-Path (Join-Path $cand.Path ".git"))) {
-          $roots.Add($cand.Path) | Out-Null
+  # Prefer real Desktop shortcuts; also check OneDrive Desktop for legacy links.
+  foreach ($desktop in @((Get-ArgusLocalDesktop), (Join-Path $env:USERPROFILE "OneDrive\Desktop"), [Environment]::GetFolderPath("Desktop"))) {
+    if (-not $desktop -or -not (Test-Path $desktop)) { continue }
+    foreach ($name in @("Start Argus.lnk", "Update Argus Now.lnk")) {
+      $lnk = Join-Path $desktop $name
+      if (-not (Test-Path $lnk)) { continue }
+      try {
+        $w = New-Object -ComObject WScript.Shell
+        $sc = $w.CreateShortcut($lnk)
+        Log ("Shortcut {0} WorkDir: {1}" -f $name, $sc.WorkingDirectory)
+        if ($sc.WorkingDirectory -and (Test-Path (Join-Path $sc.WorkingDirectory ".git"))) {
+          $roots.Add($sc.WorkingDirectory) | Out-Null
         }
+        if ($sc.Arguments -match '-File\s+"([^"]+\.ps1)"') {
+          $scriptPath = $Matches[1]
+          $cand = Resolve-Path (Join-Path (Split-Path $scriptPath -Parent) "..\..") -ErrorAction SilentlyContinue
+          if ($cand -and (Test-Path (Join-Path $cand.Path ".git"))) {
+            $roots.Add($cand.Path) | Out-Null
+          }
+        }
+      } catch {
+        Log ("WARN: shortcut read failed: {0}" -f $_.Exception.Message)
       }
-    } catch {
-      Log ("WARN: shortcut read failed: {0}" -f $_.Exception.Message)
     }
   }
   return @($roots)
@@ -137,30 +162,30 @@ function Get-ShortcutArgusRoots {
 
 function Find-AllArgusRoots {
   $candidates = New-Object System.Collections.Generic.List[string]
+  # Canonical first.
+  $candidates.Add((Get-ArgusLocalRoot)) | Out-Null
   foreach ($r in (Get-ShortcutArgusRoots)) { $candidates.Add($r) | Out-Null }
   foreach ($c in @(
-      (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
       (Join-Path $env:USERPROFILE "Desktop\Argus"),
-      (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
       (Join-Path $env:USERPROFILE "Documents\Argus"),
       (Join-Path $env:USERPROFILE "Downloads\Argus"),
-      (Join-Path $env:USERPROFILE "OneDrive\Downloads\Argus"),
       (Join-Path $env:USERPROFILE "source\Argus"),
       (Join-Path $env:USERPROFILE "src\Argus"),
       (Join-Path $env:USERPROFILE "Argus"),
       (Join-Path "C:\Argus"),
       (Join-Path "D:\Argus"),
+      # Legacy OneDrive trees — discovered so we can sync/migrate .env, never Start from here.
+      (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
+      (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
       (Get-Location).Path
     )) {
     if ($c) { $candidates.Add($c) | Out-Null }
   }
   foreach ($base in @(
       (Join-Path $env:USERPROFILE "Desktop"),
-      (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
       (Join-Path $env:USERPROFILE "Documents"),
-      (Join-Path $env:USERPROFILE "OneDrive\Documents"),
       (Join-Path $env:USERPROFILE "Downloads"),
-      (Join-Path $env:USERPROFILE "OneDrive\Downloads"),
+      (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
       "C:\",
       "D:\"
     )) {
@@ -176,8 +201,9 @@ function Find-AllArgusRoots {
       $bid = Get-BuildIdFromRoot $c
       $sha = ""
       try { $sha = (& git -C $c rev-parse --short HEAD 2>$null).Trim() } catch {}
-      Log ("Found Argus at: {0} | build={1} | sha={2}" -f $c, $(if ($bid) { $bid } else { "?" }), $(if ($sha) { $sha } else { "?" }))
-      $valid += [pscustomobject]@{ Root = $c; Build = $bid; Sha = $sha }
+      $tag = if (Test-IsOneDrivePath $c) { " [OneDrive-legacy]" } else { "" }
+      Log ("Found Argus at: {0} | build={1} | sha={2}{3}" -f $c, $(if ($bid) { $bid } else { "?" }), $(if ($sha) { $sha } else { "?" }), $tag)
+      $valid += [pscustomobject]@{ Root = $c; Build = $bid; Sha = $sha; OneDrive = (Test-IsOneDrivePath $c) }
     }
   }
   return $valid
@@ -215,22 +241,15 @@ function New-ArgusCloneFromGitHub {
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw "git is not installed. Install Git for Windows from https://git-scm.com/download/win then re-run this updater."
   }
-  $desktop = [Environment]::GetFolderPath("Desktop")
-  if (-not $desktop -or -not (Test-Path $desktop)) {
-    $desktop = Join-Path $env:USERPROFILE "Desktop"
-  }
-  if (-not (Test-Path $desktop)) {
-    $desktop = $env:USERPROFILE
-  }
-  $dest = Join-Path $desktop "Argus"
+  $dest = Get-ArgusLocalRoot
   if ((Test-Path $dest) -and -not (Test-Path (Join-Path $dest ".git"))) {
-    $dest = Join-Path $desktop ("Argus-github-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    $dest = Join-Path (Get-ArgusLocalDesktop) ("Argus-github-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
   }
   if ((Test-Path $dest) -and (Test-Path (Join-Path $dest ".git"))) {
-    Log ("Using existing clone: {0}" -f $dest)
+    Log ("Using existing Desktop clone: {0}" -f $dest)
     return $dest
   }
-  Log ("Cloning https://github.com/brandoncorley01/Argus.git -> {0}" -f $dest)
+  Log ("Cloning https://github.com/brandoncorley01/Argus.git -> {0} (Desktop only, not OneDrive)" -f $dest)
   $null = New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) -ErrorAction SilentlyContinue
   & git clone --branch main --single-branch "https://github.com/brandoncorley01/Argus.git" $dest 2>&1 | ForEach-Object { Log ("  $_") }
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $dest ".git"))) {
@@ -341,12 +360,14 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v12"
+  Log "Script revision: update-argus-now-v13"
   Log "Uses GitHub API only (no raw CDN fallback)."
-  Log "Prefers the folder currently serving http://127.0.0.1:3000."
-  Log "If no Argus folder exists, clones a fresh Desktop\Argus from GitHub."
+  Log "CANONICAL folder: %USERPROFILE%\Desktop\Argus (NOT OneDrive)."
+  Log "If OneDrive\Desktop\Argus is serving :3000, it will be stopped; Start uses Desktop only."
   Log "TARGET read tolerates WinPS byte[] / JSON+base64 API quirks."
-  Log "Array reorder uses List (avoids PSObject op_Addition crash)."
+
+  $canonicalRoot = Get-ArgusLocalRoot
+  Log ("Canonical Desktop Argus: {0}" -f $canonicalRoot)
 
   $TargetBuild = Get-GitHubTargetBuild
   Log ("GitHub TARGET build: {0}" -f $TargetBuild)
@@ -354,46 +375,57 @@ try {
   # Capture serving folder BEFORE killing :3000.
   $servingRoot = Get-ServingArgusRoot
   if ($servingRoot) {
-    Log ("ACTIVE dashboard folder (:3000): {0}" -f $servingRoot)
+    Log ("LIVE :3000 folder: {0}" -f $servingRoot)
+    if (Test-IsOneDrivePath $servingRoot) {
+      Log "LIVE folder is OneDrive — Founder policy is Desktop only. Will Start from Desktop\Argus."
+    }
   } else {
-    Log "No live :3000 folder detected — will use Start shortcut / first found / clone."
+    Log "No live :3000 folder detected."
   }
 
   $found = @(Find-AllArgusRoots)
-  if ($found.Count -eq 0) {
-    Log "No Argus git folder found (.git + apps\eoc) — cloning from GitHub."
-    $loose = @(Find-LooseEocRoots)
+
+  # Always ensure canonical Desktop\Argus exists.
+  $hasCanonical = @($found | Where-Object { $_.Root -eq $canonicalRoot }).Count -gt 0
+  if (-not $hasCanonical) {
+    Log "Canonical Desktop\Argus missing — cloning there from GitHub."
+    $envSources = New-Object System.Collections.Generic.List[string]
+    foreach ($item in $found) { $envSources.Add((Join-Path $item.Root ".env")) | Out-Null }
+    foreach ($loose in (Find-LooseEocRoots)) { $envSources.Add((Join-Path $loose ".env")) | Out-Null }
+    $envSources.Add((Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus\.env")) | Out-Null
     $cloneRoot = New-ArgusCloneFromGitHub
-    foreach ($old in $loose) {
-      $oldEnv = Join-Path $old ".env"
-      $newEnv = Join-Path $cloneRoot ".env"
+    $newEnv = Join-Path $cloneRoot ".env"
+    foreach ($oldEnv in $envSources) {
       if ((Test-Path $oldEnv) -and (-not (Test-Path $newEnv) -or ((Get-Item $newEnv).Length -lt 10))) {
         Copy-Item -LiteralPath $oldEnv -Destination $newEnv -Force
-        Log ("Copied .env from loose tree: {0}" -f $old)
+        Log ("Copied .env from {0}" -f $oldEnv)
+        break
       }
     }
-    $found = @(
-      [pscustomobject]@{
-        Root = $cloneRoot
-        Build = (Get-BuildIdFromRoot $cloneRoot)
-        Sha = ""
-      }
-    )
-    Log ("PRIMARY folder is now: {0}" -f $cloneRoot)
+    $found = @(Find-AllArgusRoots)
+    if (@($found | Where-Object { $_.Root -eq $canonicalRoot }).Count -eq 0) {
+      $found = @(
+        [pscustomobject]@{
+          Root = $cloneRoot
+          Build = (Get-BuildIdFromRoot $cloneRoot)
+          Sha = ""
+          OneDrive = $false
+        }
+      ) + @($found)
+    }
   }
 
-  # Put the folder that is actually serving Home first.
-  # IMPORTANT: wrap both sides in @() — a single PSObject + array throws
-  # "PSObject does not contain a method named op_Addition" on Windows PowerShell.
-  if ($servingRoot) {
-    $primary = @($found | Where-Object { $_.Root -eq $servingRoot })
-    $rest = @($found | Where-Object { $_.Root -ne $servingRoot })
-    $ordered = New-Object System.Collections.Generic.List[object]
-    foreach ($item in $primary) { $ordered.Add($item) | Out-Null }
-    foreach ($item in $rest) { $ordered.Add($item) | Out-Null }
-    $found = @($ordered)
-    Log ("Sync order (ACTIVE first): {0}" -f (($found | ForEach-Object { $_.Root }) -join " | "))
+  if ($found.Count -eq 0) {
+    throw "No Argus folder available after clone attempt."
   }
+
+  # Sync order: canonical Desktop first, then other non-OneDrive, then OneDrive legacy.
+  $ordered = New-Object System.Collections.Generic.List[object]
+  foreach ($item in @($found | Where-Object { $_.Root -eq $canonicalRoot })) { $ordered.Add($item) | Out-Null }
+  foreach ($item in @($found | Where-Object { $_.Root -ne $canonicalRoot -and -not $_.OneDrive })) { $ordered.Add($item) | Out-Null }
+  foreach ($item in @($found | Where-Object { $_.OneDrive })) { $ordered.Add($item) | Out-Null }
+  $found = @($ordered)
+  Log ("Sync order (Desktop canonical first): {0}" -f (($found | ForEach-Object { $_.Root }) -join " | "))
 
   Log "Stopping API/dashboard locks..."
   Stop-PortListeners @(3000, 8000)
@@ -408,23 +440,30 @@ try {
   }
   Start-Sleep -Seconds 2
 
-  # Sync every found checkout (serving / shortcut first).
+  # Sync every found checkout (Desktop first). Start ONLY from canonical Desktop.
   $synced = @()
   foreach ($item in $found) {
-    if ($item.Build -eq $TargetBuild) {
-      Log ("Already on target: {0}" -f $item.Root)
+    if ($item.OneDrive) {
+      Log ("Syncing OneDrive legacy (will NOT Start from here): {0}" -f $item.Root)
+    }
+    try {
       $synced += (Sync-OneRoot -Root $item.Root -TargetBuild $TargetBuild)
-    } else {
-      Log ("Behind target ({0} -> {1}): {2}" -f $(if ($item.Build) { $item.Build } else { "?" }), $TargetBuild, $item.Root)
-      $synced += (Sync-OneRoot -Root $item.Root -TargetBuild $TargetBuild)
+    } catch {
+      if ($item.Root -eq $canonicalRoot) { throw }
+      Log ("WARN: skip sync for {0}: {1}" -f $item.Root, $_.Exception.Message)
     }
   }
 
-  $Root = $synced[0].Root
-  $buildId = $synced[0].Build
-  $sha = $synced[0].Sha
+  $primary = @($synced | Where-Object { $_.Root -eq $canonicalRoot } | Select-Object -First 1)
+  if (-not $primary) {
+    $primary = @($synced | Where-Object { -not (Test-IsOneDrivePath $_.Root) } | Select-Object -First 1)
+  }
+  if (-not $primary) { throw "No non-OneDrive Argus folder synced. Canonical should be $canonicalRoot" }
+  $Root = $primary[0].Root
+  $buildId = $primary[0].Build
+  $sha = $primary[0].Sha
   Set-Location $Root
-  Log ("Primary Start folder (will run Start here): {0}" -f $Root)
+  Log ("Primary Start folder (Desktop only): {0}" -f $Root)
   Log ("Cloud agent does NOT write to this PC — only GitHub. This folder must pull main.")
 
   $env:ARGUS_FORCE_SYNC = "1"
@@ -436,7 +475,18 @@ try {
   $starter = Join-Path $Root "scripts\control-center\start-argus.ps1"
   if (-not (Test-Path $starter)) { throw "Start script missing: $starter" }
 
-  Log "Starting Argus from updated tree..."
+  # Re-point Desktop shortcuts at canonical Desktop\Argus.
+  try {
+    $install = Join-Path $Root "scripts\control-center\install-desktop-shortcuts.ps1"
+    if (Test-Path $install) {
+      Log "Installing Desktop shortcuts aimed at canonical Desktop\Argus..."
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $install
+    }
+  } catch {
+    Log ("WARN: shortcut install: {0}" -f $_.Exception.Message)
+  }
+
+  Log "Starting Argus from Desktop\Argus..."
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $starter
   $startExit = $LASTEXITCODE
   Log ("Start exit code: {0}" -f $startExit)
@@ -477,12 +527,15 @@ try {
 
   Log ""
   Log "=== DONE ==="
+  Log ("CANONICAL folder: {0}" -f $canonicalRoot)
+  Log ("STARTED from:     {0}" -f $Root)
   Log ("TARGET build: {0}" -f $TargetBuild)
   Log ("LOCAL build:  {0}" -f $buildId)
   Log ("HTTP build:   {0}" -f $(if ($httpBuild) { $httpBuild } else { "?" }))
   Log ("API ready: {0}" -f $apiOk)
   Log "Open: http://127.0.0.1:3000/today"
   Log "Hard-refresh Home (Ctrl+F5)."
+  Log "Do not Start from OneDrive\Desktop\Argus anymore."
   if ($httpBuild -and ($httpBuild -ne $TargetBuild)) {
     Log "ERROR: browser still serving old build after update."
     Save-Report

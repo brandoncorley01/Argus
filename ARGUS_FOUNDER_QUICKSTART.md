@@ -8,7 +8,9 @@
    - **Start Argus** (when Stopped) or **Update from GitHub** (when Running) — both hard-sync `main`
    - **Pause New Trades** to block new paper entries while open positions can still be managed
    - **Refresh recent prices**, then **Scan markets now**
-4. Confirm Build shows **live-monitor-v2.52** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
+4. Confirm Build shows **live-monitor-v2.54** (or newer). Also check `%USERPROFILE%\Desktop\Argus-last-start.txt` says `GitHub sync: MATCH`.
+
+**Canonical PC folder:** `C:\Users\<you>\Desktop\Argus` — **not** OneDrive.
 5. Watch the **Live Trading Cockpit** and market wall (real scan progress + countdowns)
 6. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
 
