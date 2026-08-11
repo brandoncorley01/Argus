@@ -133,7 +133,18 @@ try {
   $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/argus-build.txt?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 8
   Log ("http://127.0.0.1:3000/argus-build.txt => {0}" -f $resp.Content.Trim())
 } catch {
-  Log ("HTTP stamp unavailable: {0}" -f $_.Exception.Message)
+  $msg = $_.Exception.Message
+  Log ("HTTP stamp unavailable: {0}" -f $msg)
+  if ($msg -match '404' -or $msg -match 'Not Found') {
+    Log "404 on /argus-build.txt = this dashboard tree is OLD (missing public stamp)."
+    Log "Cloud agent did save to GitHub — THIS folder never got the pull. Run updater next."
+  }
+  try {
+    $resp2 = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/api/argus-build?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 8
+    Log ("http://127.0.0.1:3000/api/argus-build => {0}" -f $resp2.Content.Trim())
+  } catch {
+    Log ("API stamp also unavailable: {0}" -f $_.Exception.Message)
+  }
 }
 
 Log ""

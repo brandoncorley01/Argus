@@ -8,7 +8,7 @@
    - **Start Argus** (when Stopped) or **Update from GitHub** (when Running) — both hard-sync `main`
    - **Pause New Trades** to block new paper entries while open positions can still be managed
    - **Refresh recent prices**, then **Scan markets now**
-4. Confirm Build shows **live-monitor-v2.48** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
+4. Confirm Build shows **live-monitor-v2.49** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
 5. Watch the **Live Trading Cockpit** and market wall (real scan progress + countdowns)
 6. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
 
@@ -31,8 +31,10 @@ Or double-click Desktop **`FIX PC Argus`** / **`GET-LATEST.cmd`** / **`FIX-PC.cm
 Then:
 1. Desktop **`Argus-folder-report.txt`** — ACTIVE folder vs GitHub TARGET
 2. Desktop **`Argus-update-report.txt`** — TARGET/LOCAL/HTTP must match
-3. Open http://127.0.0.1:3000/argus-build.txt — must say **live-monitor-v2.48**
+3. Open http://127.0.0.1:3000/argus-build.txt (or `/api/argus-build`) — must say **live-monitor-v2.49**
 4. Hard-refresh Home (**Ctrl+F5**) — Build chip must match
+
+If `/argus-build.txt` shows **404**, the dashboard on `:3000` is an **old folder** that never got the public stamp file. That is proof you are not on current `main` yet — run the updater above (do not keep refreshing).
 
 If ACTIVE folder ≠ the folder you thought you were updating, that is why Home stayed on v2.40.
 
@@ -43,7 +45,7 @@ The dashboard is not running. Do **not** keep refreshing `127.0.0.1` alone.
 1. In your Argus folder, double-click **`Start-Argus.cmd`**
 2. Wait until the black window finishes (can take a few minutes; Docker must be running)
 3. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
-4. Sign in and confirm Build **live-monitor-v2.48** (or newer)
+4. Sign in and confirm Build **live-monitor-v2.49** (or newer)
 
 Faster option if Start already failed once: double-click **`Recover-Dashboard.cmd`**.
 

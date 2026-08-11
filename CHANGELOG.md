@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **404 stamp proof:** `/argus-build.txt` App Router route + `/api/argus-build` so a missing `public/` file cannot 404 forever; 404 = stale PC tree still not on main (`live-monitor-v2.49`)
 - **Deep PC sync fix:** Start refuses Fast Start when HTTP `/argus-build.txt` ≠ this folder’s build (kills foreign `:3000`); Home Update runs nuclear `update-argus-now`; Desktop Update shortcut uses GitHub API (not local stale .ps1); `FIX-PC.cmd`; no raw CDN fallback (`live-monitor-v2.48`)
 - **PC folder proof:** `diagnose-argus-folder.ps1` reports Start shortcut WorkDir, which folder serves `:3000`, and GitHub TARGET; updater v7 prefers the live dashboard folder (`live-monitor-v2.47`)
 - **CDN lag root cause:** Start/updater now pull scripts + TARGET build via GitHub Contents API (raw.githubusercontent.com was still serving v2.44 after main was v2.45); `update-argus-now-v6` + `GET-LATEST.cmd` (`live-monitor-v2.46`)
