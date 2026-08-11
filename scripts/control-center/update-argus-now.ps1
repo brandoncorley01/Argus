@@ -29,7 +29,7 @@ function Get-BuildIdFromText([string]$Text) {
   if (-not $Text) { return $null }
   if ($Text -match 'ARGUS_UI_BUILD\s*=\s*"([^"]+)"') { return $Matches[1] }
   if ($Text -match 'ARGUS_UI_BUILD\s*=\s*''([^'']+)''') { return $Matches[1] }
-  # Plain stamp file: "live-monitor-v2.49" or "live-monitor-v2.49 abc1234"
+  # Plain stamp file: "live-monitor-v2.50" or "live-monitor-v2.50 abc1234"
   $token = (($Text.Trim() -split '\s+')[0]).Trim()
   if ($token -match '^live-monitor-v[0-9]') { return $token }
   return $null

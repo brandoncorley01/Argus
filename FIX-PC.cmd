@@ -8,7 +8,7 @@ echo 1) Diagnose which folder Home uses
 echo 2) Hard-reset that folder from GitHub main (API, not CDN)
 echo 3) Open the live build stamp the browser sees
 echo.
-echo TARGET after success: live-monitor-v2.49 or newer
+echo TARGET after success: live-monitor-v2.50 or newer
 echo.
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/diagnose-argus-folder.ps1?ref=main')"
@@ -34,7 +34,7 @@ if not "%ERR%"=="0" (
 
 echo.
 echo UPDATE OK. Hard-refresh Home: Ctrl+F5
-echo Confirm Build is live-monitor-v2.49 — and argus-build.txt matches.
+echo Confirm Build is live-monitor-v2.50 — and argus-build.txt matches.
 echo.
 timeout /t 15 >nul
 exit /b 0
