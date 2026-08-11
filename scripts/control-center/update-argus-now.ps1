@@ -271,8 +271,16 @@ function Invoke-GitAt([string]$Root, [string[]]$GitArgs) {
 function Sync-OneRoot([string]$Root, [string]$TargetBuild) {
   Log ("---- Syncing {0} ----" -f $Root)
   Set-Location $Root
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "git is not installed. Install Git for Windows, then re-run."
+  }
   $origin = (& git -C $Root remote get-url origin 2>$null)
   Log ("origin: {0}" -f $(if ($origin) { $origin } else { "?" }))
+  if (-not $origin) {
+    Log "No git origin — setting origin to brandoncorley01/Argus"
+    $null = Invoke-GitAt $Root @("remote", "add", "origin", "https://github.com/brandoncorley01/Argus.git")
+    $origin = "https://github.com/brandoncorley01/Argus.git"
+  }
   if ($origin -and ($origin -notmatch "brandoncorley01/Argus")) {
     throw "Wrong git origin at $Root : $origin (expected brandoncorley01/Argus)"
   }
@@ -333,11 +341,12 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v11"
+  Log "Script revision: update-argus-now-v12"
   Log "Uses GitHub API only (no raw CDN fallback)."
   Log "Prefers the folder currently serving http://127.0.0.1:3000."
   Log "If no Argus folder exists, clones a fresh Desktop\Argus from GitHub."
   Log "TARGET read tolerates WinPS byte[] / JSON+base64 API quirks."
+  Log "Array reorder uses List (avoids PSObject op_Addition crash)."
 
   $TargetBuild = Get-GitHubTargetBuild
   Log ("GitHub TARGET build: {0}" -f $TargetBuild)
@@ -374,11 +383,16 @@ try {
   }
 
   # Put the folder that is actually serving Home first.
+  # IMPORTANT: wrap both sides in @() — a single PSObject + array throws
+  # "PSObject does not contain a method named op_Addition" on Windows PowerShell.
   if ($servingRoot) {
-    $found = @(
-      ($found | Where-Object { $_.Root -eq $servingRoot }) +
-      ($found | Where-Object { $_.Root -ne $servingRoot })
-    )
+    $primary = @($found | Where-Object { $_.Root -eq $servingRoot })
+    $rest = @($found | Where-Object { $_.Root -ne $servingRoot })
+    $ordered = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $primary) { $ordered.Add($item) | Out-Null }
+    foreach ($item in $rest) { $ordered.Add($item) | Out-Null }
+    $found = @($ordered)
+    Log ("Sync order (ACTIVE first): {0}" -f (($found | ForEach-Object { $_.Root }) -join " | "))
   }
 
   Log "Stopping API/dashboard locks..."
