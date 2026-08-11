@@ -1,9 +1,13 @@
-﻿# Install Desktop shortcuts - Daily controls first, tools second.
+﻿# Install Desktop shortcuts on %USERPROFILE%\Desktop (NOT OneDrive).
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
 $Root = Get-ArgusRoot
-$Desktop = [Environment]::GetFolderPath("Desktop")
+# Canonical Desktop — GetFolderPath("Desktop") often returns OneDrive\Desktop.
+$Desktop = Join-Path $env:USERPROFILE "Desktop"
+if (-not (Test-Path $Desktop)) {
+  New-Item -ItemType Directory -Force -Path $Desktop | Out-Null
+}
 $Wsh = New-Object -ComObject WScript.Shell
 
 function New-ArgusShortcut([string]$Name, [string]$ScriptLeaf, [string]$Description) {
@@ -20,7 +24,6 @@ function New-ArgusShortcut([string]$Name, [string]$ScriptLeaf, [string]$Descript
 }
 
 function New-ArgusApiShortcut([string]$Name, [string]$RepoPath, [string]$Description) {
-  # Always download the script from GitHub Contents API — never a stale local .ps1.
   $lnkPath = Join-Path $Desktop "$Name.lnk"
   $sc = $Wsh.CreateShortcut($lnkPath)
   $sc.TargetPath = "powershell.exe"
@@ -52,23 +55,23 @@ function New-ArgusCmdShortcut([string]$Name, [string]$CmdLeaf, [string]$Descript
 }
 
 Write-Host "=== ARGUS - DAILY ==="
+Write-Host ("Shortcuts Desktop: {0}" -f $Desktop)
+Write-Host ("WorkingDirectory:  {0}" -f $Root)
 New-ArgusShortcut "Start Argus" "start-argus.ps1" "ARGUS DAILY - Start (hard-syncs GitHub main)"
 New-ArgusShortcut "Open Argus" "open-dashboard.ps1" "ARGUS DAILY - Open Home"
 New-ArgusShortcut "End Trading Day" "end-trading-day.ps1" "ARGUS DAILY - Report + Backup"
 New-ArgusShortcut "Stop Argus" "stop-argus.ps1" "ARGUS DAILY - Stop"
 
 Write-Host "=== ARGUS - TOOLS ==="
-# Nuclear update MUST use GitHub API so a v2.40 local script cannot poison the PC.
-New-ArgusApiShortcut "Update Argus Now" "scripts/control-center/update-argus-now.ps1" "ARGUS TOOLS - Nuclear hard-reset via GitHub API"
+New-ArgusApiShortcut "Update Argus Now" "scripts/control-center/update-argus-now.ps1" "ARGUS TOOLS - Nuclear hard-reset via GitHub API (Desktop only)"
+New-ArgusApiShortcut "Bring Argus Up" "scripts/control-center/bring-argus-up.ps1" "ARGUS TOOLS - Find Desktop\Argus and Start"
 New-ArgusApiShortcut "Diagnose Argus Folder" "scripts/control-center/diagnose-argus-folder.ps1" "ARGUS TOOLS - Prove which folder Home uses"
 New-ArgusCmdShortcut "GET LATEST Argus" "GET-LATEST.cmd" "ARGUS TOOLS - Diagnose then update from GitHub"
-New-ArgusCmdShortcut "FIX PC Argus" "FIX-PC.cmd" "ARGUS TOOLS - Nuclear PC repair (diagnose + update + open stamp)"
+New-ArgusCmdShortcut "FIX PC Argus" "FIX-PC.cmd" "ARGUS TOOLS - Nuclear PC repair"
 New-ArgusShortcut "Argus Status" "status-argus.ps1" "ARGUS TOOLS - Status"
 New-ArgusShortcut "Restart Argus" "restart-argus.ps1" "ARGUS TOOLS - Restart"
 New-ArgusShortcut "Backup Argus" "backup-argus.ps1" "ARGUS TOOLS - Backup"
 New-ArgusShortcut "Generate Argus Daily Report" "generate-daily-report.ps1" "ARGUS TOOLS - Report only"
-
-# Keep legacy name pointing at Home for older muscle memory
 New-ArgusShortcut "Open Argus Dashboard" "open-dashboard.ps1" "ARGUS DAILY - Open Home (alias)"
 
 Write-Host ""
@@ -80,8 +83,6 @@ try {
 }
 
 Write-Host ""
-Write-Host "Desktop shortcuts installed."
-Write-Host "Daily: Start / Open / End Trading Day / Stop"
-Write-Host "Tools: Update Argus Now (API) / Diagnose / GET LATEST / Status / Restart / Backup"
+Write-Host "Desktop shortcuts installed on %USERPROFILE%\Desktop (not OneDrive)."
 Write-Host "Home URL: $(Get-ArgusDashboardUrl)"
 Write-Host "Paper trading only · Live trading DISABLED"

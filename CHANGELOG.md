@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Desktop only (no OneDrive):** canonical PC folder is `%USERPROFILE%\Desktop\Argus`; updater v13 / bring-up v2 never Start from OneDrive; shortcuts install to real Desktop (`live-monitor-v2.54`)
 - **PSObject op_Addition crash:** updater v12 reorders ACTIVE folder with List (WinPS crashed when OneDrive + Desktop both found); sync OneDrive\Desktop\Argus first (`live-monitor-v2.53`)
 - **Bring Argus up:** `bring-argus-up.ps1` / `Bring-Argus-Up.cmd` finds or clones folder and Start (`live-monitor-v2.52`)
 - **No folder / cannot find file:** updater v11 clones `Desktop\Argus` from GitHub when no git checkout exists; reports written to Desktop + OneDrive Desktop + profile (`live-monitor-v2.51`)

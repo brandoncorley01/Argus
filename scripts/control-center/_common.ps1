@@ -347,8 +347,8 @@ function Write-ArgusStartReport(
     Set-Content -Path (Join-Path $runtime "last-start-report.txt") -Value $text -Encoding ascii
   } catch { }
   try {
-    $desktop = [Environment]::GetFolderPath("Desktop")
-    if ($desktop) {
+    $desktop = Join-Path $env:USERPROFILE "Desktop"
+    if ($desktop -and (Test-Path $desktop)) {
       Set-Content -Path (Join-Path $desktop "Argus-last-start.txt") -Value $text -Encoding ascii
     }
   } catch { }

@@ -2,7 +2,7 @@
 # Paste in PowerShell:
 #   iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/bring-argus-up.ps1?ref=main')
 #
-# Writes Desktop/OneDrive/profile: Argus-bringup-report.txt
+# Writes %USERPROFILE%\Desktop\Argus-bringup-report.txt (not OneDrive)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -15,9 +15,7 @@ function Log([string]$m) {
 function Save-Report {
   $text = $Report -join "`r`n"
   $dirs = @(
-    [Environment]::GetFolderPath("Desktop"),
     (Join-Path $env:USERPROFILE "Desktop"),
-    (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
     $env:USERPROFILE
   ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
   foreach ($dir in $dirs) {
@@ -46,12 +44,10 @@ function ConvertTo-ArgusUtf8Text($Content) {
 }
 
 function Find-ArgusRoot {
+  # Canonical: %USERPROFILE%\Desktop\Argus only (not OneDrive).
   $candidates = @(
-    (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
     (Join-Path $env:USERPROFILE "Desktop\Argus"),
-    (Join-Path ([Environment]::GetFolderPath("Desktop")) "Argus"),
     (Join-Path $env:USERPROFILE "Documents\Argus"),
-    (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
     (Join-Path $env:USERPROFILE "Argus"),
     "C:\Argus",
     "D:\Argus",
@@ -59,18 +55,18 @@ function Find-ArgusRoot {
   )
   foreach ($base in @(
       (Join-Path $env:USERPROFILE "Desktop"),
-      (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
       (Join-Path $env:USERPROFILE "Documents"),
       (Join-Path $env:USERPROFILE "Downloads")
     )) {
     if (Test-Path $base) {
       Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match 'argus' } |
+        Where-Object { $_.Name -match 'argus' -and $_.FullName -notmatch '(?i)OneDrive' } |
         ForEach-Object { $candidates += $_.FullName }
     }
   }
   foreach ($c in ($candidates | Select-Object -Unique)) {
     if (-not $c) { continue }
+    if ($c -match '(?i)OneDrive') { continue }
     $starter = Join-Path $c "scripts\control-center\start-argus.ps1"
     if ((Test-Path (Join-Path $c ".git")) -and (Test-Path $starter)) {
       return $c
@@ -83,11 +79,10 @@ function New-ArgusClone {
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw "git is not installed. Install Git for Windows: https://git-scm.com/download/win — then re-run."
   }
-  $desktop = [Environment]::GetFolderPath("Desktop")
-  if (-not $desktop -or -not (Test-Path $desktop)) {
-    $desktop = Join-Path $env:USERPROFILE "Desktop"
+  $desktop = Join-Path $env:USERPROFILE "Desktop"
+  if (-not (Test-Path $desktop)) {
+    New-Item -ItemType Directory -Force -Path $desktop | Out-Null
   }
-  if (-not (Test-Path $desktop)) { $desktop = $env:USERPROFILE }
   $dest = Join-Path $desktop "Argus"
   if ((Test-Path $dest) -and -not (Test-Path (Join-Path $dest ".git"))) {
     $dest = Join-Path $desktop ("Argus-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -95,7 +90,7 @@ function New-ArgusClone {
   if ((Test-Path $dest) -and (Test-Path (Join-Path $dest ".git"))) {
     return $dest
   }
-  Log ("Cloning Argus into {0} ..." -f $dest)
+  Log ("Cloning Argus into {0} (Desktop only, not OneDrive) ..." -f $dest)
   & git clone --branch main --single-branch "https://github.com/brandoncorley01/Argus.git" $dest 2>&1 | ForEach-Object { Log ("  $_") }
   if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
   return $dest
@@ -103,7 +98,8 @@ function New-ArgusClone {
 
 try {
   Log "=== BRING ARGUS UP ==="
-  Log "Script revision: bring-argus-up-v1"
+  Log "Script revision: bring-argus-up-v2"
+  Log "Canonical folder: %USERPROFILE%\Desktop\Argus (NOT OneDrive)"
 
   $Root = Find-ArgusRoot
   if (-not $Root) {
