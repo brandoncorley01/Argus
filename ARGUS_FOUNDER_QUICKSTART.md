@@ -8,7 +8,7 @@
    - **Start Argus** (when Stopped) or **Update from GitHub** (when Running) — both hard-sync `main`
    - **Pause New Trades** to block new paper entries while open positions can still be managed
    - **Refresh recent prices**, then **Scan markets now**
-4. Confirm Build shows **live-monitor-v2.44** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
+4. Confirm Build shows **live-monitor-v2.45** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
 5. Watch the **Live Trading Cockpit** and market wall (real scan progress + countdowns)
 6. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
 
@@ -16,12 +16,20 @@ Primary nav: Home · Paper Training · Trades · Reports · Settings.
 
 Paper funds are never real money. Live unlock is not available from Home or from Live Readiness.
 
-## If Build stays stuck on an old stamp (cloud-agent merges not landing)
+## If Build stays stuck on an old stamp (e.g. still v2.40)
 
-1. Double-click **`Update-Argus.cmd`** in the Argus folder (or Desktop **Update Argus Now**)
-2. Wait for the report — Desktop `Argus-update-report.txt` / `Argus-last-start.txt`
-3. Hard-refresh Home (**Ctrl+F5**)
-4. Build must show the new `live-monitor-v2.xx`
+Local Start scripts are stale — **do not keep clicking Start**. Paste this in PowerShell:
+
+```powershell
+irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1?$(Get-Random)" | iex
+```
+
+Or double-click **`GET-LATEST.cmd`** / **`Update-Argus.cmd`** if those files already exist in the Argus folder.
+
+Then:
+1. Open Desktop **`Argus-update-report.txt`** — TARGET/LOCAL/HTTP build must match
+2. Hard-refresh Home (**Ctrl+F5**)
+3. Build must show **live-monitor-v2.45** (or newer)
 
 ## If the browser says “refused to connect”
 
@@ -30,7 +38,7 @@ The dashboard is not running. Do **not** keep refreshing `127.0.0.1` alone.
 1. In your Argus folder, double-click **`Start-Argus.cmd`**
 2. Wait until the black window finishes (can take a few minutes; Docker must be running)
 3. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
-4. Sign in and confirm Build **live-monitor-v2.44** (or newer)
+4. Sign in and confirm Build **live-monitor-v2.45** (or newer)
 
 Faster option if Start already failed once: double-click **`Recover-Dashboard.cmd`**.
 
