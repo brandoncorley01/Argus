@@ -8,7 +8,7 @@
    - **Start Argus** (when Stopped) or **Update from GitHub** (when Running) — both hard-sync `main`
    - **Pause New Trades** to block new paper entries while open positions can still be managed
    - **Refresh recent prices**, then **Scan markets now**
-4. Confirm Build shows **live-monitor-v2.51** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
+4. Confirm Build shows **live-monitor-v2.52** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
 5. Watch the **Live Trading Cockpit** and market wall (real scan progress + countdowns)
 6. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
 
@@ -46,10 +46,18 @@ If ACTIVE folder ≠ the folder you thought you were updating, that is why Home 
 
 The dashboard is not running. Do **not** keep refreshing `127.0.0.1` alone.
 
-1. In your Argus folder, double-click **`Start-Argus.cmd`**
-2. Wait until the black window finishes (can take a few minutes; Docker must be running)
-3. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
-4. Sign in and confirm Build **live-monitor-v2.51** (or newer)
+**Fastest bring-up (PowerShell):**
+
+```powershell
+iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/bring-argus-up.ps1?ref=main')
+```
+
+Or:
+1. Open Docker Desktop (must be running)
+2. In your Argus folder, double-click **`Start-Argus.cmd`** or **`Bring-Argus-Up.cmd`**
+3. Wait until the black window finishes (can take a few minutes)
+4. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
+5. Sign in and confirm Build **live-monitor-v2.52** (or newer)
 
 Faster option if Start already failed once: double-click **`Recover-Dashboard.cmd`**.
 
