@@ -264,8 +264,8 @@ export function CommandStatusBar({
       {liveBuildId && buildId && liveBuildId !== buildId ? (
         <p className="command-status-fix" role="alert">
           Build mismatch: page expects {buildId}, live file shows {liveBuildId}.
-          Press <strong>Update from GitHub</strong> (or desktop Update-Argus.cmd),
-          wait ~15s, then Ctrl+F5.
+          Press <strong>Update from GitHub</strong> (or desktop <strong>FIX PC Argus</strong> / FIX-PC.cmd),
+          wait ~15s, then Ctrl+F5. If still stuck, open Desktop Argus-folder-report.txt.
         </p>
       ) : null}
 

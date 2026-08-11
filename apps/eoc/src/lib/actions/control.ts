@@ -130,12 +130,55 @@ async function runPs1(
 }
 
 export async function startArgusAction(): Promise<ActionResult> {
-  // Home Start always force-syncs to GitHub main. Fast Start previously left
-  // Founder on a stale Build chip (public/argus-build.txt never rewritten).
-  // Do not wipe apps/eoc/.next or kill :3000 here — that aborts this server
-  // action; start-argus schedules a delayed dashboard recycle after sync.
+  // Home "Update from GitHub" must not soft-keep a foreign/stale :3000.
+  // Prefer nuclear updater (syncs every checkout, prefers live :3000 folder).
+  // Fall back to Start if updater is missing on a very old tree.
+  const root = repoRoot();
+  const updater = path.join(root, "scripts", "control-center", "update-argus-now.ps1");
+  const useNuclear = fs.existsSync(updater);
+
+  if (useNuclear) {
+    const res = await spawnHiddenPs1({
+      repoRoot: root,
+      scriptLeaf: "update-argus-now.ps1",
+      timeoutMs: 420_000,
+      env: { ARGUS_FORCE_SYNC: "1" },
+    });
+    revalidatePath("/today");
+    revalidatePath("/control");
+    if (!res.ok) {
+      const detail = (res.detail || "").toLowerCase();
+      const maybeKilled =
+        detail.includes("timed out") ||
+        detail.includes("econnreset") ||
+        detail.includes("aborted") ||
+        detail.includes("socket");
+      if (maybeKilled) {
+        return {
+          ok: true,
+          message:
+            "Update launched (dashboard may restart). Wait ~30s, open Desktop Argus-update-report.txt, then Ctrl+F5. Build must show live-monitor-v2.48+.",
+          detail: res.detail,
+        };
+      }
+      return {
+        ok: false,
+        message: res.detail || `Update failed (exit ${res.code ?? "?"}).`,
+        detail:
+          (res.detail || "") +
+          " | Open Desktop Argus-folder-report.txt and Argus-update-report.txt. Or run FIX-PC.cmd.",
+      };
+    }
+    return {
+      ok: true,
+      message: `Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show ${ARGUS_UI_BUILD}.`,
+      detail: res.detail,
+    };
+  }
+
   const res = await runPs1("start-argus.ps1", 300_000, {
     ARGUS_FORCE_SYNC: "1",
+    ARGUS_KEEP_DASHBOARD: "0",
   });
   revalidatePath("/today");
   revalidatePath("/control");
@@ -143,7 +186,9 @@ export async function startArgusAction(): Promise<ActionResult> {
     return {
       ok: false,
       message: res.message,
-      detail: res.detail,
+      detail:
+        (res.detail || "") +
+        " | Open Desktop Argus-folder-report.txt and Argus-update-report.txt. Or run FIX-PC.cmd.",
     };
   }
   return {

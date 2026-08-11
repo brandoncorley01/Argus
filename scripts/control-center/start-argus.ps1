@@ -15,18 +15,15 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
     Write-Host "Skipping Start script self-update (ARGUS_SKIP_START_SELF_UPDATE=1)."
   } else {
     function Get-ArgusGitHubText([string]$RepoPath) {
-      # GitHub Contents API — raw.githubusercontent.com CDN can lag main (stuck v2.40/v2.44).
+      # GitHub Contents API only — raw.githubusercontent.com CDN can lag main
+      # and previously re-poisoned PCs with older Start scripts.
       $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
-      try {
-        $resp = Invoke-WebRequest -Uri $api -Headers @{
-          Accept = "application/vnd.github.raw"
-          "User-Agent" = "ArgusStartSelfUpdate"
-        } -UseBasicParsing -TimeoutSec 45
-        if ($resp.Content) { return [string]$resp.Content }
-      } catch { }
-      $raw = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/{0}?{1}" -f $RepoPath.TrimStart('/'), (Get-Random)
-      $resp2 = Invoke-WebRequest -Uri $raw -UseBasicParsing -TimeoutSec 45
-      return [string]$resp2.Content
+      $resp = Invoke-WebRequest -Uri $api -Headers @{
+        Accept = "application/vnd.github.raw"
+        "User-Agent" = "ArgusStartSelfUpdate"
+      } -UseBasicParsing -TimeoutSec 45
+      if (-not $resp.Content) { throw "empty GitHub API body for $RepoPath" }
+      return [string]$resp.Content
     }
 
     $files = @(
@@ -46,7 +43,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
     # Also refresh root launcher cmds so Founder gets Update-Argus.cmd + force-sync Start.
     try {
       $repoRoot = Split-Path $scriptDir -Parent | Split-Path -Parent
-      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd", "GET-LATEST.cmd")) {
+      foreach ($leaf in @("Start-Argus.cmd", "Update-Argus.cmd", "GET-LATEST.cmd", "Diagnose-Argus.cmd", "FIX-PC.cmd")) {
         $dest = Join-Path $repoRoot $leaf
         try {
           $remote = Get-ArgusGitHubText $leaf
@@ -160,6 +157,36 @@ try {
   $apiReadyNow = Test-HttpOk (Get-ArgusApiReadyUrl) 3
   $eocReadyNow = (Test-HttpOk "http://127.0.0.1:3000/login" 3) -or (Test-HttpOk "http://127.0.0.1:3000/" 3) -or (Test-HttpOk (Get-ArgusDashboardUrl) 3)
   $workerReadyNow = Test-ArgusWorkerFresh $Root
+
+  # CRITICAL: :3000 can be a different Argus checkout than $Root (e.g. shortcut
+  # syncs Desktop\Argus while Documents\Argus still serves Home). Fast Start used
+  # to treat "any :3000 up" as success and leave v2.40 on screen.
+  $httpBuild = Get-ArgusHttpBuildId
+  if ($eocReadyNow -and $buildId -and $httpBuild -and ($httpBuild -ne $buildId)) {
+    Write-Host ("STALE/FOREIGN dashboard on :3000 — HTTP build={0}, this folder={1}." -f $httpBuild, $buildId)
+    Write-Host ("Killing :3000 and starting dashboard from: {0}" -f $Root)
+    $KeepDashboard = $false
+    $env:ARGUS_KEEP_DASHBOARD = "0"
+    $eocReadyNow = $false
+    $updated = $true
+    try { Stop-ArgusPortListeners @(3000) } catch { }
+    try {
+      Get-Process -Name node -ErrorAction SilentlyContinue | ForEach-Object {
+        $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+        if ($cmd -and ($cmd -like "*eoc*" -or $cmd -like "*next*" -or $cmd -like "*Argus*")) {
+          Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+      }
+    } catch { }
+    Start-Sleep -Seconds 2
+  } elseif ($eocReadyNow -and $buildId -and -not $httpBuild) {
+    Write-Host "WARN: :3000 is up but /argus-build.txt missing — forcing dashboard recycle from this folder."
+    $KeepDashboard = $false
+    $env:ARGUS_KEEP_DASHBOARD = "0"
+    $eocReadyNow = $false
+    $updated = $true
+    try { Stop-ArgusPortListeners @(3000) } catch { }
+  }
 
   # Light repair: API + dashboard up, only worker missing — code already synced.
   if ($apiReadyNow -and $eocReadyNow -and -not $workerReadyNow -and -not $updated) {
