@@ -13,15 +13,27 @@ function Log([string]$msg) {
 }
 
 function Save-Report {
-  $desktop = [Environment]::GetFolderPath("Desktop")
-  if (-not $desktop) { $desktop = $env:USERPROFILE }
-  $path = Join-Path $desktop "Argus-update-report.txt"
-  try {
-    $ReportLines -join "`r`n" | Set-Content -Path $path -Encoding utf8
-    Write-Host ""
-    Write-Host "REPORT SAVED: $path"
-  } catch {
-    Write-Host "WARN: could not write Desktop report: $($_.Exception.Message)"
+  # OneDrive Desktop vs %USERPROFILE%\Desktop often differ — write to all.
+  $text = $ReportLines -join "`r`n"
+  $dirs = @(
+    [Environment]::GetFolderPath("Desktop"),
+    (Join-Path $env:USERPROFILE "Desktop"),
+    (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
+    $env:USERPROFILE
+  ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+  $saved = $false
+  foreach ($dir in $dirs) {
+    $path = Join-Path $dir "Argus-update-report.txt"
+    try {
+      Set-Content -Path $path -Value $text -Encoding utf8
+      Write-Host "REPORT SAVED: $path"
+      $saved = $true
+    } catch {
+      Write-Host ("WARN: could not write {0}: {1}" -f $path, $_.Exception.Message)
+    }
+  }
+  if (-not $saved) {
+    Write-Host "WARN: could not write Argus-update-report.txt anywhere"
   }
 }
 
@@ -131,9 +143,13 @@ function Find-AllArgusRoots {
       (Join-Path $env:USERPROFILE "Desktop\Argus"),
       (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
       (Join-Path $env:USERPROFILE "Documents\Argus"),
+      (Join-Path $env:USERPROFILE "Downloads\Argus"),
+      (Join-Path $env:USERPROFILE "OneDrive\Downloads\Argus"),
       (Join-Path $env:USERPROFILE "source\Argus"),
       (Join-Path $env:USERPROFILE "src\Argus"),
       (Join-Path $env:USERPROFILE "Argus"),
+      (Join-Path "C:\Argus"),
+      (Join-Path "D:\Argus"),
       (Get-Location).Path
     )) {
     if ($c) { $candidates.Add($c) | Out-Null }
@@ -143,6 +159,8 @@ function Find-AllArgusRoots {
       (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
       (Join-Path $env:USERPROFILE "Documents"),
       (Join-Path $env:USERPROFILE "OneDrive\Documents"),
+      (Join-Path $env:USERPROFILE "Downloads"),
+      (Join-Path $env:USERPROFILE "OneDrive\Downloads"),
       "C:\",
       "D:\"
     )) {
@@ -163,6 +181,68 @@ function Find-AllArgusRoots {
     }
   }
   return $valid
+}
+
+function Find-LooseEocRoots {
+  # Zip / copy trees that run Home but are not git checkouts ("cannot find file" / no .git).
+  $hits = @()
+  foreach ($base in @(
+      (Join-Path $env:USERPROFILE "Desktop"),
+      (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
+      (Join-Path $env:USERPROFILE "Documents"),
+      (Join-Path $env:USERPROFILE "OneDrive\Documents"),
+      (Join-Path $env:USERPROFILE "Downloads"),
+      (Join-Path $env:USERPROFILE "Argus"),
+      "C:\Argus",
+      "D:\Argus"
+    )) {
+    if (-not (Test-Path $base)) { continue }
+    $dirs = @($base)
+    if ((Get-Item $base).PSIsContainer) {
+      $dirs += @(Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    }
+    foreach ($c in $dirs) {
+      if ((Test-Path (Join-Path $c "apps\eoc")) -and -not (Test-Path (Join-Path $c ".git"))) {
+        Log ("Found loose (non-git) Argus tree: {0}" -f $c)
+        $hits += $c
+      }
+    }
+  }
+  return @($hits | Select-Object -Unique)
+}
+
+function New-ArgusCloneFromGitHub {
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "git is not installed. Install Git for Windows from https://git-scm.com/download/win then re-run this updater."
+  }
+  $desktop = [Environment]::GetFolderPath("Desktop")
+  if (-not $desktop -or -not (Test-Path $desktop)) {
+    $desktop = Join-Path $env:USERPROFILE "Desktop"
+  }
+  if (-not (Test-Path $desktop)) {
+    $desktop = $env:USERPROFILE
+  }
+  $dest = Join-Path $desktop "Argus"
+  if ((Test-Path $dest) -and -not (Test-Path (Join-Path $dest ".git"))) {
+    $dest = Join-Path $desktop ("Argus-github-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+  }
+  if ((Test-Path $dest) -and (Test-Path (Join-Path $dest ".git"))) {
+    Log ("Using existing clone: {0}" -f $dest)
+    return $dest
+  }
+  Log ("Cloning https://github.com/brandoncorley01/Argus.git -> {0}" -f $dest)
+  $null = New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) -ErrorAction SilentlyContinue
+  & git clone --branch main --single-branch "https://github.com/brandoncorley01/Argus.git" $dest 2>&1 | ForEach-Object { Log ("  $_") }
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $dest ".git"))) {
+    throw "git clone failed (cannot find / create Argus folder). Install Git for Windows and ensure internet access, then re-run."
+  }
+  $envPath = Join-Path $dest ".env"
+  $example = Join-Path $dest ".env.paper.example"
+  if (-not (Test-Path $envPath) -and (Test-Path $example)) {
+    Copy-Item -LiteralPath $example -Destination $envPath -Force
+    Log "Created .env from .env.paper.example"
+  }
+  return $dest
 }
 
 function Stop-PortListeners([int[]]$Ports) {
@@ -253,9 +333,10 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v10"
+  Log "Script revision: update-argus-now-v11"
   Log "Uses GitHub API only (no raw CDN fallback)."
   Log "Prefers the folder currently serving http://127.0.0.1:3000."
+  Log "If no Argus folder exists, clones a fresh Desktop\Argus from GitHub."
   Log "TARGET read tolerates WinPS byte[] / JSON+base64 API quirks."
 
   $TargetBuild = Get-GitHubTargetBuild
@@ -266,12 +347,30 @@ try {
   if ($servingRoot) {
     Log ("ACTIVE dashboard folder (:3000): {0}" -f $servingRoot)
   } else {
-    Log "No live :3000 folder detected — will use Start shortcut / first found."
+    Log "No live :3000 folder detected — will use Start shortcut / first found / clone."
   }
 
   $found = @(Find-AllArgusRoots)
   if ($found.Count -eq 0) {
-    throw "No Argus folder found (.git + apps\eoc). Open PowerShell in your Argus folder and run again."
+    Log "No Argus git folder found (.git + apps\eoc) — cloning from GitHub."
+    $loose = @(Find-LooseEocRoots)
+    $cloneRoot = New-ArgusCloneFromGitHub
+    foreach ($old in $loose) {
+      $oldEnv = Join-Path $old ".env"
+      $newEnv = Join-Path $cloneRoot ".env"
+      if ((Test-Path $oldEnv) -and (-not (Test-Path $newEnv) -or ((Get-Item $newEnv).Length -lt 10))) {
+        Copy-Item -LiteralPath $oldEnv -Destination $newEnv -Force
+        Log ("Copied .env from loose tree: {0}" -f $old)
+      }
+    }
+    $found = @(
+      [pscustomobject]@{
+        Root = $cloneRoot
+        Build = (Get-BuildIdFromRoot $cloneRoot)
+        Sha = ""
+      }
+    )
+    Log ("PRIMARY folder is now: {0}" -f $cloneRoot)
   }
 
   # Put the folder that is actually serving Home first.
