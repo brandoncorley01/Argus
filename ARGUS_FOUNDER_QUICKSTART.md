@@ -8,7 +8,7 @@
    - **Start Argus** (when Stopped) or **Update from GitHub** (when Running) — both hard-sync `main`
    - **Pause New Trades** to block new paper entries while open positions can still be managed
    - **Refresh recent prices**, then **Scan markets now**
-4. Confirm Build shows **live-monitor-v2.46** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
+4. Confirm Build shows **live-monitor-v2.47** (or newer). Also check Desktop `Argus-last-start.txt` says `GitHub sync: MATCH`.
 5. Watch the **Live Trading Cockpit** and market wall (real scan progress + countdowns)
 6. Use **Paper Training** for Automatic Practice or Coaching Mode (Take / Skip / feedback / scorecard)
 
@@ -18,18 +18,22 @@ Paper funds are never real money. Live unlock is not available from Home or from
 
 ## If Build stays stuck on an old stamp (e.g. still v2.40)
 
-Local Start scripts are stale — **do not keep clicking Start**. Paste this in PowerShell (GitHub API, not CDN):
+Cloud agent saves only to GitHub — not to a folder on this PC. First prove which folder Home is using:
+
+```powershell
+iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/diagnose-argus-folder.ps1?ref=main')
+```
+
+Open Desktop **`Argus-folder-report.txt`**. Then update that folder:
 
 ```powershell
 iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/update-argus-now.ps1?ref=main')
 ```
 
-Or double-click **`GET-LATEST.cmd`** / **`Update-Argus.cmd`** if those files already exist in the Argus folder.
-
 Then:
-1. Open Desktop **`Argus-update-report.txt`** — TARGET/LOCAL/HTTP build must match
+1. Desktop **`Argus-update-report.txt`** — TARGET/LOCAL/HTTP build must match
 2. Hard-refresh Home (**Ctrl+F5**)
-3. Build must show **live-monitor-v2.46** (or newer)
+3. Build must show **live-monitor-v2.47** (or newer)
 
 ## If the browser says “refused to connect”
 
@@ -38,7 +42,7 @@ The dashboard is not running. Do **not** keep refreshing `127.0.0.1` alone.
 1. In your Argus folder, double-click **`Start-Argus.cmd`**
 2. Wait until the black window finishes (can take a few minutes; Docker must be running)
 3. Open exactly: **http://127.0.0.1:3000/today** (the `:3000` matters)
-4. Sign in and confirm Build **live-monitor-v2.46** (or newer)
+4. Sign in and confirm Build **live-monitor-v2.47** (or newer)
 
 Faster option if Start already failed once: double-click **`Recover-Dashboard.cmd`**.
 

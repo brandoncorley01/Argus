@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **PC folder proof:** `diagnose-argus-folder.ps1` reports Start shortcut WorkDir, which folder serves `:3000`, and GitHub TARGET; updater v7 prefers the live dashboard folder (`live-monitor-v2.47`)
 - **CDN lag root cause:** Start/updater now pull scripts + TARGET build via GitHub Contents API (raw.githubusercontent.com was still serving v2.44 after main was v2.45); `update-argus-now-v6` + `GET-LATEST.cmd` (`live-monitor-v2.46`)
 - **Stuck-on-v2.40 escape:** `update-argus-now-v5` syncs every Argus checkout to GitHub TARGET build, verifies HTTP `/argus-build.txt`, refuses Start when script self-update fails; add `GET-LATEST.cmd` (`live-monitor-v2.45`)
 - **Cloud-agent sync hard fix:** every Start hard-resets to GitHub main before Fast Start; fetch failures no longer pretend “up to date”; Desktop `Argus-last-start.txt` proves MATCH/MISMATCH; Home **Update from GitHub** works while Running; add `Update-Argus.cmd` (`live-monitor-v2.44`)

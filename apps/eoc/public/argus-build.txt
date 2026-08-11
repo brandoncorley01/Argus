@@ -1,1 +1,1 @@
-live-monitor-v2.46
+live-monitor-v2.47
