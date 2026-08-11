@@ -155,6 +155,18 @@ function Get-ArgusPublicBuildId([string]$Root) {
   }
 }
 
+function Get-ArgusHttpBuildId {
+  # What the browser actually sees on :3000 (may be a different Argus folder).
+  try {
+    $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:3000/argus-build.txt?{0}" -f (Get-Random)) -UseBasicParsing -TimeoutSec 5
+    $raw = ($resp.Content).Trim()
+    if (-not $raw) { return $null }
+    return ($raw -split '\s+')[0].Trim()
+  } catch {
+    return $null
+  }
+}
+
 function Write-ArgusPublicBuildStamp([string]$Root) {
   # Home Build chip reads /argus-build.txt (no Next rebuild required).
   $buildId = Get-ArgusLocalBuildId $Root
@@ -323,8 +335,8 @@ function Write-ArgusStartReport(
     ("Build: {0}" -f $BuildId),
     ("Code updated this Start: {0}" -f $Updated),
     ("GitHub sync: {0}" -f $match),
-    "If Build stays old: run Update-Argus.cmd or",
-    '  irm "https://raw.githubusercontent.com/brandoncorley01/Argus/main/scripts/control-center/update-argus-now.ps1" | iex'
+    "If Build stays old: run GET-LATEST.cmd / Update-Argus.cmd, or PowerShell:",
+    "  iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/update-argus-now.ps1?ref=main')"
   )
   $text = ($lines -join "`r`n") + "`r`n"
   try {

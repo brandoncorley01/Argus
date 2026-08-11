@@ -38,20 +38,14 @@ function Get-BuildIdFromRoot([string]$Root) {
 }
 
 function Get-GitHubFileText([string]$RepoPath) {
-  # Prefer GitHub Contents API — raw.githubusercontent.com can lag main by minutes/hours.
+  # GitHub Contents API only — never fall back to raw CDN (lag re-poisoned PCs).
   $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
-  try {
-    $resp = Invoke-WebRequest -Uri $api -Headers @{
-      Accept = "application/vnd.github.raw"
-      "User-Agent" = "ArgusUpdateNow"
-    } -UseBasicParsing -TimeoutSec 45
-    if ($resp.Content) { return [string]$resp.Content }
-  } catch {
-    Log ("WARN: GitHub API read failed for {0}: {1}" -f $RepoPath, $_.Exception.Message)
-  }
-  $raw = "https://raw.githubusercontent.com/brandoncorley01/Argus/main/{0}?{1}" -f $RepoPath.TrimStart('/'), (Get-Random)
-  $resp2 = Invoke-WebRequest -Uri $raw -UseBasicParsing -TimeoutSec 45
-  return [string]$resp2.Content
+  $resp = Invoke-WebRequest -Uri $api -Headers @{
+    Accept = "application/vnd.github.raw"
+    "User-Agent" = "ArgusUpdateNow"
+  } -UseBasicParsing -TimeoutSec 45
+  if (-not $resp.Content) { throw "empty GitHub API body for $RepoPath" }
+  return [string]$resp.Content
 }
 
 function Get-GitHubTargetBuild {
@@ -218,8 +212,8 @@ function Get-ServingArgusRoot {
 
 try {
   Log "=== Argus UPDATE NOW ==="
-  Log "Script revision: update-argus-now-v7"
-  Log "Uses GitHub API (avoids raw.githubusercontent.com CDN lag)."
+  Log "Script revision: update-argus-now-v8"
+  Log "Uses GitHub API only (no raw CDN fallback)."
   Log "Prefers the folder currently serving http://127.0.0.1:3000."
 
   $TargetBuild = Get-GitHubTargetBuild
