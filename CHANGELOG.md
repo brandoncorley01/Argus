@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Join-Path ChildPath hang:** updater had `Join-Path "C:\Argus"` (one arg) which prompted Founder for ChildPath; fixed in v15 (`live-monitor-v2.56`)
 - **Git stderr Start crash:** WinPS treated `git fetch` progress (`From https://...`) as fatal under `$ErrorActionPreference=Stop`; `Invoke-ArgusGit` + updater v14 (`live-monitor-v2.55`)
 - **Desktop only (no OneDrive):** canonical PC folder is `%USERPROFILE%\Desktop\Argus`; updater v13 / bring-up v2 never Start from OneDrive; shortcuts install to real Desktop (`live-monitor-v2.54`)
 - **PSObject op_Addition crash:** updater v12 reorders ACTIVE folder with List (WinPS crashed when OneDrive + Desktop both found); sync OneDrive\Desktop\Argus first (`live-monitor-v2.53`)
