@@ -131,14 +131,42 @@ function probeDockerEngine(): Promise<boolean> {
   });
 }
 
+function recoveryCooldownPath(): string {
+  return path.join(repoRoot(), "runtime", "control-center", "eoc-recover-cooldown.txt");
+}
+
+export function isRecoveryCooldownActive(minutes = 10): boolean {
+  try {
+    const raw = fs.readFileSync(recoveryCooldownPath(), "utf8").replace(/^\uFEFF/, "");
+    const stamp = Date.parse(raw.trim().split(/\r?\n/)[0] ?? "");
+    if (!Number.isFinite(stamp)) return false;
+    return Date.now() - stamp < minutes * 60_000;
+  } catch {
+    return false;
+  }
+}
+
+function recoveryCooldownActive(minutes = 10): boolean {
+  return isRecoveryCooldownActive(minutes);
+}
+
+function markRecoveryCooldown(): void {
+  try {
+    fs.mkdirSync(path.dirname(recoveryCooldownPath()), { recursive: true });
+    fs.writeFileSync(recoveryCooldownPath(), `${new Date().toISOString()}\n`, "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function probeReachability(): Promise<ReachabilityReport> {
   const desired_running = readDesiredRunning();
   const [docker_engine, postgres, redis, api_health, api_ready] = await Promise.all([
     probeDockerEngine(),
     probeTcp("127.0.0.1", Number(process.env.POSTGRES_PORT || 5432)),
     probeTcp("127.0.0.1", Number(process.env.REDIS_PORT || 6379)),
-    probeHttp(`${apiBaseUrl()}/health`),
-    probeHttp(`${apiBaseUrl()}/ready`),
+    probeHttp(`${apiBaseUrl()}/health`, 2500),
+    probeHttp(`${apiBaseUrl()}/ready`, 8000),
   ]);
 
   // If postgres/redis answer on loopback, the engine is effectively up even when
@@ -148,11 +176,18 @@ export async function probeReachability(): Promise<ReachabilityReport> {
   let blocking: ReachabilityReport["blocking"] = "none";
   let message = "Argus API is reachable.";
 
-  if (api_ready && api_health) {
+  // Liveness (/health) is enough to sign in. /ready can lag under DB load.
+  if (api_health) {
     blocking = "none";
-    message = desired_running
-      ? "Argus is Running."
-      : "Argus API is up (desired state is Stopped).";
+    if (api_ready) {
+      message = desired_running
+        ? "Argus is Running."
+        : "Argus API is up (desired state is Stopped).";
+    } else {
+      message = desired_running
+        ? "Argus API is up. Sign in — background services may still be catching up."
+        : "Argus API is up (desired state is Stopped).";
+    }
   } else if (!desired_running) {
     blocking = "stopped";
     message =
@@ -185,6 +220,10 @@ export async function probeReachability(): Promise<ReachabilityReport> {
 }
 
 export async function triggerKeepAlive(): Promise<{ ok: boolean; detail: string }> {
+  if (recoveryCooldownActive(5)) {
+    return { ok: true, detail: "Recovery skipped — ran recently." };
+  }
+  markRecoveryCooldown();
   const res = await spawnHiddenPs1({
     repoRoot: repoRoot(),
     scriptLeaf: "keep-argus-alive.ps1",
@@ -194,16 +233,18 @@ export async function triggerKeepAlive(): Promise<{ ok: boolean; detail: string 
 }
 
 export async function triggerStartArgus(): Promise<{ ok: boolean; detail: string }> {
+  if (recoveryCooldownActive(5)) {
+    return { ok: true, detail: "Start skipped — ran recently." };
+  }
+  markRecoveryCooldown();
+  const root = repoRoot();
+  const boot = path.join(root, "scripts", "control-center", "boot-argus.ps1");
   const res = await spawnHiddenPs1({
-    repoRoot: repoRoot(),
-    scriptLeaf: "start-argus.ps1",
+    repoRoot: root,
+    scriptLeaf: fs.existsSync(boot) ? "boot-argus.ps1" : "start-argus.ps1",
     timeoutMs: 240_000,
     env: {
       ARGUS_KEEP_DASHBOARD: "1",
-      // Avoid nested self-update wipe while recovering from login.
-      ARGUS_START_SELF_UPDATED: "1",
-      // Never hard-reset the tree from a login recovery path.
-      ARGUS_SKIP_START_SELF_UPDATE: "1",
     },
   });
   return { ok: res.ok, detail: res.detail };

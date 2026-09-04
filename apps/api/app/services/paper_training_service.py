@@ -562,23 +562,42 @@ class PaperTrainingService:
         portfolio = self.db.get(PaperPortfolio, portfolio_id)
         if portfolio is None or portfolio.kill_switch_active or portfolio.pause_new_entries_active:
             return []
-        # Do not grind a depleted learning desk — leave cash intact and explain on Home.
+        # Do not grind a depleted learning desk — size down to remaining cash
+        # instead of refusing all entries (empty books destroy expectancy learning).
         buying_power = portfolio.cash_balance - (portfolio.reserved_cash or Decimal("0"))
-        if buying_power < settings.default_notional:
-            if buying_power < Decimal("1"):
+        entry_notional = settings.default_notional
+        if buying_power < entry_notional:
+            if buying_power < MIN_DIG_OUT_CASH:
                 self._emit_decision_event(
                     symbol="*",
                     outcome="info",
                     title="Paper capital too low for new entries",
                     detail=(
                         f"Cash available is ${buying_power:.2f}; automatic entries need "
-                        f"about ${settings.default_notional:.2f}. "
+                        f"at least ${MIN_DIG_OUT_CASH:.2f}. "
                         "Open positions can still exit. "
                         "Use Reseed learning desk to restore $300 practice cash."
                     ),
                     reason_code="insufficient_paper_cash",
                 )
-            return []
+                return []
+            entry_notional = max(
+                MIN_DIG_OUT_CASH,
+                min(entry_notional, buying_power),
+            ).quantize(Decimal("0.01"))
+            if settings.default_notional != entry_notional:
+                settings.default_notional = entry_notional
+                self.db.commit()
+                self._emit_decision_event(
+                    symbol="*",
+                    outcome="info",
+                    title="Paper size reduced to remaining cash",
+                    detail=(
+                        f"Buying power ${buying_power:.2f} < prior practice size. "
+                        f"Entries now use ${entry_notional:.2f} (paper only)."
+                    ),
+                    reason_code="auto_size_down",
+                )
         opened: list[dict[str, Any]] = []
         cands = list(
             self.db.scalars(
@@ -588,7 +607,7 @@ class PaperTrainingService:
                     MarketScanCandidate.risk_status == "clear",
                 )
                 .order_by(desc(MarketScanCandidate.score))
-                .limit(24)
+                .limit(40)
             )
         )
         # Prefer freshest Watching candidates with usable score.
@@ -597,6 +616,25 @@ class PaperTrainingService:
             for c in cands
             if float(c.score or 0) >= 50.0
         ] or cands
+        # Adaptive priority: non-SMA detectors / catalyst setups outrank SMA probes
+        # when scores are close — Argus must not be an SMA-only bot.
+        def _entry_priority(c: MarketScanCandidate) -> float:
+            base = float(c.score or 0)
+            sk = (c.strategy_key or "").lower()
+            if sk and sk != "sma_crossover":
+                base += 10.0
+            if sk == "catalyst_retest":
+                base += 4.0
+            return base
+
+        cands = sorted(cands, key=_entry_priority, reverse=True)[:24]
+        # When a symbol has both SMA and a detector Watching, drop the SMA probe.
+        best_by_symbol: dict[str, MarketScanCandidate] = {}
+        for c in cands:
+            prior = best_by_symbol.get(c.symbol)
+            if prior is None or _entry_priority(c) > _entry_priority(prior):
+                best_by_symbol[c.symbol] = c
+        cands = sorted(best_by_symbol.values(), key=_entry_priority, reverse=True)
         open_syms = {
             p.symbol
             for p in self.db.scalars(
@@ -608,7 +646,7 @@ class PaperTrainingService:
         }
         # Cool-off after exit so the same symbol is not flipped every minute.
         recently_exited = self._symbols_exited_since(
-            portfolio_id, within_seconds=300
+            portfolio_id, within_seconds=120
         )
         resolved = self._resolve_actor(actor, portfolio)
         if resolved is None:
@@ -648,6 +686,39 @@ class PaperTrainingService:
                     reason_code="discovery_chase_avoid",
                 )
                 continue
+
+            # Catalyst-retest playbook: BTC must be supportive; optional positive
+            # headline tag (never invents news — only matches stored headlines).
+            if (cand.strategy_key or "") == "catalyst_retest":
+                btc_regime = intelligence.infer_market_regime("BTC-USD")
+                if btc_regime in {"trend_down", "volatile"}:
+                    self._emit_decision_event(
+                        symbol=cand.symbol,
+                        outcome="info",
+                        title=f"BTC not supportive for {cand.symbol}",
+                        detail=(
+                            f"catalyst_retest requires supportive BTC; "
+                            f"BTC regime={btc_regime}."
+                        ),
+                        reason_code="btc_regime_block",
+                    )
+                    continue
+                news_hit = self._positive_catalyst_headline(cand.symbol)
+                cand_detail["catalyst_news"] = news_hit
+                if news_hit.get("found"):
+                    cand_detail["catalyst_classified"] = "positive_keyword"
+                    # Soft score boost when a matching headline exists.
+                    try:
+                        cand.score = min(
+                            Decimal("98"),
+                            Decimal(str(cand.score or 0)) + Decimal("4"),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                else:
+                    cand_detail["catalyst_classified"] = "price_volume_only"
+                cand.detail = cand_detail
+
             # --- Institutional memory consult BEFORE paper entry (PAPER only) ---
             regime = intelligence.infer_market_regime(cand.symbol)
             delta = intelligence._paper_adaptive_delta(
@@ -733,7 +804,7 @@ class PaperTrainingService:
             reward_usd = expected_reward_usd(
                 price=entry_px,
                 target=norm_target,
-                notional=settings.default_notional,
+                notional=entry_notional,
             )
             if reward_usd < MIN_EXPECTED_REWARD_USD:
                 self._emit_decision_event(
@@ -743,7 +814,7 @@ class PaperTrainingService:
                     detail=(
                         f"Planned reward ${reward_usd} is below the "
                         f"${MIN_EXPECTED_REWARD_USD} minimum at "
-                        f"${settings.default_notional} notional. "
+                        f"${entry_notional} notional. "
                         "Waiting for a setup with real dollar upside."
                     ),
                     reason_code="reward_too_small",
@@ -756,7 +827,7 @@ class PaperTrainingService:
                 order = self._open_paper_from_candidate(
                     portfolio_id=portfolio_id,
                     cand=cand,
-                    notional=settings.default_notional,
+                    notional=entry_notional,
                     actor=resolved,
                     memory_consult=consult,
                 )
@@ -772,6 +843,13 @@ class PaperTrainingService:
                     }
                 )
                 open_syms.add(cand.symbol)
+                buying_power = (buying_power - entry_notional).quantize(Decimal("0.01"))
+                if buying_power < entry_notional:
+                    if buying_power < MIN_DIG_OUT_CASH:
+                        break
+                    entry_notional = max(MIN_DIG_OUT_CASH, buying_power).quantize(
+                        Decimal("0.01")
+                    )
                 self.audit.append(
                     action="paper.training.auto_enter",
                     resource_type="paper_order",
@@ -789,7 +867,7 @@ class PaperTrainingService:
                     outcome="entered",
                     title=f"Entered {cand.symbol}",
                     detail=(
-                        f"Opened a ${settings.default_notional} paper long after memory "
+                        f"Opened a ${entry_notional} paper long after memory "
                         f"EXECUTE (score {consult.get('learned_opportunity_score')}). "
                         f"Stop {cand.stop_loss}; target {cand.take_profit}."
                     ),
@@ -905,11 +983,17 @@ class PaperTrainingService:
                 "take_profit": str(target),
                 "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else str(price),
                 "institutional_memory": memory_consult,
+                "strategy_key": cand.strategy_key,
+                "playbook": (cand.detail or {}).get("playbook") or cand.strategy_key,
+                "trade_pattern": (cand.detail or {}).get("trade_pattern")
+                or (cand.detail or {}).get("pattern"),
                 "discovery_source": (cand.detail or {}).get("discovery_source"),
                 "discovery_opportunity_class": (cand.detail or {}).get(
                     "discovery_opportunity_class"
                 ),
                 "discovered_market": bool((cand.detail or {}).get("discovered_market")),
+                "catalyst_news": (cand.detail or {}).get("catalyst_news"),
+                "catalyst_classified": (cand.detail or {}).get("catalyst_classified"),
             },
         )
         try:
@@ -956,14 +1040,80 @@ class PaperTrainingService:
             if stop is None and target is None:
                 continue
             avg = getattr(pos, "average_cost", None)
-            if avg is not None and avg > 0:
+            # Do not re-normalize an already-trailed stop above entry — that
+            # would wipe the ratchet back to a fresh 1.5% protective stop.
+            if (
+                avg is not None
+                and avg > 0
+                and (stop is None or stop < avg)
+            ):
                 stop, target = normalize_exit_levels(avg, stop, target)
             mark, _mark_at = self.paper._latest_mark(pos.symbol)
             if mark is None:
                 continue
+            # Trail only after meaningful progress — early BE at +1R clipped winners
+            # into noise exits and destroyed expectancy (paper only; live locked).
+            planned_stop = stop
+            ratcheted = False
+            if (
+                avg is not None
+                and avg > 0
+                and stop is not None
+                and stop < avg
+            ):
+                risk = avg - stop
+                if risk > 0:
+                    r_mult = (mark - avg) / risk
+                    if r_mult >= Decimal("2"):
+                        trail = avg + risk  # lock ~1R
+                        if trail > stop:
+                            stop = trail
+                            ratcheted = True
+                    elif r_mult >= Decimal("1.5"):
+                        trail = avg + (risk * Decimal("0.5"))
+                        if trail > stop:
+                            stop = trail
+                            ratcheted = True
+            if (
+                ratcheted
+                and planned_stop is not None
+                and stop is not None
+                and stop > planned_stop
+                and mark > stop
+            ):
+                entry_order_id = plan.get("entry_order_id")
+                if entry_order_id is not None:
+                    entry_order = self.db.get(PaperOrder, entry_order_id)
+                    if entry_order is not None:
+                        self.paper._event(
+                            entry_order,
+                            "paper_exit_plan",
+                            entry_order.status,
+                            entry_order.status,
+                            {
+                                "stop_loss": str(stop),
+                                "take_profit": (
+                                    str(target) if target is not None else None
+                                ),
+                                "trailed": True,
+                                "entry_zone": str(avg),
+                            },
+                        )
+                        try:
+                            self.db.commit()
+                        except Exception:  # noqa: BLE001
+                            try:
+                                self.db.rollback()
+                            except Exception:  # noqa: BLE001
+                                pass
+                continue
             reason: str | None = None
             if stop is not None and mark <= stop:
-                reason = "stop_loss"
+                reason = (
+                    "trailing_stop"
+                    if planned_stop is not None and stop > planned_stop
+                    else "stop_loss"
+                )
             elif target is not None and mark >= target:
                 # Ultra-tight targets were closing entries in the same scan pass.
                 # Stop-loss still fires immediately; take-profit needs a minimum hold.
@@ -972,6 +1122,17 @@ class PaperTrainingService:
                 )
                 if held_ok:
                     reason = "take_profit"
+            elif self._catalyst_momentum_weakened(
+                portfolio_id=portfolio_id,
+                symbol=pos.symbol,
+                entry_order_id=plan.get("entry_order_id"),
+                mark=mark,
+                avg=avg,
+            ):
+                # Let catalyst trades develop; 3-minute fades truncated winners.
+                held_ok = self._position_held_seconds(portfolio_id, pos.symbol) >= 600.0
+                if held_ok:
+                    reason = "momentum_fade"
             if reason is None:
                 continue
             entry_order_id = plan.get("entry_order_id")
@@ -1108,6 +1269,133 @@ class PaperTrainingService:
         if closed:
             self.db.commit()
         return closed
+
+    def _positive_catalyst_headline(self, symbol: str) -> dict[str, Any]:
+        """Best-effort keyword match against stored news (never invents headlines)."""
+        from app.models.market_intelligence import MarketNewsItem
+
+        base = symbol.upper().split("-")[0]
+        if not base or len(base) < 2:
+            return {"found": False}
+        positive = (
+            "surge",
+            "rally",
+            "partnership",
+            "listing",
+            "approval",
+            "upgrade",
+            "adoption",
+            "inflow",
+            "record",
+            "breakthrough",
+            "launch",
+        )
+        negative = (
+            "hack",
+            "exploit",
+            "ban",
+            "lawsuit",
+            "sec charge",
+            "collapse",
+            "insolvent",
+            "delist",
+        )
+        cutoff = datetime.now(UTC).timestamp() - 72 * 3600
+        cutoff_dt = datetime.fromtimestamp(cutoff, tz=UTC)
+        rows = list(
+            self.db.scalars(
+                select(MarketNewsItem)
+                .where(MarketNewsItem.published_at >= cutoff_dt)
+                .order_by(desc(MarketNewsItem.published_at))
+                .limit(80)
+            )
+        )
+        base_l = base.lower()
+        for row in rows:
+            text = f"{row.headline} {row.body or ''}".lower()
+            if base_l not in text:
+                continue
+            if any(n in text for n in negative):
+                return {
+                    "found": True,
+                    "positive": False,
+                    "headline": row.headline[:240],
+                }
+            if any(p in text for p in positive):
+                return {
+                    "found": True,
+                    "positive": True,
+                    "headline": row.headline[:240],
+                }
+            return {
+                "found": True,
+                "positive": None,
+                "headline": row.headline[:240],
+            }
+        return {"found": False}
+
+    def _catalyst_momentum_weakened(
+        self,
+        *,
+        portfolio_id: uuid.UUID,
+        symbol: str,
+        entry_order_id: Any,
+        mark: Decimal,
+        avg: Decimal | None,
+    ) -> bool:
+        """Exit catalyst_retest longs when short momentum rolls over while still green."""
+        if avg is None or avg <= 0 or mark <= avg or entry_order_id is None:
+            return False
+        from app.models.paper_trading import PaperOrderEvent
+
+        payload = self.db.execute(
+            select(PaperOrderEvent.payload)
+            .where(
+                PaperOrderEvent.order_id == entry_order_id,
+                PaperOrderEvent.event_type == "paper_exit_plan",
+            )
+            .order_by(PaperOrderEvent.occurred_at.desc())
+            .limit(1)
+        ).scalar()
+        if not isinstance(payload, dict):
+            return False
+        strategy = str(payload.get("strategy_key") or payload.get("playbook") or "")
+        pattern = str(
+            payload.get("trade_pattern")
+            or payload.get("discovery_opportunity_class")
+            or ""
+        )
+        if strategy != "catalyst_retest" and pattern != "catalyst_retest":
+            return False
+
+        from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
+
+        inst = self.db.scalar(
+            select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
+        )
+        if inst is None:
+            return False
+        rows = list(
+            self.db.scalars(
+                select(MarketOhlcvBar)
+                .where(
+                    MarketOhlcvBar.instrument_id == inst.id,
+                    MarketOhlcvBar.timeframe.in_(("1m", "5m")),
+                )
+                .order_by(MarketOhlcvBar.close_time.desc())
+                .limit(16)
+            )
+        )
+        if len(rows) < 12:
+            return False
+        closes = [Decimal(str(r.close)) for r in reversed(rows)]
+        fast = sum(closes[-5:], Decimal("0")) / Decimal("5")
+        slow = sum(closes[-12:], Decimal("0")) / Decimal("12")
+        # Require giveback from the recent local peak — do not exit merely because
+        # a short SMA dipped while price is still grinding higher.
+        peak = max(closes[-8:])
+        giveback = peak > 0 and mark <= peak * Decimal("0.995")
+        return giveback and fast < slow * Decimal("0.997")
 
     def _position_held_seconds(self, portfolio_id: uuid.UUID, symbol: str) -> float:
         """Seconds since the latest buy fill for this open symbol."""

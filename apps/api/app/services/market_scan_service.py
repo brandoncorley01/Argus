@@ -20,9 +20,9 @@ from app.models.market_scan import MarketScanCandidate, MarketScanCycle, MarketS
 from app.models.paper_trading import PaperPortfolio, PaperPosition
 from app.services.strategy_engine import Bar, SmaCrossoverStrategy
 
-SCAN_INTERVAL = timedelta(minutes=1)
+SCAN_INTERVAL = timedelta(minutes=3)
 # Short-TF practice (1m/5m): marks older than this need a price refresh.
-STALE_BAR = timedelta(minutes=5)
+STALE_BAR = timedelta(minutes=8)
 MIN_BARS = 25
 EVENT_RETENTION = timedelta(days=7)
 MAX_EVENTS_PER_CYCLE = 200
@@ -261,6 +261,25 @@ class MarketScanService:
             self._prune_old_events()
             latest = self.latest_cycle()
             now = _utcnow()
+            # Never start a second scan while one is still running — that piled up
+            # ARQ jobs, starved the API pool, and made Home flicker Stopped.
+            if (
+                not force
+                and latest is not None
+                and latest.status == "running"
+                and latest.started_at is not None
+            ):
+                age = now - latest.started_at
+                if age < timedelta(minutes=12):
+                    return latest
+                latest.status = "failed"
+                latest.completed_at = now
+                latest.detail = {
+                    **(latest.detail if isinstance(latest.detail, dict) else {}),
+                    "error": "scan_stuck_watchdog",
+                    "running_for_seconds": int(age.total_seconds()),
+                }
+                self.db.commit()
             if (
                 not force
                 and latest is not None
@@ -273,8 +292,9 @@ class MarketScanService:
                     self.db.commit()
                 return latest
 
-            # Keep 1m/5m bars fresh so each minute scan has real short-TF data.
-            self._ensure_short_tf_prices(now)
+            # Price cron owns Coinbase HTTP. Nested refresh here made scans
+            # take many minutes, piled ARQ backlog, and starved Founder API calls.
+            # self._ensure_short_tf_prices(now)
 
             correlation_id = f"scan-{now.strftime('%Y%m%dT%H%M')}"
             cycle = MarketScanCycle(
@@ -531,8 +551,9 @@ class MarketScanService:
 
                 price = Decimal(str(bars[-1].close))
                 if exposure > 0:
-                    # Bullish probe — observation only; no order placement.
-                    score = Decimal("70") + Decimal(str(min(25.0, abs(exposure) * 25)))
+                    # Bullish SMA probe — kept as one tool, not the default edge.
+                    # Lower base score so adaptive detectors outrank SMA when both fire.
+                    score = Decimal("52") + Decimal(str(min(18.0, abs(exposure) * 18)))
                     stage = "Watching"
                     pipeline["watching"] += 1
                     pipeline["qualified"] += 1
@@ -1016,41 +1037,12 @@ class MarketScanService:
         return bars, timeframe, close_time
 
     def _ensure_short_tf_prices(self, now: datetime) -> None:
-        """Refresh 1m/5m candles when the book is stale before a scan cycle."""
-        # Only short TFs count — a fresh 15m bar must not skip a 1m refresh.
-        latest_bar_at = self.db.scalar(
-            select(MarketOhlcvBar.close_time)
-            .where(MarketOhlcvBar.timeframe.in_(("1m", "5m")))
-            .order_by(desc(MarketOhlcvBar.close_time))
-            .limit(1)
-        )
-        if latest_bar_at is not None and (now - latest_bar_at) < timedelta(seconds=90):
-            return
-        try:
-            from app.services.market_price_refresh_service import (
-                MarketPriceRefreshError,
-                MarketPriceRefreshService,
-            )
+        """Legacy hook — price cron refreshes bars; do not nest Coinbase here.
 
-            # Short frames only — keep the scan path fast.
-            MarketPriceRefreshService(self.db).refresh_recent_prices(
-                actor=None,
-                timeframes=(("1m", 60, 80), ("5m", 300, 50)),
-            )
-        except MarketPriceRefreshError:
-            # Scan continues with whatever verified bars already exist.
-            try:
-                self.db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
-            return
-        except Exception:  # noqa: BLE001 — never block scanning on refresh failure
-            # Unique races can poison the session; clear before the cycle continues.
-            try:
-                self.db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
-            return
+        Kept so call sites / tests can stay no-ops without inventing prices.
+        """
+        _ = now
+        return
 
     def _load_bar_rows(
         self, instrument_id: uuid.UUID, *, limit: int

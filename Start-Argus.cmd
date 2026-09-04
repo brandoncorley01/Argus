@@ -14,7 +14,7 @@ REM Browser KeepDashboard must stay unset here so desktop Start can
 REM start / restart the dashboard on port 3000.
 set "ARGUS_KEEP_DASHBOARD="
 set "ARGUS_START_SELF_UPDATED="
-REM Always hard-sync GitHub main — Fast Start must never skip cloud merges.
+REM Always hard-sync GitHub main ? Fast Start must never skip cloud merges.
 set "ARGUS_FORCE_SYNC=1"
 set "ARGUS_ALLOW_STALE="
 
@@ -49,3 +49,4 @@ start "" "http://127.0.0.1:3000/today"
 echo Window closes in 12 seconds (or press a key)...
 timeout /t 12 >nul
 exit /b 0
+

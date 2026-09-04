@@ -81,8 +81,13 @@ export function deriveStatus(opts: {
   paperPaused: boolean;
   criticalAlerts?: number;
   workerFailed?: boolean;
+  desiredRunning?: boolean;
 }): SimpleStatus {
-  if (opts.apiReady === false || opts.apiReady == null) return "Stopped";
+  if (opts.apiReady === false || opts.apiReady == null) {
+    // Busy/timeout while Founder already asked for Running ≠ Stopped.
+    if (opts.desiredRunning) return "Attention";
+    return "Stopped";
+  }
   if (opts.paperPaused) return "Attention";
   return "Running";
 }

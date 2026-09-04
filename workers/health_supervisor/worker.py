@@ -17,6 +17,7 @@ visibility is preserved while the operational log still captures the event.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import sys
@@ -181,6 +182,40 @@ async def run_health_supervisor_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
 
+    # Startup catch-up is discovery+prices+force scan and blocks the ARQ event
+    # loop (sync I/O). Skip when a scan already finished recently.
+    if pending or sleep_gap:
+        try:
+            factory = get_session_factory(ctx["settings"])
+            probe = factory()
+            try:
+                from sqlalchemy import text as _sql_text
+
+                row = probe.execute(
+                    _sql_text(
+                        "select completed_at from market_scan_cycles "
+                        "where status = 'succeeded' and completed_at is not null "
+                        "order by completed_at desc limit 1"
+                    )
+                ).first()
+                if row and row[0] is not None:
+                    completed = row[0]
+                    if completed.tzinfo is None:
+                        completed = completed.replace(tzinfo=UTC)
+                    age = (now - completed).total_seconds()
+                    if age < 300:
+                        print(
+                            f"runtime_continuity: skip catch-up "
+                            f"(last scan {int(age)}s ago)",
+                            flush=True,
+                        )
+                        sleep_gap = False
+                        pending = False
+            finally:
+                probe.close()
+        except Exception as exc:  # noqa: BLE001
+            print(f"runtime_continuity: catch-up probe failed: {exc}", flush=True)
+
     def _cycle() -> dict[str, Any]:
         factory = get_session_factory(ctx["settings"])
         session = factory()
@@ -212,7 +247,8 @@ async def run_health_supervisor_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
         try:
             ctx["catch_up_reason"] = catch_reason
             ctx["catch_up_gap_seconds"] = format_gap_seconds(gap)
-            catch_up = await run_runtime_catch_up(ctx)
+            # Bound catch-up so a hung Coinbase/discovery call cannot freeze scans.
+            catch_up = await asyncio.wait_for(run_runtime_catch_up(ctx), timeout=180)
             result = {**result, "catch_up": catch_up}
             ctx["last_catch_up_at"] = utcnow()
             ctx["last_wall_clock"] = utcnow()
@@ -318,17 +354,20 @@ class WorkerSettings:
         run_runtime_catch_up,
     ]
     cron_jobs = [
-        cron(run_health_supervisor_cycle, second={0, 30}),
-        cron(capture_host_metrics_cycle, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
+        # Health stays frequent; market jobs are staggered so they never stampede.
+        cron(run_health_supervisor_cycle, second={0}),
+        cron(capture_host_metrics_cycle, minute={0, 15, 30, 45}),
         cron(generate_daily_report_cycle, hour={0}, minute={15}),
-        cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
-        cron(run_market_scan_cycle, minute=set(range(60))),
-        # Dynamic Coinbase USD discovery every 5 minutes — same process as Start Argus.
-        cron(run_market_discovery, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
+        # Every 3 minutes, offset from scans — keeps Feed fresh without API starvation.
+        cron(run_market_price_refresh, minute={0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57}),
+        cron(run_market_scan_cycle, minute={1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58}),
+        cron(run_market_discovery, minute={5, 20, 35, 50}),
     ]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _redis_settings()
-    # Allow health, scan, and price refresh to overlap. max_jobs=1 caused
-    # multi-hour cron backlog (1000+ queued jobs) while the UI still said Running.
-    max_jobs = 3
+    # Two concurrent jobs max — more caused QueuePool + 45s Home timeouts.
+    max_jobs = 2
+    # Coinbase refresh/scan of ~50 symbols can exceed ARQ's default 300s.
+    job_timeout = 600
+    keep_result = 60

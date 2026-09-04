@@ -7,6 +7,18 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Profitability mission (paper):** stop clipping winners (no +1R BE; trail from +1.5R/+2R); prefer non-SMA detectors over SMA probes; align cost haircut to real paper fees; auto-size when cash < default notional; softer catalyst fade (10m + giveback) (`live-monitor-v2.74`)
+- **Set-and-forget stability:** stop treating API timeouts as Stopped; stagger scan/price crons (3m, max_jobs=2); no nested Coinbase inside scans; keepalive never toast-spams or exit-1 thrash (`live-monitor-v2.73`)
+- **API pool starvation (permanent):** QueuePool timeouts from idle-in-transaction + duplicate workers; smaller role-based pools, Postgres idle/lock timeouts, release DB before Coinbase HTTP, single API/worker guard on keepalive (`live-monitor-v2.72`)
+- **Catalyst retest playbook (paper):** detect spike+volume → pullback reclaim; BTC regime gate; optional positive headline keyword tag; trail + momentum-fade exit; memory learns `catalyst_retest` — live remains locked (`live-monitor-v2.71`)
+- **Feed outdated:** price refresh was sequential Coinbase GETs (30+ min bar lag); now parallel fetches, cron uses fast 1m-only refresh, stale threshold 8m (`live-monitor-v2.70`)
+- **Paper scan lag + exits:** ARQ market jobs run in threads so scan/price overlap; discovery every 15m without nested price refresh; paper trailing/breakeven after +1R/+1.5R; post-exit cooloff 120s; clearer Start success copy (`live-monitor-v2.69`)
+- **Scan starvation / false “Last scan 10m ago”:** duplicate ARQ+uvicorn process trees and competing market_ops crons flooded Redis; now one health_supervisor tree, market_ops has no crons, keepalive prefers surgical repair, parent/child PIDs no longer culled (`live-monitor-v2.67`)
+- **False "Starting Argus" loop:** login/login recovery no longer treats slow `/ready` as API down; recovery has a 10-minute cooldown; Start feedback reads `boot-argus.log` instead of keepalive spam (`live-monitor-v2.66`)
+- **API blink / false stop:** `/health` is liveness-only (no Postgres/Redis probes); SQLAlchemy pool raised to 20+20; keepalive retries before repair and skips boot during cooldown when the API process is still live (`live-monitor-v2.65`)
+- **Hard Boot replaces fragile Start:** new `Boot-Argus.cmd` / `boot-argus.ps1` brings Docker + API + worker + dashboard up with no GitHub sync/self-update. Home **Start Argus** and keepalive now use this path. Live trading remains locked (`live-monitor-v2.64`)
+- **Home Start vs Update:** primary teal button is always **Start Argus** (`start-argus.ps1`); **Update from GitHub** is a separate control (`update-argus-now`). Start no longer silently runs the nuclear updater (`live-monitor-v2.63`)
+- **Executive Briefing stuck Loading:** restored `/api/founder/briefing` BFF, SSR-fetch briefing on Home, stop infinite Loading on API timeout (`live-monitor-v2.63`)
 - **Join-Path ChildPath hang:** updater had `Join-Path "C:\Argus"` (one arg) which prompted Founder for ChildPath; fixed in v15 (`live-monitor-v2.56`)
 - **Git stderr Start crash:** WinPS treated `git fetch` progress (`From https://...`) as fatal under `$ErrorActionPreference=Stop`; `Invoke-ArgusGit` + updater v14 (`live-monitor-v2.55`)
 - **Desktop only (no OneDrive):** canonical PC folder is `%USERPROFILE%\Desktop\Argus`; updater v13 / bring-up v2 never Start from OneDrive; shortcuts install to real Desktop (`live-monitor-v2.54`)

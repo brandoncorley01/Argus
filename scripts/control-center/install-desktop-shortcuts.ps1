@@ -1,9 +1,9 @@
-﻿# Install Desktop shortcuts on %USERPROFILE%\Desktop (NOT OneDrive).
+# Install Desktop shortcuts on %USERPROFILE%\Desktop (NOT OneDrive).
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_common.ps1"
 
 $Root = Get-ArgusRoot
-# Canonical Desktop — GetFolderPath("Desktop") often returns OneDrive\Desktop.
+# Canonical Desktop - GetFolderPath("Desktop") often returns OneDrive\Desktop.
 $Desktop = Join-Path $env:USERPROFILE "Desktop"
 if (-not (Test-Path $Desktop)) {
   New-Item -ItemType Directory -Force -Path $Desktop | Out-Null
@@ -41,7 +41,7 @@ function New-ArgusApiShortcut([string]$Name, [string]$RepoPath, [string]$Descrip
 function New-ArgusCmdShortcut([string]$Name, [string]$CmdLeaf, [string]$Description) {
   $cmdPath = Join-Path $Root $CmdLeaf
   if (-not (Test-Path $cmdPath)) {
-    Write-Host "SKIP shortcut $Name — missing $CmdLeaf"
+    Write-Host "SKIP shortcut $Name - missing $CmdLeaf"
     return
   }
   $lnkPath = Join-Path $Desktop "$Name.lnk"
@@ -57,7 +57,8 @@ function New-ArgusCmdShortcut([string]$Name, [string]$CmdLeaf, [string]$Descript
 Write-Host "=== ARGUS - DAILY ==="
 Write-Host ("Shortcuts Desktop: {0}" -f $Desktop)
 Write-Host ("WorkingDirectory:  {0}" -f $Root)
-New-ArgusShortcut "Start Argus" "start-argus.ps1" "ARGUS DAILY - Start (hard-syncs GitHub main)"
+New-ArgusCmdShortcut "Boot Argus" "Boot-Argus.cmd" "ARGUS DAILY - Hard boot (Docker+API+worker+dashboard, no GitHub)"
+New-ArgusShortcut "Start Argus" "boot-argus.ps1" "ARGUS DAILY - Hard boot (simple, reliable)"
 New-ArgusShortcut "Open Argus" "open-dashboard.ps1" "ARGUS DAILY - Open Home"
 New-ArgusShortcut "End Trading Day" "end-trading-day.ps1" "ARGUS DAILY - Report + Backup"
 New-ArgusShortcut "Stop Argus" "stop-argus.ps1" "ARGUS DAILY - Stop"
@@ -86,3 +87,4 @@ Write-Host ""
 Write-Host "Desktop shortcuts installed on %USERPROFILE%\Desktop (not OneDrive)."
 Write-Host "Home URL: $(Get-ArgusDashboardUrl)"
 Write-Host "Paper trading only · Live trading DISABLED"
+

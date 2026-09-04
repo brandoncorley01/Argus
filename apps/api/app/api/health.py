@@ -32,8 +32,13 @@ def _probe_dependencies() -> dict[str, Any]:
 
 @router.get("/health")
 def health() -> dict[str, Any]:
-    """Liveness-oriented summary; always returns HTTP 200 if the process is up."""
-    return _probe_dependencies()
+    """Liveness only: no Postgres/Redis probes (those belong on /ready).
+
+    Keepalive, reachability, and the dashboard poll this path frequently.
+    Hitting the DB here exhausted QueuePool and made the API look dead.
+    """
+    settings = get_settings()
+    return {"service": settings.app_name, "status": "ok"}
 
 
 @router.get("/ready")

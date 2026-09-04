@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title FIX PC Argus — Desktop only
+title FIX PC Argus ? Desktop only
 echo.
 echo === FIX PC ARGUS ===
 echo Canonical folder: %%USERPROFILE%%\Desktop\Argus  (NOT OneDrive)
@@ -32,3 +32,4 @@ echo Folder must be: %%USERPROFILE%%\Desktop\Argus
 echo.
 timeout /t 15 >nul
 exit /b 0
+

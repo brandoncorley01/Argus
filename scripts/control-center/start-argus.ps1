@@ -1,10 +1,10 @@
-﻿# Start Argus Control Center - update code, infra, API, worker, dashboard; open Home.
+# Start Argus Control Center - update code, infra, API, worker, dashboard; open Home.
 $ErrorActionPreference = "Continue"
 
 # ALWAYS refresh Start control-plane scripts from GitHub main BEFORE sourcing
 # _common.ps1. Dirty local copies previously blocked self-update and left the
 # Founder stuck on stale build stamps (e.g. v2.11). Control-center scripts are
-# not founder data — Start means take GitHub's Start scripts.
+# not founder data - Start means take GitHub's Start scripts.
 if (-not $env:ARGUS_START_SELF_UPDATED) {
   $env:ARGUS_START_SELF_UPDATED = "1"
   $self = $MyInvocation.MyCommand.Path
@@ -35,7 +35,7 @@ if (-not $env:ARGUS_START_SELF_UPDATED) {
     }
 
     function Get-ArgusGitHubText([string]$RepoPath) {
-      # GitHub Contents API — decode WinPS byte[] / JSON+base64 quirks.
+      # GitHub Contents API - decode WinPS byte[] / JSON+base64 quirks.
       $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
       $resp = Invoke-WebRequest -Uri $api -Headers @{
         Accept = "application/vnd.github.raw"
@@ -151,14 +151,14 @@ try {
   }
 
   # Cloud-agent merges only work if THIS PC hard-syncs to GitHub main on every
-  # Start. Fast Start used to skip git while services were healthy — Founder
+  # Start. Fast Start used to skip git while services were healthy - Founder
   # stayed on v2.40 while main already had v2.43+. Always force-sync unless
   # ARGUS_ALLOW_STALE=1 (emergency offline escape hatch).
   $publicBuildBefore = Get-ArgusPublicBuildId $Root
   $localBuild = Get-ArgusLocalBuildId $Root
   $allowStale = $env:ARGUS_ALLOW_STALE -eq "1"
   if ($allowStale) {
-    Write-Host "ARGUS_ALLOW_STALE=1 — skipping GitHub hard-sync (emergency)."
+    Write-Host "ARGUS_ALLOW_STALE=1 - skipping GitHub hard-sync (emergency)."
     $forceSync = $false
     $env:ARGUS_FORCE_SYNC = "0"
     $updated = $false
@@ -185,7 +185,7 @@ try {
   # to treat "any :3000 up" as success and leave v2.40 on screen.
   $httpBuild = Get-ArgusHttpBuildId
   if ($eocReadyNow -and $buildId -and $httpBuild -and ($httpBuild -ne $buildId)) {
-    Write-Host ("STALE/FOREIGN dashboard on :3000 — HTTP build={0}, this folder={1}." -f $httpBuild, $buildId)
+    Write-Host ("STALE/FOREIGN dashboard on :3000 - HTTP build={0}, this folder={1}." -f $httpBuild, $buildId)
     Write-Host ("Killing :3000 and starting dashboard from: {0}" -f $Root)
     $KeepDashboard = $false
     $env:ARGUS_KEEP_DASHBOARD = "0"
@@ -202,7 +202,7 @@ try {
     } catch { }
     Start-Sleep -Seconds 2
   } elseif ($eocReadyNow -and $buildId -and -not $httpBuild) {
-    Write-Host "WARN: :3000 is up but /argus-build.txt missing — forcing dashboard recycle from this folder."
+    Write-Host "WARN: :3000 is up but /argus-build.txt missing - forcing dashboard recycle from this folder."
     $KeepDashboard = $false
     $env:ARGUS_KEEP_DASHBOARD = "0"
     $eocReadyNow = $false
@@ -210,9 +210,9 @@ try {
     try { Stop-ArgusPortListeners @(3000) } catch { }
   }
 
-  # Light repair: API + dashboard up, only worker missing — code already synced.
+  # Light repair: API + dashboard up, only worker missing - code already synced.
   if ($apiReadyNow -and $eocReadyNow -and -not $workerReadyNow -and -not $updated) {
-    Write-Host "API + dashboard up; worker down — repairing worker only."
+    Write-Host "API + dashboard up; worker down - repairing worker only."
     $pids = Read-ArgusPids $Root
     if (-not (Test-HttpOk (Get-ArgusApiReadyUrl) 3)) {
       $apiPid = Start-ArgusApiProcess $Root
@@ -230,9 +230,9 @@ try {
     exit 0
   }
 
-  # Light repair: dashboard up, API down — code already synced.
+  # Light repair: dashboard up, API down - code already synced.
   if ($eocReadyNow -and -not $apiReadyNow -and -not $updated) {
-    Write-Host "Dashboard up; API down — repairing infra + API."
+    Write-Host "Dashboard up; API down - repairing infra + API."
     if (-not (Ensure-ArgusInfra $Root)) {
       throw "Docker infrastructure is not healthy. Open Docker Desktop and Start again."
     }
@@ -255,11 +255,11 @@ try {
   }
 
   # Fast path ONLY when already on the synced SHA (no code change this Start).
-  # Never skip sync — that was the cloud-agent "rarely works" bug.
+  # Never skip sync - that was the cloud-agent "rarely works" bug.
   if ($apiReadyNow -and $eocReadyNow -and $workerReadyNow -and -not $updated) {
-    Write-Host ("Argus already running on GitHub main — build {0} (no recycle needed)." -f $buildId)
+    Write-Host ("Argus already running on GitHub main - build {0} (no recycle needed)." -f $buildId)
     $pids = Read-ArgusPids $Root
-    # uvicorn/arq each spawn a child with the same cmdline. Count tree roots only —
+    # uvicorn/arq each spawn a child with the same cmdline. Count tree roots only -
     # never treat parent+child as "duplicates" (that killed the only worker).
     try {
       $uvs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -288,13 +288,13 @@ try {
       $wpIds = @($wps | ForEach-Object { $_.ProcessId })
       $wpRoots = @($wps | Where-Object { $wpIds -notcontains $_.ParentProcessId })
       if ($wpRoots.Count -gt 1) {
-        Write-Host "Multiple worker trees detected — recycling to a single worker..."
+        Write-Host "Multiple worker trees detected - recycling to a single worker..."
         $pids.worker = Start-ArgusWorkerProcess $Root
       }
     } catch { }
     # If /ready flipped down during Start, bring API back without a full sync.
     if (-not (Test-HttpOk (Get-ArgusApiReadyUrl) 3)) {
-      Write-Host "API became unreachable — restarting detached API..."
+      Write-Host "API became unreachable - restarting detached API..."
       $apiPid = Start-ArgusApiProcess $Root
       $pids = Read-ArgusPids $Root
       Write-ArgusPids -Root $Root -ApiPid $apiPid -EocPid $pids.eoc -WorkerPid $pids.worker
@@ -302,7 +302,7 @@ try {
     }
     # Fast path must never exit with a dead worker.
     if (-not (Test-ArgusWorkerFresh $Root)) {
-      Write-Host "Worker missing after fast Start — repairing..."
+      Write-Host "Worker missing after fast Start - repairing..."
       $pids = Read-ArgusPids $Root
       $pids.worker = Start-ArgusWorkerProcess $Root
       Write-ArgusPids -Root $Root -ApiPid $pids.api -EocPid $pids.eoc -WorkerPid $pids.worker
@@ -312,7 +312,7 @@ try {
       try {
         $arqKeys = @(docker exec argus-redis redis-cli --scan --pattern "arq:*" 2>$null)
         if ($arqKeys.Count -gt 80) {
-          Write-Host ("ARQ backlog {0} keys — recycling worker..." -f $arqKeys.Count)
+          Write-Host ("ARQ backlog {0} keys - recycling worker..." -f $arqKeys.Count)
           $pids = Read-ArgusPids $Root
           $pids.worker = Start-ArgusWorkerProcess $Root
           Write-ArgusPids -Root $Root -ApiPid $pids.api -EocPid $pids.eoc -WorkerPid $pids.worker
@@ -339,7 +339,7 @@ try {
     exit 0
   }
 
-  # Code changed (or services down) — full recycle path below.
+  # Code changed (or services down) - full recycle path below.
   Write-Host "Continuing with full service recycle..."
 
   # Re-register keepalive after sync so the task action picks up run-hidden.vbs
@@ -431,7 +431,7 @@ try {
       Write-Host "Starting dashboard on 127.0.0.1:3000..."
       $eocLog = Join-Path (Get-ArgusRuntimeDir $Root) "eoc.log"
       $envBlock = "`$env:ARGUS_API_BASE_URL='http://127.0.0.1:8000'; `$env:ARGUS_REPO_ROOT='$Root'"
-      # Hidden — do not leave a minimized PowerShell tile on the taskbar.
+      # Hidden - do not leave a minimized PowerShell tile on the taskbar.
       $eocProc = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
         "-NoProfile", "-NoLogo", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-WindowStyle", "Hidden", "-Command",
@@ -447,7 +447,7 @@ try {
 
   $okApi = Wait-HttpOk (Get-ArgusApiReadyUrl) 120 "API /ready"
   if (-not $okApi) {
-    Write-Host "API /ready failed — attempting one repair cycle..."
+    Write-Host "API /ready failed - attempting one repair cycle..."
     if (Repair-ArgusRuntime -Root $Root -IncludeWorker) {
       $okApi = $true
       $pids = Read-ArgusPids $Root
@@ -491,7 +491,7 @@ try {
     # updated (or Home was advertising a stale public stamp), recycle so the
     # compile-time Build chip and /argus-build.txt both show the new id.
     $publicNow = Get-ArgusPublicBuildId $Root
-    # forceSync is always on now — recycle only when code/stamp actually changed.
+    # forceSync is always on now - recycle only when code/stamp actually changed.
     $needsRecycle = $updated -or (
       $publicBuildBefore -and $publicNow -and ($publicBuildBefore -ne $publicNow)
     )
@@ -504,7 +504,7 @@ try {
         Write-Host "WARN: could not schedule dashboard recycle: $($_.Exception.Message)"
       }
     }
-    Write-Host "Browser Start complete — dashboard left running for soft reload."
+    Write-Host "Browser Start complete - dashboard left running for soft reload."
     Write-Host "REFRESH_HOME_SOFT"
   }
   Write-Host "=== Argus started ==="
@@ -512,3 +512,4 @@ try {
   Show-ArgusNotification -Title "Argus startup failed" -Message $_.Exception.Message -Level "critical"
   throw
 }
+

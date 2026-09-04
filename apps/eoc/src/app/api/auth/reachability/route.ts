@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  isRecoveryCooldownActive,
   probeReachability,
   triggerKeepAlive,
   triggerStartArgus,
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const report = await probeReachability();
   return NextResponse.json(report, {
-    status: report.api_ready ? 200 : 503,
+    status: report.api_health ? 200 : 503,
   });
 }
 
@@ -25,8 +26,21 @@ export async function GET() {
  */
 export async function POST() {
   const before = await probeReachability();
-  if (before.api_ready) {
+  if (before.api_health) {
     return NextResponse.json({ ...before, recovering: false });
+  }
+
+  if (isRecoveryCooldownActive(10)) {
+    const after = await probeReachability();
+    return NextResponse.json(
+      {
+        ...after,
+        recovering: false,
+        message:
+          "Recovery already ran in the last few minutes. Wait, then try sign-in — or run Boot Argus from the Desktop.",
+      },
+      { status: after.api_health ? 200 : 503 },
+    );
   }
 
   const result = before.desired_running
@@ -40,10 +54,10 @@ export async function POST() {
       recovering: true,
       recover_ok: result.ok,
       recover_detail: result.detail.slice(-1500),
-      message: after.api_ready
+      message: after.api_health
         ? "Argus API recovered. You can sign in."
         : after.message,
     },
-    { status: after.api_ready ? 200 : 503 },
+    { status: after.api_health ? 200 : 503 },
   );
 }

@@ -64,3 +64,4 @@ try {
 Write-Host "It only recovers when runtime\control-center\desired-state.json has running=true."
 Write-Host "Keepalive log: $log"
 Write-Host "PowerShell windows must NOT appear from this task."
+

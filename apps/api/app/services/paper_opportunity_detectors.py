@@ -214,6 +214,93 @@ def detect_range_mean_reversion(bars: Sequence[Any]) -> DetectorSignal | None:
     )
 
 
+def detect_catalyst_retest(bars: Sequence[Any]) -> DetectorSignal | None:
+    """Spike + volume surge → pullback off highs → reclaim (paper playbook).
+
+    Mimics: coin spikes ~6–12%, volume elevates, price cools 2–8% from the
+    impulse high, then reclaims short support. Does not invent news — scan
+    detail tags the geometry so auto-enter can consult memory + optional headlines.
+    """
+    if len(bars) < 32:
+        return None
+    closes = _closes(bars)
+    highs = _highs(bars)
+    lows = _lows(bars)
+    vols = _vols(bars)
+    price = closes[-1]
+    if price <= 0:
+        return None
+
+    lookback = closes[-36:]
+    base = min(lookback[:-8]) if len(lookback) > 8 else lookback[0]
+    if base <= 0:
+        return None
+    impulse_high = max(highs[-28:])
+    spike_pct = (impulse_high - base) / base
+    # ~6–18% impulse (covers "coin spikes ~9%" without requiring exact 9%).
+    if spike_pct < Decimal("0.06") or spike_pct > Decimal("0.18"):
+        return None
+
+    dist_from_high = (impulse_high - price) / impulse_high
+    # Still near the move, but not buying the tip — wait for retest zone.
+    if dist_from_high < Decimal("0.015") or dist_from_high > Decimal("0.08"):
+        return None
+
+    # Volume surge on the impulse window vs prior baseline.
+    impulse_vols = vols[-16:]
+    prior_vols = vols[-36:-16] if len(vols) >= 36 else vols[:-16]
+    if not prior_vols:
+        return None
+    avg_impulse = sum(impulse_vols, Decimal("0")) / Decimal(len(impulse_vols))
+    avg_prior = sum(prior_vols, Decimal("0")) / Decimal(len(prior_vols))
+    if avg_prior <= 0 or avg_impulse < avg_prior * Decimal("1.6"):
+        return None
+    rel_vol = avg_impulse / avg_prior
+
+    # Retest confirmation: bounce off a recent swing low + reclaim 3-bar mid.
+    retest_low = min(lows[-8:])
+    bounce = (price - retest_low) / retest_low if retest_low > 0 else Decimal("0")
+    if bounce < Decimal("0.002") or bounce > Decimal("0.04"):
+        return None
+    mid = sum(closes[-4:-1], Decimal("0")) / Decimal("3")
+    if price < mid:
+        return None
+    # Structure still constructive vs 12-bar SMA.
+    slow = _sma(closes, 12)
+    if slow is None or price < slow * Decimal("0.995"):
+        return None
+
+    stop = retest_low * Decimal("0.997")
+    stop, target = _rr_levels(price, stop=stop)
+    score = Decimal("76") + min(Decimal("14"), (spike_pct - Decimal("0.06")) * Decimal("80"))
+    if rel_vol >= Decimal("2"):
+        score += Decimal("4")
+    return DetectorSignal(
+        strategy_key="catalyst_retest",
+        bias="Bullish",
+        score=min(Decimal("96"), score),
+        reason_code=None,
+        reason_text=(
+            "Impulse + volume surge cooled into a retest; reclaiming short support "
+            "(paper catalyst-retest playbook)."
+        ),
+        stop_loss=stop,
+        take_profit=target,
+        pattern="catalyst_retest",
+        detail={
+            "spike_pct": str(spike_pct),
+            "dist_from_high": str(dist_from_high),
+            "relative_volume": str(rel_vol),
+            "relative_volume_high": True,
+            "impulse_high": str(impulse_high),
+            "retest_low": str(retest_low),
+            "playbook": "catalyst_retest",
+            "discovery_opportunity_class": "pullback_retest",
+            "trade_pattern": "catalyst_retest",
+        },
+    )
+
+
 def detect_peak_exhaustion_protection(bars: Sequence[Any]) -> DetectorSignal | None:
     """Protection signal: mark bullish exhaustion as Neutral/Rejected-style watch."""
     if len(bars) < 25:
@@ -262,6 +349,7 @@ DETECTORS = (
     detect_momentum_continuation,
     detect_breakout,
     detect_dip_pullback_reversal,
+    detect_catalyst_retest,
     detect_range_mean_reversion,
     detect_peak_exhaustion_protection,
 )

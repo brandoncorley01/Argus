@@ -130,70 +130,73 @@ async function runPs1(
 }
 
 export async function startArgusAction(): Promise<ActionResult> {
-  // Home "Update from GitHub" must not soft-keep a foreign/stale :3000.
-  // Prefer nuclear updater (syncs every checkout, prefers live :3000 folder).
-  // Fall back to Start if updater is missing on a very old tree.
+  // Hard Boot: Docker + API + worker + dashboard. No GitHub dance.
+  // Falls back to start-argus.ps1 only if boot-argus.ps1 is missing.
   const root = repoRoot();
-  const updater = path.join(root, "scripts", "control-center", "update-argus-now.ps1");
-  const useNuclear = fs.existsSync(updater);
-
-  if (useNuclear) {
-    const res = await spawnHiddenPs1({
-      repoRoot: root,
-      scriptLeaf: "update-argus-now.ps1",
-      timeoutMs: 420_000,
-      env: { ARGUS_FORCE_SYNC: "1" },
-    });
-    revalidatePath("/today");
-    revalidatePath("/control");
-    if (!res.ok) {
-      const detail = (res.detail || "").toLowerCase();
-      const maybeKilled =
-        detail.includes("timed out") ||
-        detail.includes("econnreset") ||
-        detail.includes("aborted") ||
-        detail.includes("socket");
-      if (maybeKilled) {
-        return {
-          ok: true,
-          message:
-            "Update launched (dashboard may restart). Wait ~30s, open Desktop Argus-update-report.txt, then Ctrl+F5. Build must show live-monitor-v2.51+.",
-          detail: res.detail,
-        };
-      }
+  const boot = path.join(root, "scripts", "control-center", "boot-argus.ps1");
+  const scriptLeaf = fs.existsSync(boot) ? "boot-argus.ps1" : "start-argus.ps1";
+  const res = await runPs1(scriptLeaf, 240_000, {
+    ARGUS_KEEP_DASHBOARD: "1",
+    ARGUS_SKIP_START_SELF_UPDATE: "1",
+    ARGUS_START_SELF_UPDATED: "1",
+  });
+  revalidatePath("/today");
+  revalidatePath("/control");
+  if (!res.ok) {
+    const detail = (res.detail || "").toLowerCase();
+    const maybeKilled =
+      detail.includes("timed out") ||
+      detail.includes("econnreset") ||
+      detail.includes("aborted") ||
+      detail.includes("socket");
+    if (maybeKilled) {
       return {
-        ok: false,
-        message: res.detail || `Update failed (exit ${res.code ?? "?"}).`,
-        detail:
-          (res.detail || "") +
-          " | Open Desktop Argus-folder-report.txt and Argus-update-report.txt. Or run FIX-PC.cmd.",
+        ok: true,
+        message:
+          "Boot launched. Wait ~20s, then reload Home. If still down, run Boot-Argus.cmd on the Desktop.",
+        detail: res.detail,
       };
     }
     return {
-      ok: true,
-      message: `Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show ${ARGUS_UI_BUILD}.`,
-      detail: res.detail,
+      ok: false,
+      message: res.message,
+      detail:
+        (res.detail || "") +
+        " | Open Docker Desktop, then run Boot-Argus.cmd.",
     };
   }
+  return {
+    ok: true,
+    message:
+      "Argus is Running — paper trading active. Live stays locked until approved. Reload Home.",
+    detail: res.detail,
+  };
+}
 
-  const res = await runPs1("start-argus.ps1", 300_000, {
-    ARGUS_FORCE_SYNC: "1",
-    ARGUS_KEEP_DASHBOARD: "0",
+export async function updateArgusAction(): Promise<ActionResult> {
+  const root = repoRoot();
+  const updater = path.join(root, "scripts", "control-center", "update-argus-now.ps1");
+  if (!fs.existsSync(updater)) {
+    return startArgusAction();
+  }
+  const res = await spawnHiddenPs1({
+    repoRoot: root,
+    scriptLeaf: "update-argus-now.ps1",
+    timeoutMs: 420_000,
+    env: { ARGUS_FORCE_SYNC: "1" },
   });
   revalidatePath("/today");
   revalidatePath("/control");
   if (!res.ok) {
     return {
       ok: false,
-      message: res.message,
-      detail:
-        (res.detail || "") +
-        " | Open Desktop Argus-folder-report.txt and Argus-update-report.txt. Or run FIX-PC.cmd.",
+      message: res.detail || `Update failed (exit ${res.code ?? "?"}).`,
+      detail: res.detail,
     };
   }
   return {
     ok: true,
-    message: `Argus refreshed from GitHub main. Wait ~15s, then hard-refresh Home (Ctrl+F5) — Build should show ${ARGUS_UI_BUILD}.`,
+    message: `Code refreshed from GitHub. Hard-refresh Home (Ctrl+F5) — Build should show ${ARGUS_UI_BUILD}.`,
     detail: res.detail,
   };
 }

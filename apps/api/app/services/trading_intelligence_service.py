@@ -34,7 +34,7 @@ STRATEGY_VERSION = "sma_crossover@1"
 CONFIDENCE_SCORING_VERSION = "confidence@2"
 CERT_REQUIRED_DAYS = 30
 CERT_MAX_DRAWDOWN = Decimal("500")  # paper dollars observational threshold
-SIMULATED_COST_BPS = Decimal("10")  # 10 bps each way observational haircut
+SIMULATED_COST_BPS = Decimal("3")  # ~session commission+slip+spread each way (aligned to paper fills)
 
 # Founder-facing watchlist stage labels (display mapping over scan stages).
 STAGE_MAP = {
@@ -369,7 +369,20 @@ class TradingIntelligenceService:
                 drawdown = max(Decimal("0"), (entry_price - min_low) * qty)
                 mfe = max(Decimal("0"), (max_high - entry_price) * qty)
 
-        cost_haircut = abs(exit_price * qty) * SIMULATED_COST_BPS / Decimal("10000") * 2
+        cost_haircut = Decimal("0")
+        if entry_fill is not None:
+            cost_haircut += Decimal(str(getattr(entry_fill, "fee", 0) or 0)) + Decimal(
+                str(getattr(entry_fill, "commission", 0) or 0)
+            )
+        if exit_fill is not None:
+            cost_haircut += Decimal(str(getattr(exit_fill, "fee", 0) or 0)) + Decimal(
+                str(getattr(exit_fill, "commission", 0) or 0)
+            )
+        # Prefer ledger fees; fallback to session-aligned observational haircut.
+        if cost_haircut <= 0 and qty > 0:
+            cost_haircut = (
+                abs(exit_price * qty) * SIMULATED_COST_BPS / Decimal("10000") * 2
+            )
         adj = realized - cost_haircut
         outcome = "win" if adj > 0 else ("loss" if adj < 0 else "flat")
 
@@ -745,10 +758,19 @@ class TradingIntelligenceService:
         since = datetime.now(UTC) - timedelta(days=1)
         reviews_today = list(
             self.db.scalars(
-                select(PostTradeReview).where(PostTradeReview.closed_at >= since)
+                select(PostTradeReview)
+                .where(PostTradeReview.closed_at >= since)
+                .order_by(desc(PostTradeReview.closed_at))
+                .limit(200)
             )
         )
-        all_reviews = list(self.db.scalars(select(PostTradeReview)))
+        all_reviews = list(
+            self.db.scalars(
+                select(PostTradeReview)
+                .order_by(desc(PostTradeReview.closed_at))
+                .limit(500)
+            )
+        )
         avg_conf = None
         if all_reviews:
             avg_conf = sum((r.confidence_score for r in all_reviews), Decimal("0")) / Decimal(

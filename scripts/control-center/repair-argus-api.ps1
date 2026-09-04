@@ -97,3 +97,4 @@ $null = Start-ArgusKeepAwake $Root
 Write-Host "OK  API /ready"
 Write-Host "Open Home: $(Get-ArgusDashboardUrl)"
 try { Start-Process (Get-ArgusDashboardUrl) } catch {}
+

@@ -7,17 +7,18 @@ import { LiveClock } from "@/components/founder/LiveClock";
 import {
   startArgusAction,
   stopArgusAction,
+  updateArgusAction,
   type ActionResult,
 } from "@/lib/actions/control";
 import { pauseNewEntriesAction } from "@/lib/actions/paper";
 import { formatDurationLabel } from "@/lib/format";
 
 /** Home is server-rendered, so only a refresh can move these timestamps. */
-const REFRESH_MS = 30_000;
+const REFRESH_MS = 60_000;
 /** Two missed refreshes: never present frozen readings as if they were live. */
-const STALE_AFTER_MS = 90_000;
+const STALE_AFTER_MS = 150_000;
 /** Home SSR takes several seconds; let a returning tab catch up before warning. */
-const CATCH_UP_MS = 15_000;
+const CATCH_UP_MS = 20_000;
 
 function Feedback({ result }: { result: ActionResult | null }) {
   if (!result) return null;
@@ -270,8 +271,8 @@ export function CommandStatusBar({
       {liveBuildId && buildId && liveBuildId !== buildId ? (
         <p className="command-status-fix" role="alert">
           Build mismatch: page expects {buildId}, live file shows {liveBuildId}.
-          Press <strong>Update from GitHub</strong> (or desktop <strong>FIX PC Argus</strong> / FIX-PC.cmd),
-          wait ~15s, then Ctrl+F5. If still stuck, open Desktop Argus-folder-report.txt.
+          Press <strong>Start Argus</strong> (or desktop Start Argus). To force a
+          code refresh, use <strong>Update from GitHub</strong>, wait ~15s, then Ctrl+F5.
         </p>
       ) : null}
 
@@ -280,26 +281,19 @@ export function CommandStatusBar({
           type="button"
           className="btn control-btn control-btn-start"
           disabled={busy === "start" || busy === "update"}
-          title={
-            argusStatus === "Stopped"
-              ? "Start Argus and hard-sync GitHub main"
-              : "Hard-sync GitHub main now (cloud-agent merges). Does not require Stop."
-          }
-          onClick={() =>
-            run(
-              argusStatus === "Stopped" ? "start" : "update",
-              () => startArgusAction(),
-              true,
-            )
-          }
+          title="Start Argus: sync GitHub main, then bring API, worker, and dashboard up. Stays Running until Stop."
+          onClick={() => run("start", () => startArgusAction(), true)}
         >
-          {busy === "start" || busy === "update"
-            ? argusStatus === "Stopped"
-              ? "Starting…"
-              : "Updating…"
-            : argusStatus === "Stopped"
-              ? "Start Argus"
-              : "Update from GitHub"}
+          {busy === "start" ? "Starting…" : "Start Argus"}
+        </button>
+        <button
+          type="button"
+          className="btn secondary control-btn"
+          disabled={busy !== null}
+          title="Hard-reset this PC onto GitHub main without using Start. Use when Build is stuck."
+          onClick={() => run("update", () => updateArgusAction(), true)}
+        >
+          {busy === "update" ? "Updating…" : "Update from GitHub"}
         </button>
         <button
           type="button"
@@ -333,10 +327,16 @@ export function CommandStatusBar({
         <p className="muted-note" role="status">
           {busy === "update"
             ? "Updating from GitHub… hard-refresh Home (Ctrl+F5) when done."
-            : "Starting… button will show Update from GitHub when Argus is up."}
+            : "Starting Argus… bringing paper stack up. Live trading stays locked."}
         </p>
       ) : null}
       <Feedback result={result} />
+      {result?.ok && result.detail ? (
+        <p className="muted-note" role="status" style={{ marginTop: "0.35rem" }}>
+          Boot finished. If Last scan looks old, wait ~1 minute then reload —
+          scans run every minute while Running.
+        </p>
+      ) : null}
     </section>
   );
 }

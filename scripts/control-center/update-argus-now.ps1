@@ -1,5 +1,5 @@
 # FORCE this PC onto current GitHub main (build stamp + dashboard).
-# Paste this ENTIRE line in PowerShell (uses GitHub API — NOT raw CDN cache):
+# Paste this ENTIRE line in PowerShell (uses GitHub API - NOT raw CDN cache):
 #   iex (irm -Headers @{Accept='application/vnd.github.raw'} 'https://api.github.com/repos/brandoncorley01/Argus/contents/scripts/control-center/update-argus-now.ps1?ref=main')
 #
 # Writes Desktop: Argus-update-report.txt
@@ -41,7 +41,7 @@ function Save-Report {
 }
 
 function Get-ArgusLocalDesktop {
-  # Canonical PC Desktop — NEVER [Environment]::GetFolderPath("Desktop"),
+  # Canonical PC Desktop - NEVER [Environment]::GetFolderPath("Desktop"),
   # which returns OneDrive\Desktop when Files On-Demand is enabled.
   $d = Join-Path $env:USERPROFILE "Desktop"
   if (-not (Test-Path $d)) {
@@ -99,7 +99,7 @@ function Get-BuildIdFromRoot([string]$Root) {
 }
 
 function Get-GitHubFileText([string]$RepoPath) {
-  # GitHub Contents API — decode byte[] / JSON+base64 (WinPS 5.1 quirks).
+  # GitHub Contents API - decode byte[] / JSON+base64 (WinPS 5.1 quirks).
   $api = "https://api.github.com/repos/brandoncorley01/Argus/contents/{0}?ref=main" -f $RepoPath.TrimStart('/')
   $resp = Invoke-WebRequest -Uri $api -Headers @{
     Accept = "application/vnd.github.raw"
@@ -174,7 +174,7 @@ function Find-AllArgusRoots {
       (Join-Path $env:USERPROFILE "Argus"),
       "C:\Argus",
       "D:\Argus",
-      # Legacy OneDrive trees — discovered so we can sync/migrate .env, never Start from here.
+      # Legacy OneDrive trees - discovered so we can sync/migrate .env, never Start from here.
       (Join-Path $env:USERPROFILE "OneDrive\Desktop\Argus"),
       (Join-Path $env:USERPROFILE "OneDrive\Documents\Argus"),
       (Get-Location).Path
@@ -309,7 +309,7 @@ function Sync-OneRoot([string]$Root, [string]$TargetBuild) {
   $origin = (& git -C $Root remote get-url origin 2>$null)
   Log ("origin: {0}" -f $(if ($origin) { $origin } else { "?" }))
   if (-not $origin) {
-    Log "No git origin — setting origin to brandoncorley01/Argus"
+    Log "No git origin - setting origin to brandoncorley01/Argus"
     $null = Invoke-GitAt $Root @("remote", "add", "origin", "https://github.com/brandoncorley01/Argus.git")
     $origin = "https://github.com/brandoncorley01/Argus.git"
   }
@@ -366,7 +366,7 @@ function Get-ServingArgusRoot {
       }
     }
   } catch {
-    Log ("WARN: could not inspect :3000 — {0}" -f $_.Exception.Message)
+    Log ("WARN: could not inspect :3000 - {0}" -f $_.Exception.Message)
   }
   return $null
 }
@@ -391,7 +391,7 @@ try {
   if ($servingRoot) {
     Log ("LIVE :3000 folder: {0}" -f $servingRoot)
     if (Test-IsOneDrivePath $servingRoot) {
-      Log "LIVE folder is OneDrive — Founder policy is Desktop only. Will Start from Desktop\Argus."
+      Log "LIVE folder is OneDrive - Founder policy is Desktop only. Will Start from Desktop\Argus."
     }
   } else {
     Log "No live :3000 folder detected."
@@ -402,7 +402,7 @@ try {
   # Always ensure canonical Desktop\Argus exists.
   $hasCanonical = @($found | Where-Object { $_.Root -eq $canonicalRoot }).Count -gt 0
   if (-not $hasCanonical) {
-    Log "Canonical Desktop\Argus missing — cloning there from GitHub."
+    Log "Canonical Desktop\Argus missing - cloning there from GitHub."
     $envSources = New-Object System.Collections.Generic.List[string]
     foreach ($item in $found) { $envSources.Add((Join-Path $item.Root ".env")) | Out-Null }
     foreach ($loose in (Find-LooseEocRoots)) { $envSources.Add((Join-Path $loose ".env")) | Out-Null }
@@ -478,7 +478,7 @@ try {
   $sha = $primary[0].Sha
   Set-Location $Root
   Log ("Primary Start folder (Desktop only): {0}" -f $Root)
-  Log ("Cloud agent does NOT write to this PC — only GitHub. This folder must pull main.")
+  Log ("Cloud agent does NOT write to this PC - only GitHub. This folder must pull main.")
 
   $env:ARGUS_FORCE_SYNC = "1"
   Remove-Item Env:ARGUS_START_SELF_UPDATED -ErrorAction SilentlyContinue
@@ -508,7 +508,7 @@ try {
   . (Join-Path $Root "scripts\control-center\_common.ps1")
   $apiOk = Test-HttpOk (Get-ArgusApiReadyUrl) 5
   if (-not $apiOk) {
-    Log "API /ready failed after Start — running repair..."
+    Log "API /ready failed after Start - running repair..."
     Log (Get-ArgusApiLogTail $Root 40)
     if (Repair-ArgusRuntime -Root $Root -IncludeWorker) {
       $apiOk = $true
@@ -568,3 +568,4 @@ try {
   Save-Report
   throw
 }
+

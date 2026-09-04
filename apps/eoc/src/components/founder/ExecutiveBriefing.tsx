@@ -85,6 +85,16 @@ export function ExecutiveBriefing({
   const [intelOpen, setIntelOpen] = useState(false);
   const [briefing, setBriefing] = useState<Briefing | null>(initialBriefing);
   const [loaded, setLoaded] = useState(Boolean(initialBriefing));
+  const [loadError, setLoadError] = useState<string | null>(
+    initialBriefing?.error ? String(initialBriefing.error) : null,
+  );
+
+  useEffect(() => {
+    if (initialBriefing) {
+      setBriefing(initialBriefing);
+      setLoaded(true);
+    }
+  }, [initialBriefing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,15 +105,18 @@ export function ExecutiveBriefing({
       try {
         const res = await fetch("/api/founder/briefing", {
           cache: "no-store",
-          signal: AbortSignal.timeout(50_000),
+          signal: AbortSignal.timeout(25_000),
         });
-        if (!res.ok) return;
         const data = (await res.json()) as Briefing;
         if (cancelled) return;
         setBriefing(data);
+        setLoadError(data.error ? String(data.error) : null);
         setLoaded(true);
       } catch {
-        /* keep last good briefing */
+        if (!cancelled) {
+          setLoaded(true);
+          setLoadError((prev) => prev ?? "Briefing timed out — retrying…");
+        }
       } finally {
         inFlight = false;
       }
@@ -164,6 +177,7 @@ export function ExecutiveBriefing({
       <p className="muted-note" style={{ marginTop: "0.35rem" }}>
         {briefing?.institution_status ?? institutionStatus} · PROVE mode · Live locked
         {loaded ? "" : " · loading…"}
+        {loadError ? " · partial" : ""}
       </p>
       <p className="institution-status-why" style={{ marginTop: "0.35rem" }}>
         {statusWhy}
