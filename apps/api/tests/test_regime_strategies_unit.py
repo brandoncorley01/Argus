@@ -168,7 +168,10 @@ def test_paper_detectors_grid_dca_momentum_arb() -> None:
     assert grid is None or grid.strategy_key == "grid_trading"
 
     # Peak then dip for DCA
-    dip_bars = [_Bar(100 + i * 0.2, 100.3 + i * 0.2, 99.9 + i * 0.2, 100 + i * 0.2) for i in range(25)]
+    dip_bars = [
+        _Bar(100 + i * 0.2, 100.3 + i * 0.2, 99.9 + i * 0.2, 100 + i * 0.2)
+        for i in range(25)
+    ]
     dip_bars.extend(
         [
             _Bar(104.0, 104.2, 103.5, 103.8),
@@ -181,7 +184,10 @@ def test_paper_detectors_grid_dca_momentum_arb() -> None:
     dca = detect_dca_dip(dip_bars)
     assert dca is None or dca.strategy_key == "dca"
 
-    up = [_Bar(100 + i * 0.35, 100.4 + i * 0.35, 99.9 + i * 0.35, 100 + i * 0.35) for i in range(40)]
+    up = [
+        _Bar(100 + i * 0.35, 100.4 + i * 0.35, 99.9 + i * 0.35, 100 + i * 0.35)
+        for i in range(40)
+    ]
     mom = detect_trend_momentum(up)
     assert mom is None or (
         mom.strategy_key == "trend_momentum" and mom.bias == "Bullish"

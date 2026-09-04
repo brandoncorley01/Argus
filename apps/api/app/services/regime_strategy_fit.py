@@ -112,7 +112,8 @@ def strategy_catalog() -> list[dict[str, Any]]:
             "best_regimes": sorted(STRATEGY_REGIME_FIT["cross_venue_arb"]),
             "summary": (
                 "Captures verified primary-vs-secondary venue discounts. "
-                "Stays flat without a real secondary price series; no live multi-exchange execution."
+                "Stays flat without a real secondary price series; "
+                "no live multi-exchange execution."
             ),
             "paper_detector": True,
             "research_class": True,
