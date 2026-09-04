@@ -28,10 +28,11 @@ from app.models.trading_intelligence import (
 )
 from app.services.audit_service import AuditService
 from app.services.plain_language import confidence_from_score, plain_rejection
+from app.services.regime_strategy_fit import regime_strategy_adjustment
 
 STRATEGY_KEY = "sma_crossover"
 STRATEGY_VERSION = "sma_crossover@1"
-CONFIDENCE_SCORING_VERSION = "confidence@2"
+CONFIDENCE_SCORING_VERSION = "confidence@3"
 CERT_REQUIRED_DAYS = 30
 CERT_MAX_DRAWDOWN = Decimal("500")  # paper dollars observational threshold
 SIMULATED_COST_BPS = Decimal("10")  # 10 bps each way observational haircut
@@ -124,18 +125,22 @@ class TradingIntelligenceService:
         risk_reward: float | None = None,
         duplicate_penalty: bool = False,
         paper_confidence_delta: Decimal | None = None,
+        strategy_key: str | None = None,
     ) -> tuple[Decimal, str, dict[str, Any]]:
         """Numeric confidence 0-100 from verified inputs only (observational).
 
         Returns (score, label, contributing_factors). Never fabricates missing inputs.
         Optional paper_confidence_delta is PAPER-only adaptive learning (−15..+15)
         and must never be used for live trading paths.
+        Regime×strategy fit boosts or penalizes so quiet markets favor grid,
+        dips favor DCA, trends favor momentum — without unlocking live trading.
         """
         factors: dict[str, Any] = {
             "scoring_version": CONFIDENCE_SCORING_VERSION,
             "trend": bias,
             "base_signal_score": round(float(score), 2),
             "market_regime": regime,
+            "strategy_key": strategy_key,
             "risk_status": risk_status,
             "stale_data": stale,
             "momentum": momentum,
@@ -185,6 +190,13 @@ class TradingIntelligenceService:
         elif regime == "insufficient_data":
             base *= 0.75
             factors["adjustments"].append("insufficient_data_penalty")
+        fit_mult, fit_code = regime_strategy_adjustment(
+            strategy_key=strategy_key, regime=regime
+        )
+        if fit_code is not None:
+            base = max(0.0, min(100.0, base * fit_mult))
+            factors["adjustments"].append(fit_code)
+            factors["regime_strategy_multiplier"] = fit_mult
         if paper_confidence_delta is not None:
             bounded = max(Decimal("-15"), min(Decimal("15"), paper_confidence_delta))
             base = max(0.0, min(100.0, base + float(bounded)))
@@ -239,6 +251,7 @@ class TradingIntelligenceService:
             regime=regime,
             stale=stale,
             risk_reward=rr,
+            strategy_key=cand.strategy_key or STRATEGY_KEY,
             paper_confidence_delta=(
                 self._paper_adaptive_delta(
                     portfolio_id=portfolio_id,
@@ -485,6 +498,7 @@ class TradingIntelligenceService:
             risk_status=cand.risk_status or "blocked",
             regime=regime,
             stale=False,
+            strategy_key=cand.strategy_key or STRATEGY_KEY,
         )
         row = MissedOpportunity(
             candidate_id=cand.id,
@@ -902,6 +916,7 @@ class TradingIntelligenceService:
                     risk_status=best.risk_status or "blocked",
                     regime=regime,
                     stale=False,
+                    strategy_key=best.strategy_key or STRATEGY_KEY,
                 )
                 top = {
                     "symbol": best.symbol,
@@ -943,6 +958,7 @@ class TradingIntelligenceService:
                 risk_status=c.risk_status or "blocked",
                 regime=regime,
                 stale=False,
+                strategy_key=c.strategy_key or STRATEGY_KEY,
             )
             top_five.append(
                 {
@@ -1000,6 +1016,7 @@ class TradingIntelligenceService:
             risk_status=cand.risk_status or "blocked",
             regime=regime,
             stale=False,
+            strategy_key=cand.strategy_key or STRATEGY_KEY,
         )
         events = list(
             self.db.scalars(

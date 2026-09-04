@@ -38,6 +38,23 @@ function whyText(c: ScanCandidate): string {
   return "No extra reason stored.";
 }
 
+function strategyLabel(strategyKey: string | null | undefined): string {
+  const key = (strategyKey || "").toLowerCase();
+  const labels: Record<string, string> = {
+    sma_crossover: "Momentum (SMA)",
+    grid_trading: "Grid (range)",
+    dca: "DCA (dip average)",
+    trend_momentum: "Trend / momentum (RSI+MACD)",
+    cross_venue_arb: "Cross-venue spread",
+    momentum_continuation: "Momentum continuation",
+    breakout: "Breakout",
+    dip_pullback_reversal: "Dip / pullback",
+    range_mean_reversion: "Range mean reversion",
+    peak_exhaustion_protection: "Peak protection",
+  };
+  return labels[key] || strategyKey || "unknown";
+}
+
 export function OpportunityRadar({
   candidates,
   scannedCount,
@@ -116,11 +133,8 @@ export function OpportunityRadar({
                   </span>
                   <span>{c.bias}</span>
                   <span>Score {Number(c.score).toFixed(0)}</span>
-                  <span>
-                    {c.strategy_key === "sma_crossover"
-                      ? "Momentum (SMA)"
-                      : c.strategy_key}{" "}
-                    · {c.timeframe}
+                    <span>
+                    {strategyLabel(c.strategy_key)} · {c.timeframe}
                   </span>
                 </div>
                 <p className="opportunity-why">

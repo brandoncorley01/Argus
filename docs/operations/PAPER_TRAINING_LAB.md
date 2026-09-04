@@ -30,6 +30,20 @@ to the simulated paper broker. **Live trading is never unlocked by this lab.**
 Argus still **does not invent** prices or scanner movement. If the public feed
 is unreachable, the UI states the precise next step.
 
+## Strategy families (paper detectors + research)
+
+Alpha Radar and Strategy Lab share regime-aware families (paper / research only):
+
+| Family | Keys | Best when |
+| --- | --- | --- |
+| Grid | `grid_trading`, `range_mean_reversion` | Quiet / sideways ranges |
+| DCA | `dca`, `dip_pullback_reversal` | Volatile dips / average-down |
+| Trend & momentum | `trend_momentum`, `sma_crossover`, `momentum_continuation`, `breakout` | Strong directional moves |
+| Cross-venue | `cross_venue_arb` | Verified secondary venue discount only (never invents spreads) |
+
+Regime×strategy fit adjusts paper confidence scoring. Live multi-exchange
+execution remains disabled.
+
 ## Modes
 
 ### Automatic Practice
