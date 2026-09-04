@@ -296,7 +296,14 @@ def test_monte_carlo_reproducible() -> None:
 
 
 def test_no_path_to_live_execution() -> None:
-    assert set(STRATEGY_REGISTRY.keys()) == {"buy_and_hold", "sma_crossover"}
+    assert set(STRATEGY_REGISTRY.keys()) == {
+        "buy_and_hold",
+        "sma_crossover",
+        "grid_trading",
+        "dca",
+        "trend_momentum",
+        "cross_venue_arb",
+    }
     with pytest.raises(StrategyEngineError) as exc:
         run_bar_backtest(
             bars_from_dicts(_synthetic_research_bars(10)),

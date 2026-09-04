@@ -7,14 +7,26 @@ Governed quantitative research department. Strategies are versioned institutiona
 - Strategy registry + immutable versions after submit
 - Lifecycle: draft → under_review → approved | rejected; suspended / retired / archived
 - Deterministic engines: backtest, walk-forward (IS/OOS), bounded optimization, Monte Carlo, sensitivity
-- Built-in classes only: `buy_and_hold`, `sma_crossover` (closed registry — no broker access)
+- Built-in classes only (closed registry — no broker access):
+  - `buy_and_hold`
+  - `sma_crossover`
+  - `grid_trading` — sideways / quiet range grids
+  - `dca` — dollar-cost averaging with dip safety orders
+  - `trend_momentum` — RSI + MACD trend/momentum
+  - `cross_venue_arb` — research-only spread vs verified `secondary_closes` (flat without them)
 - Dataset provenance + content hashes
 - Validation reports and strategy comparisons under shared assumptions
+- Regime×strategy fit catalog via `GET /api/v1/strategies/registry`
 - EOC `/strategies` surfaces real API evidence
 
-## APIs
+## Regime guidance (research / paper)
 
-Prefix: `/api/v1/strategies`
+| Regime | Prefer |
+| --- | --- |
+| quiet | `grid_trading`, range mean-reversion detectors |
+| volatile / trend_down dips | `dca`, dip detectors |
+| trend_up / strong direction | `trend_momentum`, SMA / breakout / momentum detectors |
+| verified multi-venue discount | `cross_venue_arb` (never invents spreads) |
 
 ## Safeguards
 
@@ -22,5 +34,7 @@ Prefix: `/api/v1/strategies`
 - Completed `research_run_results` are DB-immutable
 - Optimization budgets are mandatory and bounded
 - Reproducible seeds; cancel flag for long runs
+- Cross-venue arb does not fabricate secondary venue prices
+- Live trading remains disabled
 
 See ADR-027 and `docs/operations/STRATEGY_LABORATORY_RECOVERY.md`.

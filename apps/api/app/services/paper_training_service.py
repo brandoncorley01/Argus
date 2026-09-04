@@ -668,6 +668,7 @@ class PaperTrainingService:
                 stale=False,
                 risk_reward=rr,
                 paper_confidence_delta=delta,
+                strategy_key=cand.strategy_key or "sma_crossover",
             )
             vol_cond = "normal"
             if factors.get("volume_ok") is True or cand_detail.get("relative_volume_high"):

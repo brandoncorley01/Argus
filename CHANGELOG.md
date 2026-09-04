@@ -5,6 +5,10 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ## [Unreleased]
 
+### Added
+
+- Regime-aware crypto bot strategy families in Strategy Lab + paper Alpha Radar: `grid_trading` (sideways), `dca` (dip averaging), `trend_momentum` (RSI+MACD), `cross_venue_arb` (verified secondary prices only); confidence scoring prefers strategy×regime fit; `GET /api/v1/strategies/registry` catalog (`live-monitor-v2.57`)
+
 ### Changed
 
 - **Join-Path ChildPath hang:** updater had `Join-Path "C:\Argus"` (one arg) which prompted Founder for ChildPath; fixed in v15 (`live-monitor-v2.56`)

@@ -258,12 +258,211 @@ def detect_peak_exhaustion_protection(bars: Sequence[Any]) -> DetectorSignal | N
     )
 
 
+def _rsi(closes: list[Decimal], period: int = 14) -> Decimal | None:
+    if period < 1 or len(closes) < period + 1:
+        return None
+    gains = Decimal("0")
+    losses = Decimal("0")
+    window = closes[-(period + 1) :]
+    for a, b in zip(window[:-1], window[1:], strict=True):
+        delta = b - a
+        if delta >= 0:
+            gains += delta
+        else:
+            losses += -delta
+    avg_gain = gains / Decimal(period)
+    avg_loss = losses / Decimal(period)
+    if avg_loss == 0:
+        return Decimal("100")
+    rs = avg_gain / avg_loss
+    return Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
+
+
+def detect_grid_trading(bars: Sequence[Any]) -> DetectorSignal | None:
+    """Sideways range: buy near lower grid levels (quiet-market family)."""
+    if len(bars) < 30:
+        return None
+    closes = _closes(bars)
+    highs = _highs(bars)
+    lows = _lows(bars)
+    price = closes[-1]
+    window_h = max(highs[-24:])
+    window_l = min(lows[-24:])
+    width = window_h - window_l
+    if width <= 0 or price <= 0:
+        return None
+    width_pct = width / price
+    # Grid needs a usable band that is not a strong trend.
+    if width_pct < Decimal("0.008") or width_pct > Decimal("0.06"):
+        return None
+    ret = (closes[-1] - closes[-24]) / closes[-24] if closes[-24] else Decimal("0")
+    if abs(ret) > Decimal("0.025"):
+        return None
+    # Fire when price is in the lower 40% of the grid.
+    level = (price - window_l) / width
+    if level > Decimal("0.40"):
+        return None
+    stop = window_l * Decimal("0.997")
+    stop, target = _rr_levels(price, stop=stop)
+    # Prefer target toward mid/upper grid when it still clears 2R.
+    mid = (window_h + window_l) / Decimal("2")
+    target = max(target, mid)
+    score = Decimal("70") + (Decimal("0.40") - level) * Decimal("40")
+    return DetectorSignal(
+        strategy_key="grid_trading",
+        bias="Bullish",
+        score=min(Decimal("92"), score),
+        reason_code=None,
+        reason_text="Quiet range — grid buy near the lower band.",
+        stop_loss=stop,
+        take_profit=target,
+        pattern="grid",
+        detail={
+            "range_high": str(window_h),
+            "range_low": str(window_l),
+            "grid_level": str(level),
+            "width_pct": str(width_pct),
+            "family": "grid",
+        },
+    )
+
+
+def detect_dca_dip(bars: Sequence[Any]) -> DetectorSignal | None:
+    """DCA safety-order style: accumulate after a verified dip from recent peak."""
+    if len(bars) < 30:
+        return None
+    closes = _closes(bars)
+    price = closes[-1]
+    peak = max(closes[-20:])
+    if peak <= 0 or price >= peak:
+        return None
+    dip = (peak - price) / peak
+    if dip < Decimal("0.02") or dip > Decimal("0.12"):
+        return None
+    # Prefer dips that have started to stabilize (small bounce off local low).
+    recent_low = min(_lows(bars)[-5:])
+    bounce = (price - recent_low) / recent_low if recent_low else Decimal("0")
+    if bounce < Decimal("0.001"):
+        return None
+    stop = recent_low * Decimal("0.995")
+    stop, target = _rr_levels(price, stop=stop)
+    score = Decimal("66") + min(Decimal("20"), dip * Decimal("200"))
+    return DetectorSignal(
+        strategy_key="dca",
+        bias="Bullish",
+        score=min(Decimal("90"), score),
+        reason_code=None,
+        reason_text="Dip from recent peak — DCA safety-order style average-down watch.",
+        stop_loss=stop,
+        take_profit=target,
+        pattern="dca_dip",
+        detail={
+            "peak": str(peak),
+            "dip_pct": str(dip),
+            "bounce": str(bounce),
+            "family": "dca",
+        },
+    )
+
+
+def detect_trend_momentum(bars: Sequence[Any]) -> DetectorSignal | None:
+    """RSI + short/long SMA proxy for MACD-style momentum in strong trends."""
+    if len(bars) < 35:
+        return None
+    closes = _closes(bars)
+    price = closes[-1]
+    rsi = _rsi(closes, 14)
+    fast = _sma(closes, 12)
+    slow = _sma(closes, 26)
+    if rsi is None or fast is None or slow is None:
+        return None
+    if rsi < Decimal("55") or fast <= slow:
+        return None
+    ret8 = (closes[-1] - closes[-9]) / closes[-9] if closes[-9] else Decimal("0")
+    if ret8 < Decimal("0.004"):
+        return None
+    stop = min(_lows(bars)[-12:])
+    stop, target = _rr_levels(price, stop=stop)
+    score = Decimal("73") + min(Decimal("15"), (rsi - Decimal("55")) * Decimal("0.8"))
+    return DetectorSignal(
+        strategy_key="trend_momentum",
+        bias="Bullish",
+        score=min(Decimal("95"), score),
+        reason_code=None,
+        reason_text="RSI and trend momentum aligned for a directional long watch.",
+        stop_loss=stop,
+        take_profit=target,
+        pattern="trend_momentum",
+        detail={
+            "rsi": str(rsi),
+            "fast_sma": str(fast),
+            "slow_sma": str(slow),
+            "ret8": str(ret8),
+            "family": "trend_momentum",
+        },
+    )
+
+
+def detect_cross_venue_arb(bars: Sequence[Any]) -> DetectorSignal | None:
+    """Fire only when bars carry a verified secondary venue close — never invent spreads."""
+    if len(bars) < 5:
+        return None
+    last = bars[-1]
+    secondary = None
+    price_raw: Any = None
+    if isinstance(last, dict):
+        secondary = last.get("secondary_close")
+        price_raw = last.get("close")
+    else:
+        secondary = getattr(last, "secondary_close", None)
+        detail = getattr(last, "detail", None)
+        if secondary is None and isinstance(detail, dict):
+            secondary = detail.get("secondary_close")
+        price_raw = getattr(last, "close", None)
+    if secondary is None or price_raw is None:
+        return None
+    try:
+        other = Decimal(str(secondary))
+        price = Decimal(str(price_raw))
+    except Exception:  # noqa: BLE001
+        return None
+    if price <= 0 or other <= 0:
+        return None
+    spread_bps = ((other - price) / price) * Decimal("10000")
+    if spread_bps < Decimal("15"):
+        return None
+    stop = price * Decimal("0.985")
+    stop, target = _rr_levels(price, stop=stop)
+    score = Decimal("75") + min(Decimal("15"), spread_bps / Decimal("4"))
+    return DetectorSignal(
+        strategy_key="cross_venue_arb",
+        bias="Bullish",
+        score=min(Decimal("94"), score),
+        reason_code=None,
+        reason_text="Verified cross-venue discount on primary vs secondary close.",
+        stop_loss=stop,
+        take_profit=target,
+        pattern="cross_venue_arb",
+        detail={
+            "primary_close": str(price),
+            "secondary_close": str(other),
+            "spread_bps": str(spread_bps),
+            "family": "arbitrage",
+            "live_execution": False,
+        },
+    )
+
+
 DETECTORS = (
     detect_momentum_continuation,
     detect_breakout,
     detect_dip_pullback_reversal,
     detect_range_mean_reversion,
     detect_peak_exhaustion_protection,
+    detect_grid_trading,
+    detect_dca_dip,
+    detect_trend_momentum,
+    detect_cross_venue_arb,
 )
 
 

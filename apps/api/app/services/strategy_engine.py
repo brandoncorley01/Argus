@@ -84,9 +84,204 @@ class SmaCrossoverStrategy:
         return 1.0 if fast_ma > slow_ma else 0.0
 
 
+def _ema(values: list[float], n: int) -> float | None:
+    if n < 1 or len(values) < n:
+        return None
+    k = 2.0 / (n + 1.0)
+    ema = sum(values[:n]) / n
+    for v in values[n:]:
+        ema = (v * k) + (ema * (1.0 - k))
+    return ema
+
+
+def _rsi(closes: list[float], period: int) -> float | None:
+    if period < 1 or len(closes) < period + 1:
+        return None
+    gains = 0.0
+    losses = 0.0
+    window = closes[-(period + 1) :]
+    for a, b in zip(window[:-1], window[1:], strict=True):
+        delta = b - a
+        if delta >= 0:
+            gains += delta
+        else:
+            losses += -delta
+    avg_gain = gains / period
+    avg_loss = losses / period
+    if avg_loss < 1e-12:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+class GridTradingStrategy:
+    """Range grid: higher long exposure near range lows, lower near highs.
+
+    Best for sideways / quiet markets. Stays flat when the lookback range is
+    too wide (trending) so capital is not forced into a broken grid.
+    """
+
+    def target_exposure(self, bars: list[Bar], i: int, params: dict[str, Any]) -> float:
+        lookback = int(params.get("lookback", 40))
+        max_range_pct = float(params.get("max_range_pct", 0.08))
+        min_levels = int(params.get("grid_levels", 8))
+        if lookback < 5 or min_levels < 2:
+            raise StrategyEngineError(
+                "invalid_parameters",
+                "grid_trading requires lookback >= 5 and grid_levels >= 2",
+            )
+        if i + 1 < lookback:
+            return 0.0
+        window = bars[i + 1 - lookback : i + 1]
+        hi = max(b.high for b in window)
+        lo = min(b.low for b in window)
+        price = bars[i].close
+        if hi <= lo or price <= 0:
+            return 0.0
+        width_pct = (hi - lo) / price
+        if width_pct > max_range_pct or width_pct < 1e-6:
+            return 0.0  # not a tradable sideways grid
+        # 1.0 at range low → 0.0 at range high (long-only grid accumulation).
+        pos = (hi - price) / (hi - lo)
+        return max(0.0, min(1.0, pos))
+
+
+class DcaStrategy:
+    """Dollar-cost averaging with optional dip safety-order acceleration.
+
+    Builds exposure on a fixed bar interval and increases step size when
+    price dips from a recent peak — lowers average entry without shorts.
+    """
+
+    def target_exposure(self, bars: list[Bar], i: int, params: dict[str, Any]) -> float:
+        interval = int(params.get("interval_bars", 5))
+        base_step = float(params.get("base_step", 0.05))
+        safety_dip_pct = float(params.get("safety_dip_pct", 0.03))
+        safety_multiplier = float(params.get("safety_multiplier", 2.0))
+        max_exposure = float(params.get("max_exposure", 1.0))
+        peak_lookback = int(params.get("peak_lookback", 20))
+        if interval < 1 or base_step <= 0 or max_exposure <= 0:
+            raise StrategyEngineError(
+                "invalid_parameters",
+                "dca requires interval_bars >= 1, base_step > 0, max_exposure > 0",
+            )
+        max_exposure = max(0.0, min(1.0, max_exposure))
+        exposure = 0.0
+        peak = bars[0].close if bars else 0.0
+        for j in range(0, i + 1):
+            price = bars[j].close
+            start = max(0, j + 1 - peak_lookback)
+            peak = max(b.close for b in bars[start : j + 1])
+            if j % interval != 0:
+                continue
+            step = base_step
+            if peak > 0 and (peak - price) / peak >= safety_dip_pct:
+                step = base_step * max(1.0, safety_multiplier)
+            exposure = min(max_exposure, exposure + step)
+        return max(0.0, min(1.0, exposure))
+
+
+class TrendMomentumStrategy:
+    """Trend / momentum: RSI confirmation plus MACD line vs signal.
+
+    Long when RSI is in momentum band and MACD is above its signal (bullish
+    histogram). Flat otherwise. Designed for strong directional regimes.
+    """
+
+    def target_exposure(self, bars: list[Bar], i: int, params: dict[str, Any]) -> float:
+        rsi_period = int(params.get("rsi_period", 14))
+        rsi_entry = float(params.get("rsi_entry", 55.0))
+        rsi_exit = float(params.get("rsi_exit", 45.0))
+        macd_fast = int(params.get("macd_fast", 12))
+        macd_slow = int(params.get("macd_slow", 26))
+        macd_signal = int(params.get("macd_signal", 9))
+        if not (1 <= macd_fast < macd_slow):
+            raise StrategyEngineError(
+                "invalid_parameters",
+                "trend_momentum requires 1 <= macd_fast < macd_slow",
+            )
+        if rsi_period < 2 or macd_signal < 1:
+            raise StrategyEngineError(
+                "invalid_parameters",
+                "trend_momentum requires rsi_period >= 2 and macd_signal >= 1",
+            )
+        need = max(rsi_period + 1, macd_slow + macd_signal)
+        if i + 1 < need:
+            return 0.0
+        closes = [b.close for b in bars[: i + 1]]
+        rsi = _rsi(closes, rsi_period)
+        if rsi is None:
+            return 0.0
+        # MACD line series then signal EMA of MACD values (no look-ahead).
+        macd_series: list[float] = []
+        for k in range(macd_slow - 1, len(closes)):
+            slice_closes = closes[: k + 1]
+            fast_ema = _ema(slice_closes, macd_fast)
+            slow_ema = _ema(slice_closes, macd_slow)
+            if fast_ema is None or slow_ema is None:
+                continue
+            macd_series.append(fast_ema - slow_ema)
+        if len(macd_series) < macd_signal:
+            return 0.0
+        signal = _ema(macd_series, macd_signal)
+        if signal is None:
+            return 0.0
+        macd_line = macd_series[-1]
+        bullish = rsi >= rsi_entry and macd_line > signal
+        if bullish:
+            return 1.0
+        if rsi <= rsi_exit or macd_line < signal:
+            return 0.0
+        return 0.0
+
+
+class CrossVenueArbStrategy:
+    """Research-only cross-venue spread capture (long primary when discounted).
+
+    Requires an explicit ``secondary_closes`` series aligned to bars (same
+    length). Does **not** invent venue prices. Without a verified secondary
+    series the strategy stays flat. Live multi-exchange execution remains
+    forbidden; this engine is for paper/research evidence only.
+    """
+
+    def target_exposure(self, bars: list[Bar], i: int, params: dict[str, Any]) -> float:
+        secondary = params.get("secondary_closes")
+        if not isinstance(secondary, list) or len(secondary) != len(bars):
+            return 0.0
+        min_spread_bps = float(params.get("min_spread_bps", 15.0))
+        exit_spread_bps = float(params.get("exit_spread_bps", 5.0))
+        max_exposure = float(params.get("max_exposure", 0.5))
+        max_exposure = max(0.0, min(1.0, max_exposure))
+        if min_spread_bps < 0 or exit_spread_bps < 0:
+            raise StrategyEngineError(
+                "invalid_parameters",
+                "cross_venue_arb spreads must be non-negative",
+            )
+        primary = bars[i].close
+        try:
+            other = float(secondary[i])
+        except (TypeError, ValueError):
+            return 0.0
+        if primary <= 0 or other <= 0:
+            return 0.0
+        # Positive when secondary is richer than primary (buy cheap venue).
+        spread_bps = ((other - primary) / primary) * 10_000.0
+        if spread_bps >= min_spread_bps:
+            return max_exposure
+        if spread_bps <= exit_spread_bps:
+            return 0.0
+        # Hold prior stance within the band: approximate with mid-band rule.
+        mid = (min_spread_bps + exit_spread_bps) / 2.0
+        return max_exposure if spread_bps >= mid else 0.0
+
+
 def _register_builtin() -> None:
     STRATEGY_REGISTRY["buy_and_hold"] = BuyAndHoldStrategy
     STRATEGY_REGISTRY["sma_crossover"] = SmaCrossoverStrategy
+    STRATEGY_REGISTRY["grid_trading"] = GridTradingStrategy
+    STRATEGY_REGISTRY["dca"] = DcaStrategy
+    STRATEGY_REGISTRY["trend_momentum"] = TrendMomentumStrategy
+    STRATEGY_REGISTRY["cross_venue_arb"] = CrossVenueArbStrategy
 
 
 _register_builtin()

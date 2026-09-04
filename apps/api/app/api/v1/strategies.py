@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -76,6 +77,25 @@ def _http_error(exc: Exception) -> HTTPException:
 
 
 # Static paths MUST be registered before /{document_id} to avoid capture.
+
+
+@router.get("/registry")
+def list_registry(
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+) -> dict[str, Any]:
+    """Closed research registry + regime catalog (no live execution)."""
+    from app.services.regime_strategy_fit import strategy_catalog
+    from app.services.strategy_engine import STRATEGY_REGISTRY
+
+    return {
+        "research_classes": sorted(STRATEGY_REGISTRY.keys()),
+        "catalog": strategy_catalog(),
+        "live_execution": False,
+        "note": (
+            "Built-in classes only. Cross-venue arb requires verified secondary "
+            "prices and never invents spreads. Live trading remains disabled."
+        ),
+    }
 
 
 @router.get("", response_model=list[StrategyDocumentRead])
