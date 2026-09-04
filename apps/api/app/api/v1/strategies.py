@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -81,7 +82,7 @@ def _http_error(exc: Exception) -> HTTPException:
 @router.get("/registry")
 def list_registry(
     _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
-) -> dict:
+) -> dict[str, Any]:
     """Closed research registry + regime catalog (no live execution)."""
     from app.services.regime_strategy_fit import strategy_catalog
     from app.services.strategy_engine import STRATEGY_REGISTRY
