@@ -206,6 +206,21 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                 )
 
                 training = PaperTrainingService(auto_session)
+                # Force Founder Learning Desk into Automatic Practice so
+                # paper bots buy without waiting for a UI toggle.
+                try:
+                    training.ensure_founder_desk_for_worker()
+                except Exception as exc:  # noqa: BLE001
+                    try:
+                        auto_session.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _open_failure_incident(
+                        ctx,
+                        title="Founder desk auto-upgrade failed",
+                        description=str(exc),
+                        key="paper-automation:desk-upgrade",
+                    )
                 auto_opened = 0
                 auto_exits = 0
                 for portfolio_id in training.iter_automation_portfolio_ids():
@@ -218,6 +233,10 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                             portfolio_id=portfolio_id, actor=None
                         )
                         auto_opened += len(opened)
+                        dca_opened = training.maybe_interval_dca(
+                            portfolio_id=portfolio_id, actor=None
+                        )
+                        auto_opened += len(dca_opened)
                     except Exception as exc:  # noqa: BLE001
                         try:
                             auto_session.rollback()
