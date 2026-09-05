@@ -54,11 +54,11 @@ def _sma(values: list[Decimal], n: int) -> Decimal | None:
 
 # Keep detector geometry aligned with paper-training economics:
 # microscopic stops produced penny take-profits on the learning desk.
-_MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
+_MIN_STOP_DISTANCE_PCT = Decimal("0.02")  # 2.0%
 
 
 def _rr_levels(
-    price: Decimal, *, stop: Decimal, min_r: Decimal = Decimal("2")
+    price: Decimal, *, stop: Decimal, min_r: Decimal = Decimal("1.5")
 ) -> tuple[Decimal, Decimal]:
     min_risk = price * _MIN_STOP_DISTANCE_PCT
     if stop >= price:

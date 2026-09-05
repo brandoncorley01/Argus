@@ -101,7 +101,7 @@ def test_consult_avoids_negative_expectancy_memory() -> None:
 
     def fake_list(_pid, *, limit=400):  # noqa: ARG001
         rows = []
-        for i in range(6):
+        for i in range(8):
             rows.append(
                 {
                     "review_id": str(i),
@@ -132,7 +132,7 @@ def test_consult_avoids_negative_expectancy_memory() -> None:
         trade_pattern="momentum",
     )
     assert out["action"] == "AVOID"
-    assert out["similar_setup_count"] == 6
+    assert out["similar_setup_count"] == 8
     assert out["influenced"] is True
 
 

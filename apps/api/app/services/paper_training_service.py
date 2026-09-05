@@ -37,22 +37,21 @@ MIN_BARS = 25
 # Match anticipated live connected-account size for Founder learning.
 FOUNDER_LEARNING_DESK_NAME = "Founder Learning Desk"
 LEARNING_STARTING_CASH = Decimal("300")
-# ~33% of the $300 book — small enough to keep 2–3 concurrent slots,
-# large enough that a clean 2R win is dollars, not pennies.
-LEARNING_DEFAULT_NOTIONAL = Decimal("100")
+# ~50% of the $300 book — 1–2 concurrent slots with dollar-scale wins.
+LEARNING_DEFAULT_NOTIONAL = Decimal("150")
 # Legacy practice size that produced ~$0.25 days; auto-upgraded when cash allows.
 LEGACY_TINY_NOTIONAL = Decimal("30")
 # Dig-out: keep trading with remaining cash (never invents capital).
 MIN_DIG_OUT_CASH = Decimal("5")
 DIG_OUT_NOTIONAL_FRACTION = Decimal("0.25")  # up to 25% of remaining buying power
-# Take-profit must clear at least this reward:risk multiple of stop distance.
-MIN_TAKE_PROFIT_R = Decimal("2")
-# Floor stop distance so 2R targets cannot collapse into micro-scalps.
-MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
+# Reachable paper targets: 1.5R after a noise-tolerant stop (was 2R @ 1.5%).
+MIN_TAKE_PROFIT_R = Decimal("1.5")
+# Floor stop distance — wide enough to survive 1m noise, still risk-capped.
+MIN_STOP_DISTANCE_PCT = Decimal("0.02")  # 2.0%
 # Skip automatic entries whose planned dollar reward is still trivial.
 MIN_EXPECTED_REWARD_USD = Decimal("3")
-# Do not take-profit a brand-new entry in the same automation pass.
-TAKE_PROFIT_MIN_HOLD_SECONDS = 120
+# Stops and targets use the same urgency — no 2-minute TP handicap.
+TAKE_PROFIT_MIN_HOLD_SECONDS = 0
 
 
 def normalize_exit_levels(
@@ -595,7 +594,7 @@ class PaperTrainingService:
         cands = [
             c
             for c in cands
-            if float(c.score or 0) >= 50.0
+            if float(c.score or 0) >= 45.0
         ] or cands
         open_syms = {
             p.symbol
@@ -606,9 +605,9 @@ class PaperTrainingService:
                 )
             )
         }
-        # Cool-off after exit so the same symbol is not flipped every minute.
+        # Short cool-off after exit — avoid same-minute flip, keep re-entry alive.
         recently_exited = self._symbols_exited_since(
-            portfolio_id, within_seconds=300
+            portfolio_id, within_seconds=120
         )
         resolved = self._resolve_actor(actor, portfolio)
         if resolved is None:
@@ -1192,7 +1191,7 @@ class PaperTrainingService:
             )
         )
         if existing is not None:
-            self._upgrade_legacy_tiny_notional(existing)
+            self._upgrade_learning_desk_for_pnl(existing)
             return existing
         portfolio = self.paper.create_portfolio(
             name=FOUNDER_LEARNING_DESK_NAME,
@@ -1206,31 +1205,41 @@ class PaperTrainingService:
         self.db.refresh(portfolio)
         return portfolio
 
-    def _upgrade_legacy_tiny_notional(self, portfolio: PaperPortfolio) -> None:
-        """Bump legacy $30 practice size when the desk still has enough cash.
+    def _upgrade_learning_desk_for_pnl(self, portfolio: PaperPortfolio) -> None:
+        """Force Automatic Practice + meaningful size when cash allows.
 
-        Dig-out desks with reduced cash are left alone so notional stays
-        within buying power.
+        Existing desks stuck in coaching or on $30/$100 tickets never show
+        real dollar P&L. Dig-out desks with thin cash are left alone.
         """
         settings = self.get_or_create_settings(portfolio.id)
-        if settings.default_notional > LEGACY_TINY_NOTIONAL:
-            return
         buying_power = portfolio.cash_balance - (
             portfolio.reserved_cash or Decimal("0")
         )
-        if buying_power < LEARNING_DEFAULT_NOTIONAL:
+        changed = False
+        previous_mode = settings.mode
+        previous_notional = settings.default_notional
+        if settings.mode != "automatic":
+            settings.mode = "automatic"
+            changed = True
+        if (
+            settings.default_notional < LEARNING_DEFAULT_NOTIONAL
+            and buying_power >= LEARNING_DEFAULT_NOTIONAL
+        ):
+            settings.default_notional = LEARNING_DEFAULT_NOTIONAL
+            changed = True
+        if not changed:
             return
-        previous = settings.default_notional
-        settings.default_notional = LEARNING_DEFAULT_NOTIONAL
         self.audit.append(
-            action="paper.training.notional_upgraded",
+            action="paper.training.learning_desk_upgraded",
             resource_type="paper_portfolio",
             resource_id=str(portfolio.id),
             actor_user_id=portfolio.owner_user_id,
             payload={
-                "previous_default_notional": str(previous),
-                "default_notional": str(LEARNING_DEFAULT_NOTIONAL),
-                "reason": "legacy_tiny_notional_unacceptable_daily_pnl",
+                "previous_mode": previous_mode,
+                "mode": settings.mode,
+                "previous_default_notional": str(previous_notional),
+                "default_notional": str(settings.default_notional),
+                "reason": "paper_pnl_path_must_trade_automatically_at_dollar_scale",
                 "paper_only": True,
             },
         )
