@@ -337,12 +337,12 @@ def detect_dca_dip(bars: Sequence[Any]) -> DetectorSignal | None:
     if peak <= 0 or price >= peak:
         return None
     dip = (peak - price) / peak
-    if dip < Decimal("0.02") or dip > Decimal("0.12"):
+    if dip < Decimal("0.012") or dip > Decimal("0.15"):
         return None
     # Prefer dips that have started to stabilize (small bounce off local low).
     recent_low = min(_lows(bars)[-5:])
     bounce = (price - recent_low) / recent_low if recent_low else Decimal("0")
-    if bounce < Decimal("0.001"):
+    if bounce < Decimal("0.0005"):
         return None
     stop = recent_low * Decimal("0.995")
     stop, target = _rr_levels(price, stop=stop)
@@ -376,14 +376,14 @@ def detect_trend_momentum(bars: Sequence[Any]) -> DetectorSignal | None:
     slow = _sma(closes, 26)
     if rsi is None or fast is None or slow is None:
         return None
-    if rsi < Decimal("55") or fast <= slow:
+    if rsi < Decimal("50") or fast <= slow:
         return None
     ret8 = (closes[-1] - closes[-9]) / closes[-9] if closes[-9] else Decimal("0")
-    if ret8 < Decimal("0.004"):
+    if ret8 < Decimal("0.002"):
         return None
     stop = min(_lows(bars)[-12:])
     stop, target = _rr_levels(price, stop=stop)
-    score = Decimal("73") + min(Decimal("15"), (rsi - Decimal("55")) * Decimal("0.8"))
+    score = Decimal("70") + min(Decimal("18"), (rsi - Decimal("50")) * Decimal("0.8"))
     return DetectorSignal(
         strategy_key="trend_momentum",
         bias="Bullish",

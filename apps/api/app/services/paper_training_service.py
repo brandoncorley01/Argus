@@ -52,6 +52,12 @@ MIN_STOP_DISTANCE_PCT = Decimal("0.02")  # 2.0%
 MIN_EXPECTED_REWARD_USD = Decimal("3")
 # Stops and targets use the same urgency — no 2-minute TP handicap.
 TAKE_PROFIT_MIN_HOLD_SECONDS = 0
+# Commercial-style families: when detectors fire, enter — do not bury them
+# under institutional memory WAIT/AVOID or thin-reward skips.
+SIMPLE_BOT_STRATEGIES = frozenset({"dca", "trend_momentum", "grid_trading"})
+# Interval DCA (Bitsgap-style): buy majors on a clock when Automatic is on.
+INTERVAL_DCA_SECONDS = 4 * 60 * 60
+INTERVAL_DCA_SYMBOLS = ("BTC-USD", "ETH-USD", "SOL-USD")
 
 
 def normalize_exit_levels(
@@ -128,7 +134,8 @@ class PaperTrainingService:
             return row
         row = PaperTrainingSettings(
             portfolio_id=portfolio_id,
-            mode="coaching",
+            # Default Automatic so paper bots actually trade without a UI toggle.
+            mode="automatic",
             default_notional=LEARNING_DEFAULT_NOTIONAL,
         )
         self.db.add(row)
@@ -647,83 +654,103 @@ class PaperTrainingService:
                     reason_code="discovery_chase_avoid",
                 )
                 continue
+            strategy_key = (cand.strategy_key or "sma_crossover").strip().lower()
+            bot_fast_lane = strategy_key in SIMPLE_BOT_STRATEGIES
             # --- Institutional memory consult BEFORE paper entry (PAPER only) ---
-            regime = intelligence.infer_market_regime(cand.symbol)
-            delta = intelligence._paper_adaptive_delta(
-                portfolio_id=portfolio_id,
-                strategy_key=cand.strategy_key or "sma_crossover",
-            )
-            rr = None
-            if cand.entry_zone and cand.stop_loss and cand.take_profit:
-                risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
-                reward = abs(float(cand.take_profit) - float(cand.entry_zone))
-                if risk > 0:
-                    rr = reward / risk
-            conf, _label, factors = intelligence.score_confidence(
-                score=float(cand.score or 0),
-                bias=cand.bias or "Neutral",
-                risk_status=cand.risk_status or "blocked",
-                regime=regime,
-                stale=False,
-                risk_reward=rr,
-                paper_confidence_delta=delta,
-                strategy_key=cand.strategy_key or "sma_crossover",
-            )
-            vol_cond = "normal"
-            if factors.get("volume_ok") is True or cand_detail.get("relative_volume_high"):
-                vol_cond = "elevated"
-            elif factors.get("volume_ok") is False:
-                vol_cond = "thin"
-            consult = memory.consult_before_entry(
-                portfolio_id=portfolio_id,
-                symbol=cand.symbol,
-                strategy_key=cand.strategy_key or "sma_crossover",
-                market_regime=regime,
-                base_score=float(cand.score or 0),
-                paper_confidence_delta=delta,
-                confidence_label_score=conf,
-                volume_condition=vol_cond,
-                trade_pattern=str(
-                    cand_detail.get("trade_pattern")
-                    or cand_detail.get("discovery_opportunity_class")
-                    or cand_detail.get("pattern")
-                    or ""
+            # Simple bot families skip WAIT/AVOID burial — commercial bots
+            # do not ask a memory court for permission to DCA/trend/grid.
+            consult: dict[str, Any]
+            action: str
+            if bot_fast_lane:
+                consult = {
+                    "action": "EXECUTE",
+                    "learned_opportunity_score": float(cand.score or 0),
+                    "similar_setup_count": 0,
+                    "evidence_strength": "bot_fast_lane",
+                    "prior_review_ids": [],
+                    "fast_lane": strategy_key,
+                    "paper_only": True,
+                }
+                action = "EXECUTE"
+            else:
+                regime = intelligence.infer_market_regime(cand.symbol)
+                delta = intelligence._paper_adaptive_delta(
+                    portfolio_id=portfolio_id,
+                    strategy_key=strategy_key,
                 )
-                or None,
-            )
-            action = str(consult.get("action") or "WAIT")
-            if action != "EXECUTE":
-                self.audit.append(
-                    action="paper.training.memory_gate",
-                    resource_type="market_scan_candidate",
-                    resource_id=str(cand.id),
-                    actor_user_id=resolved.user.id,
-                    payload={
-                        "symbol": cand.symbol,
-                        "gate_action": action,
-                        "learned_opportunity_score": consult.get(
-                            "learned_opportunity_score"
-                        ),
-                        "similar_setup_count": consult.get("similar_setup_count"),
-                        "evidence_strength": consult.get("evidence_strength"),
-                        "prior_review_ids": consult.get("prior_review_ids"),
-                        "paper_only": True,
-                    },
+                rr = None
+                if cand.entry_zone and cand.stop_loss and cand.take_profit:
+                    risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
+                    reward = abs(float(cand.take_profit) - float(cand.entry_zone))
+                    if risk > 0:
+                        rr = reward / risk
+                conf, _label, factors = intelligence.score_confidence(
+                    score=float(cand.score or 0),
+                    bias=cand.bias or "Neutral",
+                    risk_status=cand.risk_status or "blocked",
+                    regime=regime,
+                    stale=False,
+                    risk_reward=rr,
+                    paper_confidence_delta=delta,
+                    strategy_key=strategy_key,
                 )
-                self._emit_decision_event(
+                vol_cond = "normal"
+                if factors.get("volume_ok") is True or cand_detail.get(
+                    "relative_volume_high"
+                ):
+                    vol_cond = "elevated"
+                elif factors.get("volume_ok") is False:
+                    vol_cond = "thin"
+                consult = memory.consult_before_entry(
+                    portfolio_id=portfolio_id,
                     symbol=cand.symbol,
-                    outcome="info",
-                    title=f"Memory {action.lower()} on {cand.symbol}",
-                    detail=(
-                        f"Learned score {consult.get('learned_opportunity_score')}; "
-                        f"similar setups {consult.get('similar_setup_count')}; "
-                        f"evidence {consult.get('evidence_strength')}. No paper order."
-                    ),
-                    reason_code=f"memory_{action.lower()}",
+                    strategy_key=strategy_key,
+                    market_regime=regime,
+                    base_score=float(cand.score or 0),
+                    paper_confidence_delta=delta,
+                    confidence_label_score=conf,
+                    volume_condition=vol_cond,
+                    trade_pattern=str(
+                        cand_detail.get("trade_pattern")
+                        or cand_detail.get("discovery_opportunity_class")
+                        or cand_detail.get("pattern")
+                        or ""
+                    )
+                    or None,
                 )
-                continue
-            # Refuse penny economics: normalize stops/targets, then require a
-            # meaningful planned dollar reward at the desk notional.
+                action = str(consult.get("action") or "WAIT")
+                if action != "EXECUTE":
+                    self.audit.append(
+                        action="paper.training.memory_gate",
+                        resource_type="market_scan_candidate",
+                        resource_id=str(cand.id),
+                        actor_user_id=resolved.user.id,
+                        payload={
+                            "symbol": cand.symbol,
+                            "gate_action": action,
+                            "learned_opportunity_score": consult.get(
+                                "learned_opportunity_score"
+                            ),
+                            "similar_setup_count": consult.get("similar_setup_count"),
+                            "evidence_strength": consult.get("evidence_strength"),
+                            "prior_review_ids": consult.get("prior_review_ids"),
+                            "paper_only": True,
+                        },
+                    )
+                    self._emit_decision_event(
+                        symbol=cand.symbol,
+                        outcome="info",
+                        title=f"Memory {action.lower()} on {cand.symbol}",
+                        detail=(
+                            f"Learned score {consult.get('learned_opportunity_score')}; "
+                            f"similar setups {consult.get('similar_setup_count')}; "
+                            f"evidence {consult.get('evidence_strength')}. No paper order."
+                        ),
+                        reason_code=f"memory_{action.lower()}",
+                    )
+                    continue
+            # Normalize stops/targets. Bot fast-lane skips the thin-reward veto
+            # so DCA/trend/grid are not blocked by geometry haircuts.
             entry_px = cand.current_price or cand.entry_zone
             if entry_px is None or entry_px <= 0:
                 continue
@@ -735,7 +762,7 @@ class PaperTrainingService:
                 target=norm_target,
                 notional=settings.default_notional,
             )
-            if reward_usd < MIN_EXPECTED_REWARD_USD:
+            if (not bot_fast_lane) and reward_usd < MIN_EXPECTED_REWARD_USD:
                 self._emit_decision_event(
                     symbol=cand.symbol,
                     outcome="info",
@@ -1180,6 +1207,158 @@ class PaperTrainingService:
             )
         except Exception:  # noqa: BLE001 — UI stream must never block trading
             pass
+
+    def ensure_founder_desk_for_worker(self) -> uuid.UUID | None:
+        """Worker hook: force Founder Learning Desk into Automatic Practice.
+
+        Does not create a desk (needs an authenticated actor). Upgrades an
+        existing desk so scan automation actually buys without a UI visit.
+        """
+        existing = self.db.scalar(
+            select(PaperPortfolio).where(
+                PaperPortfolio.name == FOUNDER_LEARNING_DESK_NAME
+            )
+        )
+        if existing is None:
+            return None
+        self._upgrade_learning_desk_for_pnl(existing)
+        return existing.id
+
+    def maybe_interval_dca(
+        self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None
+    ) -> list[dict[str, Any]]:
+        """Bitsgap-style interval DCA on majors — paper only, long only.
+
+        Places a notional slice buy when Automatic Practice is on, cash
+        allows, the symbol is not already open, and no DCA buy hit that
+        symbol within INTERVAL_DCA_SECONDS. No memory court. No live unlock.
+        """
+        settings = self.get_or_create_settings(portfolio_id)
+        if settings.mode != "automatic":
+            return []
+        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        if (
+            portfolio is None
+            or portfolio.kill_switch_active
+            or portfolio.pause_new_entries_active
+        ):
+            return []
+        resolved = self._resolve_actor(actor, portfolio)
+        if resolved is None:
+            return []
+        buying_power = portfolio.cash_balance - (
+            portfolio.reserved_cash or Decimal("0")
+        )
+        slice_notional = (settings.default_notional / Decimal("2")).quantize(
+            Decimal("0.01")
+        )
+        if slice_notional < Decimal("25"):
+            slice_notional = min(settings.default_notional, buying_power)
+        if buying_power < slice_notional or slice_notional <= 0:
+            return []
+        open_syms = {
+            p.symbol
+            for p in self.db.scalars(
+                select(PaperPosition).where(
+                    PaperPosition.portfolio_id == portfolio_id,
+                    PaperPosition.quantity != 0,
+                )
+            )
+        }
+        opened: list[dict[str, Any]] = []
+        cutoff = datetime.now(UTC).timestamp() - INTERVAL_DCA_SECONDS
+        for symbol in INTERVAL_DCA_SYMBOLS:
+            if symbol in open_syms:
+                continue
+            if self._recent_dca_buy(portfolio_id, symbol, since_ts=cutoff):
+                continue
+            mark = self.paper._latest_mark(symbol)
+            price = mark[0] if isinstance(mark, tuple) else mark
+            if price is None or price <= 0:
+                continue
+            stop, target = normalize_exit_levels(price, None, None)
+            try:
+                qty = (slice_notional / price).quantize(Decimal("0.00000001"))
+                if qty <= 0:
+                    continue
+                order = self.paper.submit_order(
+                    portfolio_id=portfolio_id,
+                    actor=resolved,
+                    symbol=symbol,
+                    side="buy",
+                    order_type="market",
+                    quantity=qty,
+                    limit_price=price,
+                    idempotency_key=(
+                        f"interval-dca:{portfolio_id}:{symbol}:"
+                        f"{int(datetime.now(UTC).timestamp() // INTERVAL_DCA_SECONDS)}"
+                    ),
+                )
+                self.paper._event(
+                    order,
+                    "paper_exit_plan",
+                    order.status,
+                    order.status,
+                    {
+                        "stop_loss": str(stop),
+                        "take_profit": str(target),
+                        "entry_zone": str(price),
+                        "strategy_key": "dca",
+                        "interval_dca": True,
+                        "paper_only": True,
+                    },
+                )
+                opened.append(
+                    {
+                        "symbol": symbol,
+                        "order_id": str(order.id),
+                        "strategy_key": "dca",
+                        "notional": str(slice_notional),
+                        "interval_dca": True,
+                    }
+                )
+                open_syms.add(symbol)
+                buying_power -= slice_notional
+                if buying_power < slice_notional:
+                    break
+                self.audit.append(
+                    action="paper.training.interval_dca",
+                    resource_type="paper_order",
+                    resource_id=str(order.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": symbol,
+                        "notional": str(slice_notional),
+                        "interval_seconds": INTERVAL_DCA_SECONDS,
+                        "paper_only": True,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — never poison scan automation
+                try:
+                    self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+        if opened:
+            self.db.commit()
+        return opened
+
+    def _recent_dca_buy(
+        self, portfolio_id: uuid.UUID, symbol: str, *, since_ts: float
+    ) -> bool:
+        """True if a paper buy for symbol landed after since_ts (epoch seconds)."""
+        since = datetime.fromtimestamp(since_ts, tz=UTC)
+        row = self.db.scalars(
+            select(PaperOrder)
+            .where(
+                PaperOrder.portfolio_id == portfolio_id,
+                PaperOrder.symbol == symbol,
+                PaperOrder.side == "buy",
+                PaperOrder.created_at >= since,
+            )
+            .limit(1)
+        ).first()
+        return row is not None
 
     def ensure_learning_desk(
         self, *, actor: AuthenticatedPrincipal

@@ -128,17 +128,27 @@ def test_training_settings_and_scorecard(client: TestClient, db_session: Session
 
     settings = client.get(f"/api/v1/paper/training/{pid}/settings", cookies=cookies)
     assert settings.status_code == 200, settings.text
-    assert settings.json()["mode"] == "coaching"
+    # Default is Automatic so paper bots trade without a UI toggle.
+    assert settings.json()["mode"] == "automatic"
 
     updated = client.put(
         f"/api/v1/paper/training/{pid}/settings",
         cookies=cookies,
         headers={"X-CSRF-Token": csrf},
-        json={"mode": "automatic", "default_notional": "150"},
+        json={"mode": "coaching", "default_notional": "150"},
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["mode"] == "automatic"
+    assert updated.json()["mode"] == "coaching"
     assert Decimal(updated.json()["default_notional"]) == Decimal("150")
+
+    back = client.put(
+        f"/api/v1/paper/training/{pid}/settings",
+        cookies=cookies,
+        headers={"X-CSRF-Token": csrf},
+        json={"mode": "automatic", "default_notional": "150"},
+    )
+    assert back.status_code == 200, back.text
+    assert back.json()["mode"] == "automatic"
 
     score = client.get(f"/api/v1/paper/training/{pid}/scorecard", cookies=cookies)
     assert score.status_code == 200, score.text
