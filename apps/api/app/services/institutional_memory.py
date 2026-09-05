@@ -25,9 +25,9 @@ from app.services.advanced_learning_service import (
 )
 from app.services.trading_intelligence_service import SIMULATED_COST_BPS
 
-EXECUTE_SCORE = Decimal("58")
-WAIT_SCORE = Decimal("48")
-MIN_EVIDENCE_FOR_HARD_AVOID = 5
+EXECUTE_SCORE = Decimal("52")
+WAIT_SCORE = Decimal("45")
+MIN_EVIDENCE_FOR_HARD_AVOID = 8
 WEAK_EXPECTANCY = Decimal("-0.5")
 
 

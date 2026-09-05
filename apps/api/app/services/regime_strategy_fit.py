@@ -53,7 +53,7 @@ def regime_strategy_adjustment(
     if fit and reg in fit:
         return 1.12, "regime_strategy_fit_boost"
     if misfit and reg in misfit:
-        return 0.72, "regime_strategy_misfit_penalty"
+        return 0.88, "regime_strategy_misfit_penalty"
     return 1.0, None
 
 

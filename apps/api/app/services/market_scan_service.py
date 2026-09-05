@@ -1911,7 +1911,7 @@ class MarketScanService:
                 and merged.get("discovery_source") == "coinbase_dynamic"
             ):
                 merged["chase_caution"] = True
-                score = (score * Decimal("0.85")).quantize(Decimal("0.01"))
+                score = (score * Decimal("0.95")).quantize(Decimal("0.01"))
                 reason_text = reason_text or (
                     "Extended move near highs — Watching with chase caution, "
                     "not auto-rejected."
