@@ -11,6 +11,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Cloud-agent accountability:** every product-behavior job must bump Build live monitor (`apps/eoc/public/argus-build.txt` + `ARGUS_UI_BUILD`) or the job is incomplete (`live-monitor-v2.60`)
 - **Paper bots actually trade:** Founder Learning Desk auto-forced to Automatic on each scan worker cycle; `dca` / `trend_momentum` / `grid_trading` skip memory WAIT/AVOID burial; Bitsgap-style interval DCA buys majors every 4h; softer DCA/trend detectors (`live-monitor-v2.59`)
 - Paper P&L path: Learning Desk auto-forces Automatic Practice; ticket $100→$150; stop 2% / 1.5R reachable targets; remove 120s take-profit hold handicap; easier EXECUTE memory gate; less chase/regime haircut so Argus actually enters and can bank dollars in paper (`live-monitor-v2.58`)
 - **Join-Path ChildPath hang:** updater had `Join-Path "C:\Argus"` (one arg) which prompted Founder for ChildPath; fixed in v15 (`live-monitor-v2.56`)
