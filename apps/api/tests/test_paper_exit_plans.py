@@ -129,6 +129,7 @@ def test_evaluate_paper_exits_no_breakeven_at_one_r() -> None:
     svc = PaperTrainingService(db)
     portfolio = SimpleNamespace(
         id="p1",
+        name="Lab Book",
         kill_switch_active=False,
         owner_user_id="u1",
     )
@@ -144,6 +145,7 @@ def test_evaluate_paper_exits_no_breakeven_at_one_r() -> None:
             "stop_loss": Decimal("90"),
             "take_profit": Decimal("120"),
             "entry_order_id": "ord-entry",
+            "scaled_out": False,
         }
     )
     # +1R = mark 110 with risk 10 — must leave planned stop alone.
@@ -156,11 +158,69 @@ def test_evaluate_paper_exits_no_breakeven_at_one_r() -> None:
         return_value=SimpleNamespace(user=SimpleNamespace(id="u1"))
     )
     svc._catalyst_momentum_weakened = MagicMock(return_value=False)  # type: ignore[method-assign]
+    svc._position_held_seconds = MagicMock(return_value=180.0)  # type: ignore[method-assign]
 
     out = svc.evaluate_paper_exits(portfolio_id=portfolio.id, actor=None)
     assert out == []
     svc.paper.submit_order.assert_not_called()
     svc.paper._event.assert_not_called()
+
+
+def test_evaluate_paper_exits_scales_out_half_at_one_r_on_founder() -> None:
+    """Founder desk banks half at +1R so cash can redeploy into dips."""
+    from app.services.paper_training_service import FOUNDER_LEARNING_DESK_NAME
+
+    db = MagicMock()
+    svc = PaperTrainingService(db)
+    portfolio = SimpleNamespace(
+        id="p1",
+        name=FOUNDER_LEARNING_DESK_NAME,
+        kill_switch_active=False,
+        owner_user_id="u1",
+    )
+    entry = SimpleNamespace(id="ord-entry", status="filled")
+
+    def _get(model: object, key: object) -> object:
+        if key == portfolio.id:
+            return portfolio
+        return entry
+
+    db.get.side_effect = _get
+    pos = SimpleNamespace(
+        id="pos1",
+        symbol="BTC-USD",
+        quantity=Decimal("0.02"),
+        average_cost=Decimal("100"),
+    )
+    svc.paper.list_positions = MagicMock(return_value=[pos])  # type: ignore[method-assign]
+    svc.paper._exit_plan_levels = MagicMock(  # type: ignore[method-assign]
+        return_value={
+            "stop_loss": Decimal("90"),
+            "take_profit": Decimal("120"),
+            "initial_stop_loss": Decimal("90"),
+            "entry_order_id": "ord-entry",
+            "scaled_out": False,
+        }
+    )
+    svc.paper._latest_mark = MagicMock(  # type: ignore[method-assign]
+        return_value=(Decimal("110"), None)
+    )
+    order = SimpleNamespace(id="ord-scale", status="filled")
+    svc.paper.submit_order = MagicMock(return_value=order)  # type: ignore[method-assign]
+    svc.paper._event = MagicMock()  # type: ignore[method-assign]
+    svc._resolve_actor = MagicMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(user=SimpleNamespace(id="u1"))
+    )
+    svc._position_held_seconds = MagicMock(return_value=200.0)  # type: ignore[method-assign]
+    svc._catalyst_momentum_weakened = MagicMock(return_value=False)  # type: ignore[method-assign]
+    svc.audit.append = MagicMock()  # type: ignore[method-assign]
+    svc._emit_decision_event = MagicMock()  # type: ignore[method-assign]
+
+    out = svc.evaluate_paper_exits(portfolio_id=portfolio.id, actor=None)
+    assert len(out) == 1
+    assert out[0]["reason"] == "scale_out"
+    assert svc.paper.submit_order.call_args.kwargs["quantity"] == Decimal("0.01000000")
+    assert svc.paper.submit_order.call_args.kwargs["side"] == "sell"
 
 
 def test_evaluate_paper_exits_uses_ratcheted_stop() -> None:

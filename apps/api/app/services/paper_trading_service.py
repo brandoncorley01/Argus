@@ -299,7 +299,9 @@ class PaperTradingService:
                 f"Started at ${starting_cash:.2f} paper cash. "
                 f"Now ${portfolio.cash_balance:.2f} cash + "
                 f"${committed:.2f} in open trades "
-                f"(equity ${total_value:.2f}). "
+                f"(equity ${total_value:.2f}, {net_vs_start:+.2f} vs start). "
+                f"Organic growth lane: bank partial winners, redeploy dips, "
+                f"compound size slowly — not day-to-day doubles. "
                 f"{fill_count} paper fills recorded."
             )
         elif fill_count > 0:
@@ -528,7 +530,14 @@ class PaperTradingService:
             .limit(1)
         ).first()
         if row is None:
-            return {"stop_loss": None, "take_profit": None, "entry_order_id": None}
+            return {
+                "stop_loss": None,
+                "take_profit": None,
+                "entry_order_id": None,
+                "initial_stop_loss": None,
+                "scaled_out": False,
+                "strategy_key": None,
+            }
         payload = row[0] or {}
         entry_order_id = row[1]
 
@@ -544,7 +553,10 @@ class PaperTradingService:
         return {
             "stop_loss": _dec("stop_loss"),
             "take_profit": _dec("take_profit"),
+            "initial_stop_loss": _dec("initial_stop_loss"),
             "entry_order_id": entry_order_id,
+            "scaled_out": bool(payload.get("scaled_out")),
+            "strategy_key": payload.get("strategy_key"),
         }
 
     def list_closed_trades(

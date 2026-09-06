@@ -50,6 +50,16 @@ type Scorecard = {
   trades_with_founder_feedback: number;
   live_readiness: string;
   live_readiness_detail: string;
+  organic_growth?: {
+    starting_cash?: string;
+    equity?: string;
+    net_vs_start?: string;
+    growth_pct?: string;
+    lane?: string;
+    guide?: string;
+    checkpoints?: Record<string, string>;
+    disclaimer?: string;
+  } | null;
   disclaimer: string;
 };
 
@@ -383,6 +393,23 @@ export function PaperTrainingClient({
           <p className="muted-note">Scorecard unavailable.</p>
         ) : (
           <>
+            {scorecard.organic_growth ? (
+              <div className="attention-box" style={{ marginBottom: "0.75rem" }}>
+                <strong>Organic growth lane</strong>
+                <p style={{ margin: "0.35rem 0 0" }}>
+                  Equity {money(scorecard.organic_growth.equity)} vs start{" "}
+                  {money(scorecard.organic_growth.starting_cash)} (
+                  {scorecard.organic_growth.net_vs_start != null
+                    ? moneyPnl(scorecard.organic_growth.net_vs_start)
+                    : "—"}
+                  , {scorecard.organic_growth.growth_pct ?? "0"}%). Lane:{" "}
+                  {(scorecard.organic_growth.lane ?? "—").replaceAll("_", " ")}.
+                </p>
+                <p className="muted-note" style={{ margin: "0.35rem 0 0" }}>
+                  {scorecard.organic_growth.guide}
+                </p>
+              </div>
+            ) : null}
             <div className="summary-grid summary-grid-primary">
               <div className="summary-card">
                 <span className="metric-label">Paper trades completed</span>

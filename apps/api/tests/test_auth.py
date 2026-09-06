@@ -156,6 +156,29 @@ def test_expired_session(client: TestClient, db_session: Session) -> None:
     assert any(event.actor_user_id == user.id for event in events)
 
 
+def test_session_slides_on_activity(client: TestClient, db_session: Session) -> None:
+    """Active Home use must extend session — Founder must not re-login every 8h."""
+    username = _unique("founder")
+    password = "founder-pass-1234"
+    _bootstrap_founder(db_session, username, password)
+    cookies, _csrf = _login(client, username, password)
+    token = cookies.get("argus_session")
+    assert token
+    row = db_session.scalars(
+        select(AuthSession).where(AuthSession.token_hash == hash_token(token))
+    ).one()
+    # Put expiry near — sliding should push it out again.
+    row.expires_at = datetime.now(UTC) + timedelta(hours=2)
+    db_session.commit()
+    before = row.expires_at
+
+    me = client.get("/api/v1/auth/me", cookies=cookies)
+    assert me.status_code == 200
+    db_session.refresh(row)
+    assert row.expires_at > before
+    assert row.expires_at > datetime.now(UTC) + timedelta(hours=24)
+
+
 def test_founder_create_user_and_viewer_write_denial(
     client: TestClient, db_session: Session
 ) -> None:

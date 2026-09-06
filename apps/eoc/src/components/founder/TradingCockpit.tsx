@@ -304,6 +304,89 @@ function RiskRewardBar({
   );
 }
 
+function StrategyMonitor({ watches }: { watches: CockpitWatch[] }) {
+  const rows = useMemo(() => {
+    const statusRank: Record<string, number> = {
+      TRADE: 0,
+      READY: 1,
+      WATCHING: 2,
+      WAIT: 3,
+      SCANNING: 4,
+      AVOID: 5,
+    };
+    return [...watches]
+      .sort(
+        (a, b) =>
+          (statusRank[a.monitor_status ?? ""] ?? 9) -
+            (statusRank[b.monitor_status ?? ""] ?? 9) ||
+          b.score - a.score,
+      )
+      .slice(0, 12);
+  }, [watches]);
+
+  if (rows.length === 0) {
+    return (
+      <section className="panel rise" aria-label="Strategy Monitor">
+        <h2 style={{ marginTop: 0 }}>Strategy Monitor</h2>
+        <p className="muted-note">
+          No live setups yet — Argus will list symbol → strategy → plan → why here
+          as the scanner runs.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel rise" aria-label="Strategy Monitor">
+      <h2 style={{ marginTop: 0 }}>Strategy Monitor</h2>
+      <p className="muted-note" style={{ marginTop: 0 }}>
+        Market → strategy → setup → entry plan → decision → why (all strategies,
+        paper only).
+      </p>
+      <ul className="strategy-monitor-list">
+        {rows.map((w) => {
+          const status = w.monitor_status || w.stage_raw || "SCANNING";
+          const label = w.strategy_label || w.strategy_key || "Strategy";
+          const entry = w.entry_zone_display || w.entry_zone || "—";
+          const rr =
+            w.risk_reward != null && w.risk_reward !== ""
+              ? String(w.risk_reward)
+              : "—";
+          const edge =
+            w.expected_net_edge_usd != null
+              ? `$${w.expected_net_edge_usd}`
+              : "—";
+          return (
+            <li key={w.id} className={`strategy-monitor-row status-${status.toLowerCase()}`}>
+              <div className="strategy-monitor-head">
+                <strong>{w.symbol}</strong>
+                <span className="strategy-monitor-strategy">{label}</span>
+                <span className={`strategy-monitor-badge`}>{status}</span>
+              </div>
+              <div className="strategy-monitor-meta">
+                {w.market_regime ? (
+                  <span>Regime {w.market_regime}</span>
+                ) : null}
+                <span>Entry {entry}</span>
+                <span>
+                  Stop {w.stop_loss ?? "—"} · Target {w.take_profit ?? "—"}
+                </span>
+                <span>
+                  R:R {rr} · Net edge {edge}
+                </span>
+                <span>Confidence {w.confidence}</span>
+              </div>
+              <p className="strategy-monitor-why">
+                {w.primary_reason || w.waiting_for || w.why || "Evaluating…"}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export function TradingCockpit({
   initial,
   portfolioId,
@@ -588,12 +671,14 @@ export function TradingCockpit({
       busy = true;
       try {
         const r = await refreshRecentPricesAction();
-        if (!cancelled && r.ok) {
+        if (!cancelled && r?.ok) {
           setKeepAliveNote(
             reason === "wake" ? "Caught up after pause" : "Prices updated",
           );
           setLastBeatAt(new Date().toISOString());
         }
+      } catch {
+        /* keepalive must never crash the desk overlay */
       } finally {
         busy = false;
         if (!cancelled) {
@@ -1034,7 +1119,11 @@ export function TradingCockpit({
             onClick={() =>
               startTransition(async () => {
                 const r = await refreshRecentPricesAction();
-                setMessage(r.ok ? "Prices updated from exchange" : r.message);
+                setMessage(
+                  r?.ok
+                    ? "Prices updated from exchange"
+                    : (r?.message ?? "Could not refresh prices."),
+                );
               })
             }
           >
@@ -1047,7 +1136,9 @@ export function TradingCockpit({
             onClick={() =>
               startTransition(async () => {
                 const r = await runMarketScanAction(true);
-                setMessage(r.ok ? "Markets re-scored" : r.message);
+                setMessage(
+                  r?.ok ? "Markets re-scored" : (r?.message ?? "Scan failed."),
+                );
               })
             }
           >
@@ -1120,7 +1211,7 @@ export function TradingCockpit({
               onClick={() =>
                 startTransition(async () => {
                   const r = await refreshRecentPricesAction();
-                  setMessage(r.message);
+                  setMessage(r?.message ?? "Could not refresh prices.");
                 })
               }
             >
@@ -1386,6 +1477,8 @@ export function TradingCockpit({
           )}
         </div>
       </section>
+
+      <StrategyMonitor watches={cockpit?.watches ?? []} />
 
       <section className="panel rise desk-activity" aria-label="Activity">
         <div className="live-activity-boards desk-activity-boards">

@@ -31,12 +31,14 @@ export type CockpitWatch = {
   id: string;
   symbol: string;
   stage_raw: string;
+  monitor_status?: string;
   outlook: string;
   confidence: string;
   score: number;
   why: string;
   waiting_for: string;
   narrative: string;
+  primary_reason?: string;
   watching_since: string;
   watched_seconds: number;
   expires_at: string;
@@ -45,9 +47,11 @@ export type CockpitWatch = {
   next_eval_in_seconds: number | null;
   current_price: string | null;
   entry_zone: string | null;
+  entry_zone_display?: string | null;
   stop_loss: string | null;
   take_profit: string | null;
-  risk_reward: number | null;
+  risk_reward: number | string | null;
+  expected_net_edge_usd?: string | null;
   paper_capital_planned: string;
   max_dollar_loss: string | null;
   potential_dollar_profit: string | null;
@@ -58,6 +62,9 @@ export type CockpitWatch = {
   resistance: number | null;
   timeframe: string;
   strategy_key: string;
+  strategy_label?: string;
+  micro_subtype?: string | null;
+  market_regime?: string | null;
   risk_status: string;
   reason_code: string | null;
   market_data_at: string | null;

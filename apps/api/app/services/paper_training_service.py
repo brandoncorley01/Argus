@@ -7,7 +7,7 @@ pause-new-entries, and kill switch.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -40,6 +40,10 @@ LEARNING_STARTING_CASH = Decimal("300")
 # ~33% of the $300 book — small enough to keep 2–3 concurrent slots,
 # large enough that a clean 2R win is dollars, not pennies.
 LEARNING_DEFAULT_NOTIONAL = Decimal("100")
+# Cap per-entry size so organic compound never becomes a single-bet gamble.
+LEARNING_MAX_NOTIONAL = Decimal("200")
+# Target ~1/3 of equity per entry (matches $100 on $300 start).
+LEARNING_NOTIONAL_EQUITY_FRACTION = Decimal("0.33")
 # Legacy practice size that produced ~$0.25 days; auto-upgraded when cash allows.
 LEGACY_TINY_NOTIONAL = Decimal("30")
 # Dig-out: keep trading with remaining cash (never invents capital).
@@ -53,6 +57,94 @@ MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
 MIN_EXPECTED_REWARD_USD = Decimal("3")
 # Do not take-profit a brand-new entry in the same automation pass.
 TAKE_PROFIT_MIN_HOLD_SECONDS = 120
+# Founder desk: bank half the position at +1R so cash frees for dips
+# while the runner can still seek the full take-profit.
+SCALE_OUT_R = Decimal("1")
+SCALE_OUT_HOLD_SECONDS = 180
+SCALE_OUT_FRACTION = Decimal("0.5")
+
+
+def organic_entry_notional(*, equity: Decimal, buying_power: Decimal) -> Decimal:
+    """Size for organic growth: ~1/3 equity, never all-in, never above max.
+
+    Steps size up as the book grows and down when cash is thin — paper only.
+    """
+    if equity <= 0 or buying_power <= 0:
+        return MIN_DIG_OUT_CASH
+    target = (equity * LEARNING_NOTIONAL_EQUITY_FRACTION).quantize(Decimal("0.01"))
+    target = max(MIN_DIG_OUT_CASH, min(target, LEARNING_MAX_NOTIONAL))
+    return min(target, buying_power).quantize(Decimal("0.01"))
+
+
+def organic_growth_pace(
+    *,
+    starting_cash: Decimal,
+    equity: Decimal,
+    closed_trades: int,
+    max_dd: Decimal | None,
+) -> dict[str, Any]:
+    """Honest growth lane — milestones, not get-rich promises."""
+    net = (equity - starting_cash).quantize(Decimal("0.01"))
+    pct = (
+        ((equity - starting_cash) / starting_cash * Decimal("100")).quantize(
+            Decimal("0.1")
+        )
+        if starting_cash > 0
+        else Decimal("0")
+    )
+    # Checkpoints assume steady paper practice, not calendar miracles.
+    if closed_trades < 5:
+        lane = "building_sample"
+        guide = (
+            "Organic growth needs a sample first — aim for 5+ closed paper trades "
+            "before judging the curve."
+        )
+    elif max_dd is not None and starting_cash > 0 and max_dd > starting_cash * Decimal(
+        "0.25"
+    ):
+        lane = "protect"
+        guide = (
+            "Drawdown is large vs starting cash — prioritize capital preservation "
+            "over faster growth."
+        )
+    elif pct >= Decimal("25") and closed_trades < 20:
+        lane = "too_fast_review"
+        guide = (
+            "Equity jumped quickly on a small sample — treat as luck until more "
+            "trades confirm expectancy. Do not size up aggressively."
+        )
+    elif net > 0:
+        lane = "organic"
+        guide = (
+            "Healthy lane: bank partial winners, redeploy into dips, let equity "
+            "compound slowly. Aim for steady expectancy, not day-to-day doubles."
+        )
+    elif net < 0:
+        lane = "recovery"
+        guide = (
+            "Below start — cut risk, keep exits honest, rebuild with high-quality "
+            "setups only."
+        )
+    else:
+        lane = "flat"
+        guide = "Flat vs start — focus on expectancy and clean exits before growing size."
+    return {
+        "starting_cash": starting_cash,
+        "equity": equity.quantize(Decimal("0.01")),
+        "net_vs_start": net,
+        "growth_pct": pct,
+        "lane": lane,
+        "guide": guide,
+        "checkpoints": {
+            "after_20_trades": "Seek positive expectancy after costs (not a $ target).",
+            "after_40_trades": "Equity above start with drawdown under ~15% of start.",
+            "never": "Do not chase +50% in a few days — that trains gambling.",
+        },
+        "disclaimer": (
+            "Paper only. These lanes guide learning pace; they do not promise profit "
+            "or unlock live trading."
+        ),
+    }
 
 
 def normalize_exit_levels(
@@ -455,6 +547,25 @@ class PaperTrainingService:
             max_dd=max_dd,
             profit_factor=profit_factor,
         )
+        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        starting = LEARNING_STARTING_CASH
+        equity_now = LEARNING_STARTING_CASH
+        if portfolio is not None:
+            try:
+                summary = self.paper.portfolio_summary(portfolio_id)
+                starting = Decimal(str(summary.get("starting_cash") or starting))
+                equity_now = Decimal(
+                    str(summary.get("total_account_value") or portfolio.cash_balance)
+                )
+            except Exception:  # noqa: BLE001
+                equity_now = Decimal(str(portfolio.cash_balance or starting))
+                starting = LEARNING_STARTING_CASH
+        growth = organic_growth_pace(
+            starting_cash=starting,
+            equity=equity_now,
+            closed_trades=len(pnls),
+            max_dd=max_dd if pnls else None,
+        )
         return {
             "paper_trades_completed": len(pnls),
             "win_rate": win_rate,
@@ -466,6 +577,7 @@ class PaperTrainingService:
             "trades_with_founder_feedback": int(feedback_count),
             "live_readiness": readiness["status"],
             "live_readiness_detail": readiness["detail"],
+            "organic_growth": growth,
             "disclaimer": (
                 "Paper results are simulated. Live readiness never unlocks live trading."
             ),
@@ -562,79 +674,154 @@ class PaperTrainingService:
         portfolio = self.db.get(PaperPortfolio, portfolio_id)
         if portfolio is None or portfolio.kill_switch_active or portfolio.pause_new_entries_active:
             return []
+        # Fixture/test books left on "automatic" flooded the worker (75+ Train
+        # positions) and exhausted the Founder desk. New entries are Founder-only.
+        if (portfolio.name or "") != FOUNDER_LEARNING_DESK_NAME:
+            return []
         # Do not grind a depleted learning desk — size down to remaining cash
         # instead of refusing all entries (empty books destroy expectancy learning).
         buying_power = portfolio.cash_balance - (portfolio.reserved_cash or Decimal("0"))
-        entry_notional = settings.default_notional
-        if buying_power < entry_notional:
-            if buying_power < MIN_DIG_OUT_CASH:
+        try:
+            summary = self.paper.portfolio_summary(portfolio_id)
+            equity = Decimal(
+                str(summary.get("total_account_value") or buying_power)
+            )
+        except Exception:  # noqa: BLE001
+            equity = buying_power
+        # Organic compound: ~1/3 of equity per entry, capped — grows with the book,
+        # never all-in (paper only).
+        entry_notional = organic_entry_notional(
+            equity=equity, buying_power=buying_power
+        )
+        if buying_power < MIN_DIG_OUT_CASH:
+            self._emit_decision_event(
+                symbol="*",
+                outcome="info",
+                title="Paper capital too low for new entries",
+                detail=(
+                    f"Cash available is ${buying_power:.2f}; automatic entries need "
+                    f"at least ${MIN_DIG_OUT_CASH:.2f}. "
+                    "Open positions can still exit. "
+                    "Use Reseed learning desk to restore $300 practice cash."
+                ),
+                reason_code="insufficient_paper_cash",
+            )
+            return []
+        if settings.default_notional != entry_notional:
+            prev = settings.default_notional
+            settings.default_notional = entry_notional
+            self.db.commit()
+            if entry_notional > prev:
                 self._emit_decision_event(
                     symbol="*",
                     outcome="info",
-                    title="Paper capital too low for new entries",
+                    title="Paper size stepped up with equity",
                     detail=(
-                        f"Cash available is ${buying_power:.2f}; automatic entries need "
-                        f"at least ${MIN_DIG_OUT_CASH:.2f}. "
-                        "Open positions can still exit. "
-                        "Use Reseed learning desk to restore $300 practice cash."
+                        f"Organic compound: entries now ${entry_notional:.2f} "
+                        f"(~1/3 of equity ${equity:.2f}, capped). Paper only."
                     ),
-                    reason_code="insufficient_paper_cash",
+                    reason_code="organic_size_up",
                 )
-                return []
-            entry_notional = max(
-                MIN_DIG_OUT_CASH,
-                min(entry_notional, buying_power),
-            ).quantize(Decimal("0.01"))
-            if settings.default_notional != entry_notional:
-                settings.default_notional = entry_notional
-                self.db.commit()
+            elif entry_notional < prev:
                 self._emit_decision_event(
                     symbol="*",
                     outcome="info",
                     title="Paper size reduced to remaining cash",
                     detail=(
-                        f"Buying power ${buying_power:.2f} < prior practice size. "
-                        f"Entries now use ${entry_notional:.2f} (paper only)."
+                        f"Buying power ${buying_power:.2f}; entries now "
+                        f"${entry_notional:.2f} (paper only)."
                     ),
                     reason_code="auto_size_down",
                 )
+        # Cap concurrent Founder risk so one bad streak cannot max the book.
+        open_count = self.db.scalar(
+            select(func.count())
+            .select_from(PaperPosition)
+            .where(
+                PaperPosition.portfolio_id == portfolio_id,
+                PaperPosition.quantity != 0,
+            )
+        ) or 0
+        if int(open_count) >= 3:
+            return []
         opened: list[dict[str, Any]] = []
-        cands = list(
+        # Wide freshness-first pool. Ordering by score alone let stale SMA@95
+        # crowd out live detectors (range/breakout/momentum/catalyst) forever.
+        now = datetime.now(UTC)
+        fresh_cutoff = now - timedelta(minutes=45)
+        pool = list(
             self.db.scalars(
                 select(MarketScanCandidate)
                 .where(
                     MarketScanCandidate.stage == "Watching",
                     MarketScanCandidate.risk_status == "clear",
+                    MarketScanCandidate.bias == "Bullish",
                 )
-                .order_by(desc(MarketScanCandidate.score))
-                .limit(40)
+                .order_by(desc(MarketScanCandidate.evaluated_at))
+                .limit(200)
             )
         )
-        # Prefer freshest Watching candidates with usable score.
-        cands = [
+        fresh = [
             c
-            for c in cands
-            if float(c.score or 0) >= 50.0
-        ] or cands
-        # Adaptive priority: non-SMA detectors / catalyst setups outrank SMA probes
-        # when scores are close — Argus must not be an SMA-only bot.
+            for c in pool
+            if c.evaluated_at is not None and c.evaluated_at >= fresh_cutoff
+        ]
+        cands = fresh if fresh else pool
+        cands = [c for c in cands if float(c.score or 0) >= 50.0] or cands
+
+        # Adaptive priority: detectors beat SMA; primary setups outrank Micro
+        # on the same symbol so Micro cannot block larger opportunities.
+        from app.services.paper_opportunity_detectors import MICRO_STRATEGY_KEYS
+
+        _PRIMARY_BOOST = {
+            "momentum_continuation",
+            "breakout",
+            "dip_pullback_reversal",
+            "range_mean_reversion",
+            "catalyst_retest",
+        }
+
         def _entry_priority(c: MarketScanCandidate) -> float:
             base = float(c.score or 0)
             sk = (c.strategy_key or "").lower()
-            if sk and sk != "sma_crossover":
-                base += 10.0
+            if sk == "sma_crossover" or not sk:
+                base = min(base, 68.0)
+            elif sk in MICRO_STRATEGY_KEYS:
+                # Micro earns a seat, not dominance — evidence can raise score later.
+                base += 6.0
+            else:
+                base += 12.0
             if sk == "catalyst_retest":
+                base += 6.0
+            if sk in _PRIMARY_BOOST - {"catalyst_retest"}:
                 base += 4.0
             return base
 
-        cands = sorted(cands, key=_entry_priority, reverse=True)[:24]
-        # When a symbol has both SMA and a detector Watching, drop the SMA probe.
+        def _better_for_symbol(
+            a: MarketScanCandidate, b: MarketScanCandidate
+        ) -> MarketScanCandidate:
+            """Prefer primary over Micro on conflicts unless Micro clearly leads."""
+            pa, pb = _entry_priority(a), _entry_priority(b)
+            ska = (a.strategy_key or "").lower()
+            skb = (b.strategy_key or "").lower()
+            a_micro = ska in MICRO_STRATEGY_KEYS
+            b_micro = skb in MICRO_STRATEGY_KEYS
+            if a_micro and not b_micro and pb + 8.0 >= pa:
+                return b
+            if b_micro and not a_micro and pa + 8.0 >= pb:
+                return a
+            return a if pa >= pb else b
+
+        cands = sorted(cands, key=_entry_priority, reverse=True)
+        # One best strategy per symbol (primary > Micro > SMA when close).
         best_by_symbol: dict[str, MarketScanCandidate] = {}
         for c in cands:
             prior = best_by_symbol.get(c.symbol)
-            if prior is None or _entry_priority(c) > _entry_priority(prior):
+            if prior is None:
                 best_by_symbol[c.symbol] = c
-        cands = sorted(best_by_symbol.values(), key=_entry_priority, reverse=True)
+            else:
+                best_by_symbol[c.symbol] = _better_for_symbol(c, prior)
+        cands = sorted(best_by_symbol.values(), key=_entry_priority, reverse=True)[:24]
         open_syms = {
             p.symbol
             for p in self.db.scalars(
@@ -843,6 +1030,8 @@ class PaperTrainingService:
                     }
                 )
                 open_syms.add(cand.symbol)
+                if len(open_syms) >= 3:
+                    break
                 buying_power = (buying_power - entry_notional).quantize(Decimal("0.01"))
                 if buying_power < entry_notional:
                     if buying_power < MIN_DIG_OUT_CASH:
@@ -981,6 +1170,7 @@ class PaperTrainingService:
                 "candidate_id": str(cand.id),
                 "stop_loss": str(stop),
                 "take_profit": str(target),
+                "initial_stop_loss": str(stop),
                 "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else str(price),
                 "institutional_memory": memory_consult,
                 "strategy_key": cand.strategy_key,
@@ -994,6 +1184,7 @@ class PaperTrainingService:
                 "discovered_market": bool((cand.detail or {}).get("discovered_market")),
                 "catalyst_news": (cand.detail or {}).get("catalyst_news"),
                 "catalyst_classified": (cand.detail or {}).get("catalyst_classified"),
+                "scaled_out": False,
             },
         )
         try:
@@ -1055,25 +1246,155 @@ class PaperTrainingService:
             # into noise exits and destroyed expectancy (paper only; live locked).
             planned_stop = stop
             ratcheted = False
+            risk_unit: Decimal | None = None
+            if avg is not None and avg > 0:
+                initial_stop = plan.get("initial_stop_loss")
+                if initial_stop is None and stop is not None and stop < avg:
+                    initial_stop = stop
+                if initial_stop is not None and initial_stop < avg:
+                    risk_unit = avg - initial_stop
+                else:
+                    risk_unit = avg * MIN_STOP_DISTANCE_PCT
             if (
                 avg is not None
                 and avg > 0
                 and stop is not None
                 and stop < avg
+                and risk_unit is not None
+                and risk_unit > 0
             ):
-                risk = avg - stop
-                if risk > 0:
-                    r_mult = (mark - avg) / risk
-                    if r_mult >= Decimal("2"):
-                        trail = avg + risk  # lock ~1R
-                        if trail > stop:
-                            stop = trail
-                            ratcheted = True
-                    elif r_mult >= Decimal("1.5"):
-                        trail = avg + (risk * Decimal("0.5"))
-                        if trail > stop:
-                            stop = trail
-                            ratcheted = True
+                r_mult = (mark - avg) / risk_unit
+                if r_mult >= Decimal("2"):
+                    trail = avg + risk_unit  # lock ~1R
+                    if trail > stop:
+                        stop = trail
+                        ratcheted = True
+                elif r_mult >= Decimal("1.5"):
+                    trail = avg + (risk_unit * Decimal("0.5"))
+                    if trail > stop:
+                        stop = trail
+                        ratcheted = True
+            # Founder desk: bank half at +1R so cash returns for dip redeploys.
+            # Full runners still seek the planned take-profit on the remainder.
+            if (
+                (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
+                and not bool(plan.get("scaled_out"))
+                and avg is not None
+                and avg > 0
+                and risk_unit is not None
+                and risk_unit > 0
+                and mark > avg
+                and ((mark - avg) / risk_unit) >= SCALE_OUT_R
+                and self._position_held_seconds(portfolio_id, pos.symbol)
+                >= float(SCALE_OUT_HOLD_SECONDS)
+            ):
+                half = (abs(pos.quantity) * SCALE_OUT_FRACTION).quantize(
+                    Decimal("0.00000001")
+                )
+                if half > 0 and half < abs(pos.quantity):
+                    entry_order_id = plan.get("entry_order_id")
+                    entry_key = str(entry_order_id) if entry_order_id else "none"
+                    try:
+                        order = self.paper.submit_order(
+                            portfolio_id=portfolio_id,
+                            actor=resolved,
+                            symbol=pos.symbol,
+                            side="sell",
+                            order_type="market",
+                            quantity=half,
+                            limit_price=mark,
+                            idempotency_key=(
+                                f"exit:{portfolio_id}:{pos.symbol}:"
+                                f"scale_out:{entry_key}"
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        try:
+                            self.db.rollback()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self.audit.append(
+                            action="paper.training.auto_exit_failed",
+                            resource_type="paper_position",
+                            resource_id=str(pos.id),
+                            actor_user_id=resolved.user.id,
+                            payload={
+                                "symbol": pos.symbol,
+                                "reason": "scale_out",
+                                "mark": str(mark),
+                                "error": str(exc)[:240],
+                            },
+                        )
+                        continue
+                    if entry_order_id is not None:
+                        entry_order = self.db.get(PaperOrder, entry_order_id)
+                        if entry_order is not None:
+                            self.paper._event(
+                                entry_order,
+                                "paper_exit_plan",
+                                entry_order.status,
+                                entry_order.status,
+                                {
+                                    "stop_loss": str(stop) if stop is not None else None,
+                                    "take_profit": (
+                                        str(target) if target is not None else None
+                                    ),
+                                    "initial_stop_loss": str(
+                                        plan.get("initial_stop_loss") or planned_stop
+                                    )
+                                    if (plan.get("initial_stop_loss") or planned_stop)
+                                    else None,
+                                    "entry_zone": str(avg),
+                                    "scaled_out": True,
+                                    "strategy_key": plan.get("strategy_key"),
+                                },
+                            )
+                    self.paper._event(
+                        order,
+                        "paper_exit_triggered",
+                        order.status,
+                        order.status,
+                        {
+                            "reason": "scale_out",
+                            "mark": str(mark),
+                            "quantity": str(half),
+                            "stop_loss": str(stop) if stop is not None else None,
+                            "take_profit": (
+                                str(target) if target is not None else None
+                            ),
+                        },
+                    )
+                    self.audit.append(
+                        action="paper.training.auto_exit",
+                        resource_type="paper_order",
+                        resource_id=str(order.id),
+                        actor_user_id=resolved.user.id,
+                        payload={
+                            "symbol": pos.symbol,
+                            "reason": "scale_out",
+                            "mark": str(mark),
+                            "quantity": str(half),
+                        },
+                    )
+                    self._emit_decision_event(
+                        symbol=pos.symbol,
+                        outcome="exited",
+                        title=f"Banked partial profit on {pos.symbol}",
+                        detail=(
+                            f"Sold half at {mark} after +{SCALE_OUT_R}R so cash "
+                            "can redeploy into dips; runner still open."
+                        ),
+                        reason_code="scale_out",
+                    )
+                    closed.append(
+                        {
+                            "symbol": pos.symbol,
+                            "order_id": str(order.id),
+                            "reason": "scale_out",
+                            "mark": str(mark),
+                        }
+                    )
+                    continue
             if (
                 ratcheted
                 and planned_stop is not None
@@ -1095,8 +1416,15 @@ class PaperTrainingService:
                                 "take_profit": (
                                     str(target) if target is not None else None
                                 ),
+                                "initial_stop_loss": str(
+                                    plan.get("initial_stop_loss") or planned_stop
+                                )
+                                if (plan.get("initial_stop_loss") or planned_stop)
+                                else None,
                                 "trailed": True,
+                                "scaled_out": bool(plan.get("scaled_out")),
                                 "entry_zone": str(avg),
+                                "strategy_key": plan.get("strategy_key"),
                             },
                         )
                         try:
@@ -1106,7 +1434,7 @@ class PaperTrainingService:
                                 self.db.rollback()
                             except Exception:  # noqa: BLE001
                                 pass
-                continue
+                # Fall through — take-profit / stop may still apply this pass.
             reason: str | None = None
             if stop is not None and mark <= stop:
                 reason = (
@@ -1231,7 +1559,15 @@ class PaperTrainingService:
             why = (
                 f"Stop-loss hit at {mark} (stop {stop})."
                 if reason == "stop_loss"
-                else f"Take-profit hit at {mark} (target {target})."
+                else (
+                    f"Trailing stop hit at {mark} (stop {stop})."
+                    if reason == "trailing_stop"
+                    else (
+                        f"Momentum faded at {mark}."
+                        if reason == "momentum_fade"
+                        else f"Take-profit hit at {mark} (target {target})."
+                    )
+                )
             )
             self._emit_decision_event(
                 symbol=pos.symbol,

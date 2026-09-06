@@ -740,7 +740,7 @@ class MarketScanService:
                                 stage="Rejected",
                                 score=sig.score,
                                 risk_status="clear",
-                                reason_code=sig.reason_code or "peak_exhaustion",
+                                reason_code=sig.reason_code or "detector_neutral",
                                 reason_text=sig.reason_text,
                                 price=price,
                                 market_data_at=bar_close_time,
@@ -749,7 +749,10 @@ class MarketScanService:
                                     **sig.detail,
                                     "trade_pattern": sig.pattern,
                                     "pattern": sig.pattern,
-                                    "protection_only": True,
+                                    "protection_only": (
+                                        sig.strategy_key
+                                        == "peak_exhaustion_protection"
+                                    ),
                                     "paper_only": True,
                                 },
                             )
@@ -1347,8 +1350,19 @@ class MarketScanService:
 
         watches = []
         for cand in candidates:
-            # Active focus stages first; Expired stays visible but must not freeze Live Desk.
-            if cand.stage not in {"Watching", "Risk Review", "Evaluating", "Expired"}:
+            # Active focus stages + Micro AVOID / Entered for Strategy Monitor.
+            detail = cand.detail or {}
+            is_monitor_avoid = cand.stage == "Rejected" and (
+                bool(detail.get("avoid"))
+                or cand.reason_code == "micro_cost_gate"
+            )
+            if cand.stage not in {
+                "Watching",
+                "Risk Review",
+                "Evaluating",
+                "Expired",
+                "Entered",
+            } and not is_monitor_avoid:
                 continue
             watches.append(self._founder_watch_plan(cand, default_notional=default_notional))
         # Stable order: active watches before expired so UI rotation prefers live work.
@@ -1532,16 +1546,78 @@ class MarketScanService:
         else:
             entry_dec = Decimal(str(entry))
 
+        sk = (cand.strategy_key or STRATEGY_KEY or "").lower()
+        micro_subtype = detail.get("micro_subtype") or (
+            sk if sk in {"range_micro", "trend_pullback_micro"} else None
+        )
+        strategy_label = {
+            "sma_crossover": "SMA Crossover",
+            "momentum_continuation": "Momentum Continuation",
+            "breakout": "Breakout",
+            "dip_pullback_reversal": "Dip Pullback",
+            "catalyst_retest": "Catalyst Retest",
+            "range_mean_reversion": "Range Mean Reversion",
+            "peak_exhaustion_protection": "Peak Exhaustion Guard",
+            "range_micro": "Range Micro",
+            "trend_pullback_micro": "Trend Pullback Micro",
+        }.get(sk, sk.replace("_", " ").title() if sk else "Unknown")
+        if micro_subtype == "range_micro":
+            strategy_label = "Range Micro"
+        elif micro_subtype == "trend_pullback_micro":
+            strategy_label = "Trend Pullback Micro"
+
+        # Founder Strategy Monitor status vocabulary.
+        if detail.get("avoid") or cand.reason_code == "micro_cost_gate":
+            monitor_status = "AVOID"
+        elif cand.stage == "Watching" and cand.risk_status == "clear":
+            monitor_status = "READY" if float(cand.score or 0) >= 70 else "WATCHING"
+        elif cand.stage == "Risk Review":
+            monitor_status = "WAIT"
+        elif cand.stage == "Entered":
+            monitor_status = "TRADE"
+        elif cand.stage in {"Rejected", "Expired"}:
+            monitor_status = "AVOID"
+        else:
+            monitor_status = "SCANNING"
+
+        rr = detail.get("risk_reward")
+        if rr is None and price and stop and target and price > stop:
+            try:
+                rr = str(
+                    ((target - price) / (price - stop)).quantize(Decimal("0.01"))
+                )
+            except Exception:  # noqa: BLE001
+                rr = None
+        net_edge = detail.get("expected_net_edge_usd")
+        if net_edge is None and pot_profit is not None:
+            # Rough after-cost edge for monitor (3bps each way on planned notional).
+            try:
+                cost = default_notional * Decimal("0.0006")
+                net_edge = str((pot_profit - cost).quantize(Decimal("0.01")))
+            except Exception:  # noqa: BLE001
+                net_edge = None
+
+        entry_zone_display = None
+        ez_lo = detail.get("entry_zone_low")
+        ez_hi = detail.get("entry_zone_high")
+        if ez_lo and ez_hi:
+            entry_zone_display = f"{ez_lo}–{ez_hi}"
+        elif entry_dec is not None:
+            entry_zone_display = str(entry_dec)
+
         return {
             "id": str(cand.id),
             "symbol": cand.symbol,
             "stage_raw": cand.stage,
+            "monitor_status": monitor_status,
             "outlook": BIAS_PLAIN.get(cand.bias, cand.bias),
             "confidence": confidence_from_score(float(cand.score)),
             "score": float(cand.score),
             "why": plain_rejection(cand.reason_code, cand.reason_text),
             "waiting_for": narrative["waiting_for"],
             "narrative": narrative["statement"],
+            "primary_reason": plain_rejection(cand.reason_code, cand.reason_text)
+            or narrative["waiting_for"],
             # ISO strings — JSON-safe for EOC / RSC props
             "watching_since": since_dt.isoformat(),
             "watched_seconds": watched_seconds,
@@ -1551,9 +1627,13 @@ class MarketScanService:
             "next_eval_in_seconds": next_eval_in,
             "current_price": _dec(price),
             "entry_zone": _dec(entry_dec),
+            "entry_zone_display": entry_zone_display,
             "stop_loss": _dec(stop),
             "take_profit": _dec(target),
-            "risk_reward": detail.get("risk_reward"),
+            "risk_reward": rr,
+            "expected_net_edge_usd": (
+                str(net_edge) if net_edge is not None else None
+            ),
             "paper_capital_planned": str(default_notional),
             "max_dollar_loss": _dec(max_loss),
             "potential_dollar_profit": _dec(pot_profit),
@@ -1572,6 +1652,9 @@ class MarketScanService:
             "resistance": detail.get("resistance"),
             "timeframe": cand.timeframe,
             "strategy_key": cand.strategy_key,
+            "strategy_label": strategy_label,
+            "micro_subtype": micro_subtype,
+            "market_regime": detail.get("market_regime_hint"),
             "risk_status": cand.risk_status,
             "reason_code": cand.reason_code,
             "market_data_at": (

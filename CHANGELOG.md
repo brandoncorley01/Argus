@@ -7,6 +7,12 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Micro Trading + Strategy Monitor:** paper `range_micro` / `trend_pullback_micro` detectors with cost gate; Micro yields to primary on same symbol; memory patterns `micro_range` / `micro_trend_pullback`; Command Strategy Monitor (market→strategy→plan→why); strategy_performance tracks net P&L / expectancy / costs (`live-monitor-v2.79`)
+- **Organic growth lane:** size ~1/3 of equity (capped $200); scorecard shows growth lane vs gambling pace; Home capital copy matches bank-winners / redeploy-dips posture (`live-monitor-v2.78`)
+- **Founder scale-out:** bank half the position at +1R (after 3m hold) so cash frees for dip redeploys; runner still seeks full take-profit; max 3 concurrent Founder positions; auto-enter Founder-only (`live-monitor-v2.77`)
+- **Founder-only auto-enter:** fixture Train/Ops books on automatic no longer flood entries or exhaust the Founder desk; max 3 concurrent Founder paper positions; reseed path unchanged (`live-monitor-v2.77`)
+- **Detector-first entries + redirect loop:** auto-enter uses freshness (not stale SMA@95); soft-cap SMA scores; boost range/breakout/momentum/catalyst; Home no longer mutates cookies during RSC render (`ERR_TOO_MANY_REDIRECTS`) (`live-monitor-v2.76`)
+- **Session stay-alive:** default TTL 7 days + sliding renewal on activity; Home cookie now has maxAge (was browser-session-only, causing overnight logouts) (`live-monitor-v2.75`)
 - **Profitability mission (paper):** stop clipping winners (no +1R BE; trail from +1.5R/+2R); prefer non-SMA detectors over SMA probes; align cost haircut to real paper fees; auto-size when cash < default notional; softer catalyst fade (10m + giveback) (`live-monitor-v2.74`)
 - **Set-and-forget stability:** stop treating API timeouts as Stopped; stagger scan/price crons (3m, max_jobs=2); no nested Coinbase inside scans; keepalive never toast-spams or exit-1 thrash (`live-monitor-v2.73`)
 - **API pool starvation (permanent):** QueuePool timeouts from idle-in-transaction + duplicate workers; smaller role-based pools, Postgres idle/lock timeouts, release DB before Coinbase HTTP, single API/worker guard on keepalive (`live-monitor-v2.72`)

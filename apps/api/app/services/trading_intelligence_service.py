@@ -563,22 +563,75 @@ class TradingIntelligenceService:
         out: list[dict[str, Any]] = []
         for key, items in by_key.items():
             pnls = [Decimal(str(i.realized_pnl)) for i in items]
-            wins = sum(1 for p in pnls if p > 0)
+            wins_list = [p for p in pnls if p > 0]
+            losses_list = [p for p in pnls if p < 0]
+            wins = len(wins_list)
+            costs: list[Decimal] = []
+            nets: list[Decimal] = []
+            drawdowns: list[Decimal] = []
+            for i in items:
+                detail = dict(i.detail or {})
+                try:
+                    cost = Decimal(str(detail.get("simulated_cost_haircut") or "0"))
+                except Exception:  # noqa: BLE001
+                    cost = Decimal("0")
+                costs.append(cost)
+                nets.append(Decimal(str(i.realized_pnl)) - cost)
+                if i.max_drawdown is not None:
+                    drawdowns.append(Decimal(str(i.max_drawdown)))
+            gross = sum(pnls, Decimal("0"))
+            total_cost = sum(costs, Decimal("0"))
+            net = sum(nets, Decimal("0"))
+            avg_win = (
+                sum(wins_list, Decimal("0")) / Decimal(len(wins_list))
+                if wins_list
+                else None
+            )
+            avg_loss = (
+                sum(losses_list, Decimal("0")) / Decimal(len(losses_list))
+                if losses_list
+                else None
+            )
+            gross_wins = sum(wins_list, Decimal("0"))
+            gross_losses = abs(sum(losses_list, Decimal("0")))
+            profit_factor = (
+                (gross_wins / gross_losses) if gross_losses > 0 else None
+            )
+            expectancy = net / Decimal(len(items)) if items else None
             out.append(
                 {
                     "strategy_key": key,
                     "trades": len(items),
                     "wins": wins,
-                    "total_pnl": str(sum(pnls, Decimal("0"))),
+                    "gross_pnl": str(gross),
+                    "costs": str(total_cost),
+                    "net_pnl": str(net),
+                    "total_pnl": str(gross),  # backward-compatible alias
+                    "avg_win": str(avg_win) if avg_win is not None else None,
+                    "avg_loss": str(avg_loss) if avg_loss is not None else None,
+                    "expectancy": str(expectancy) if expectancy is not None else None,
+                    "profit_factor": (
+                        str(profit_factor.quantize(Decimal("0.01")))
+                        if profit_factor is not None
+                        else None
+                    ),
+                    "max_drawdown": str(max(drawdowns)) if drawdowns else None,
                     "avg_confidence": str(
-                        (sum((i.confidence_score for i in items), Decimal("0")) / len(items))
+                        (
+                            sum((i.confidence_score for i in items), Decimal("0"))
+                            / len(items)
+                        )
                         if items
                         else Decimal("0")
                     ),
-                    "win_rate": str(Decimal(wins) / Decimal(len(items))) if items else None,
+                    "win_rate": (
+                        str(Decimal(wins) / Decimal(len(items))) if items else None
+                    ),
+                    "is_micro": key
+                    in {"range_micro", "trend_pullback_micro"},
                 }
             )
-        out.sort(key=lambda x: Decimal(x["total_pnl"]), reverse=True)
+        out.sort(key=lambda x: Decimal(x["net_pnl"]), reverse=True)
         return out
 
     def confidence_calibration(self) -> dict[str, Any]:
@@ -627,11 +680,18 @@ class TradingIntelligenceService:
             strongest = max(scored, key=lambda k: scored[k])
             weakest = min(scored, key=lambda k: scored[k])
         perf = self.strategy_performance()
+        micro_perf = [p for p in perf if p.get("is_micro")]
         return {
             "strongest_conditions": strongest,
             "weakest_conditions": weakest,
             "best_strategy": perf[0]["strategy_key"] if perf else None,
             "worst_strategy": perf[-1]["strategy_key"] if perf else None,
+            "strategy_performance": perf,
+            "micro_performance": micro_perf,
+            "micro_note": (
+                "Micro strategies earn priority only through positive forward "
+                "paper net expectancy after costs."
+            ),
             "rejected_that_became_winners": sum(
                 1 for m in misses if m.outcome == "would_have_won"
             ),

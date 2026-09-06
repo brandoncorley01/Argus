@@ -30,7 +30,8 @@ class Settings(BaseSettings):
 
     session_cookie_name: str = Field(default="argus_session")
     csrf_header_name: str = Field(default="X-CSRF-Token")
-    session_ttl_hours: int = Field(default=8, ge=1, le=168)
+    # Local Founder paper desk: long-lived + sliding renewal (see AuthService).
+    session_ttl_hours: int = Field(default=168, ge=1, le=720)
     session_cookie_secure: bool = Field(default=False)
     session_cookie_samesite: str = Field(default="lax")
     session_cookie_path: str = Field(default="/")

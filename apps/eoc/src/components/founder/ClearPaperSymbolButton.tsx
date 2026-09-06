@@ -42,7 +42,7 @@ export function ClearPaperSymbolButton({
             }
             const refreshed = await refreshRecentPricesAction();
             setMessage(
-              `${cleared.message} ${refreshed.message}`,
+              `${cleared.message} ${refreshed?.message ?? ""}`.trim(),
             );
           });
         }}

@@ -105,10 +105,10 @@ export async function refreshRecentPricesAction(): Promise<PaperActionResult> {
     revalidatePath("/paper-training");
     revalidatePath("/market");
     return {
-      ok: result.ok,
+      ok: Boolean(result?.ok),
       message:
-        result.next_step ||
-        `Saved ${result.records_accepted} recent price updates.`,
+        result?.next_step ||
+        `Saved ${result?.records_accepted ?? 0} recent price updates.`,
     };
   } catch (err) {
     const message =
