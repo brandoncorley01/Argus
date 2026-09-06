@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
@@ -1280,7 +1280,10 @@ class MarketScanService:
                 .order_by(MarketInstrument.symbol.asc())
             )
         )
-        candidates = self.list_candidates(limit=50)
+        candidates = self.list_candidates(limit=120)
+        strategy_activity = self._strategy_activity_snapshot(
+            portfolio_id=portfolio_id
+        )
         by_symbol = {c.symbol: c for c in candidates}
         open_count, open_position_symbols = self._founder_open_positions(portfolio_id)
         open_syms = set(open_position_symbols)
@@ -1455,6 +1458,7 @@ class MarketScanService:
             "next_step": status.get("next_step"),
             "wall": wall,
             "watches": watches,
+            "strategy_activity": strategy_activity,
             "monitor": monitor,
             "doing": doing,
             "decided": [
@@ -1472,6 +1476,158 @@ class MarketScanService:
             "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
             "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
             "market_discovery": self._discovery_status(),
+        }
+
+    def _strategy_activity_snapshot(
+        self, *, portfolio_id: uuid.UUID | None
+    ) -> dict[str, Any]:
+        """Genuine pipeline counts for Strategy Monitor — never fabricated."""
+        from app.models.paper_trading import PaperPosition
+        from app.services.paper_opportunity_detectors import DETECTORS, MICRO_STRATEGY_KEYS
+
+        now = _utcnow()
+        since = now - timedelta(hours=6)
+        rows = list(
+            self.db.execute(
+                select(
+                    MarketScanCandidate.strategy_key,
+                    MarketScanCandidate.stage,
+                    func.count().label("n"),
+                )
+                .where(MarketScanCandidate.evaluated_at >= since)
+                .group_by(
+                    MarketScanCandidate.strategy_key,
+                    MarketScanCandidate.stage,
+                )
+            )
+        )
+        by_strategy: dict[str, dict[str, int]] = {}
+        watching = ready = avoided = entered = 0
+        for sk, stage, n in rows:
+            key = (sk or "unknown").lower()
+            bucket = by_strategy.setdefault(
+                key,
+                {
+                    "evaluations": 0,
+                    "watching": 0,
+                    "ready": 0,
+                    "avoided": 0,
+                    "entered": 0,
+                },
+            )
+            count = int(n)
+            bucket["evaluations"] += count
+            if stage == "Watching":
+                bucket["watching"] += count
+                watching += count
+            elif stage == "Rejected":
+                bucket["avoided"] += count
+                avoided += count
+            elif stage == "Entered":
+                bucket["entered"] += count
+                entered += count
+            elif stage == "Risk Review":
+                bucket["ready"] += count
+                ready += count
+
+        ready_live = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(MarketScanCandidate)
+                .where(
+                    MarketScanCandidate.stage == "Watching",
+                    MarketScanCandidate.risk_status == "clear",
+                    MarketScanCandidate.bias == "Bullish",
+                    MarketScanCandidate.score >= 70,
+                    MarketScanCandidate.evaluated_at >= now - timedelta(minutes=45),
+                )
+            )
+            or 0
+        )
+        watching_live = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(MarketScanCandidate)
+                .where(
+                    MarketScanCandidate.stage == "Watching",
+                    MarketScanCandidate.evaluated_at >= now - timedelta(minutes=45),
+                )
+            )
+            or 0
+        )
+
+        open_pos = 0
+        closed_trades = 0
+        realized = Decimal("0")
+        equity = None
+        if portfolio_id is not None:
+            open_pos = int(
+                self.db.scalar(
+                    select(func.count())
+                    .select_from(PaperPosition)
+                    .where(
+                        PaperPosition.portfolio_id == portfolio_id,
+                        PaperPosition.quantity != 0,
+                    )
+                )
+                or 0
+            )
+            try:
+                from app.services.paper_trading_service import PaperTradingService
+
+                paper = PaperTradingService(self.db)
+                summary = paper.portfolio_summary(portfolio_id)
+                equity = str(summary.get("total_account_value"))
+                closed = paper.list_closed_trades(portfolio_id, limit=200)
+                closed_trades = len(closed)
+                realized = sum(
+                    (Decimal(str(t.get("realized_pnl") or 0)) for t in closed),
+                    Decimal("0"),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        last_cycle = self.db.scalars(
+            select(MarketScanCycle)
+            .where(MarketScanCycle.status == "succeeded")
+            .order_by(desc(MarketScanCycle.completed_at))
+            .limit(1)
+        ).first()
+        markets_scanned = int(last_cycle.symbols_scanned or 0) if last_cycle else 0
+
+        enabled_keys = [
+            "sma_crossover",
+            "momentum_continuation",
+            "breakout",
+            "dip_pullback_reversal",
+            "catalyst_retest",
+            "range_mean_reversion",
+            "peak_exhaustion_protection",
+            "range_micro",
+            "trend_pullback_micro",
+        ]
+
+        return {
+            "window": "6h",
+            "markets_scanned": markets_scanned,
+            "strategies_running": len(DETECTORS) + 1,
+            "strategies_enabled": enabled_keys,
+            "setups_found": watching + ready + entered,
+            "watching": watching_live,
+            "ready": ready_live,
+            "avoided": avoided,
+            "positions_open": open_pos,
+            "trades_closed": closed_trades,
+            "realized_net_pnl": str(realized.quantize(Decimal("0.01"))),
+            "paper_equity": equity,
+            "by_strategy": by_strategy,
+            "micro_keys": sorted(MICRO_STRATEGY_KEYS),
+            "last_scan_at": (
+                last_cycle.completed_at.isoformat()
+                if last_cycle and last_cycle.completed_at
+                else None
+            ),
+            "paper_only": True,
         }
 
     def _founder_watch_plan(

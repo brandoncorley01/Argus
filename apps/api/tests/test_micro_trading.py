@@ -98,28 +98,43 @@ def test_micro_keys_registered_in_detectors() -> None:
 
 
 def test_primary_preferred_over_micro_on_conflict() -> None:
-    """Same-symbol conflict: primary outranks Micro when scores are close."""
+    """Hard primary outranks Micro; Micro outranks soft range_mean / SMA."""
     from app.services.paper_opportunity_detectors import MICRO_STRATEGY_KEYS
+
+    hard = {
+        "momentum_continuation",
+        "breakout",
+        "dip_pullback_reversal",
+        "catalyst_retest",
+    }
+
+    def tier(sk: str) -> int:
+        if sk in hard:
+            return 3
+        if sk in MICRO_STRATEGY_KEYS:
+            return 2
+        if sk == "range_mean_reversion":
+            return 1
+        return 0
 
     def priority(sk: str, score: float) -> float:
         base = score
         if sk == "sma_crossover" or not sk:
             base = min(base, 68.0)
         elif sk in MICRO_STRATEGY_KEYS:
-            base += 6.0
+            base += 8.0
+        elif sk in hard:
+            base += 14.0
         else:
-            base += 12.0
-        if sk in {
-            "momentum_continuation",
-            "breakout",
-            "dip_pullback_reversal",
-            "range_mean_reversion",
-        }:
-            base += 4.0
+            base += 10.0
         return base
 
-    primary = priority("breakout", 66)
-    micro = priority("range_micro", 66)
-    assert primary > micro
-    # Micro needs a clear lead (+8) to beat primary in _better_for_symbol.
-    assert micro + 8 < primary + 10
+    assert tier("breakout") > tier("range_micro")
+    assert tier("range_micro") > tier("range_mean_reversion")
+    assert tier("range_micro") > tier("sma_crossover")
+    # Soft primary can have a higher raw priority but lower tier — Micro still wins
+    # unless soft primary leads by +12 (see _better_for_symbol).
+    micro_p = priority("range_micro", 66)
+    soft_p = priority("range_mean_reversion", 68)
+    assert micro_p + 12 >= soft_p
+    assert priority("breakout", 66) > priority("range_micro", 66)

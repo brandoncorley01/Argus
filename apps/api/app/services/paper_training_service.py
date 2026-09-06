@@ -743,6 +743,16 @@ class PaperTrainingService:
             )
         ) or 0
         if int(open_count) >= 3:
+            self._emit_decision_event(
+                symbol="*",
+                outcome="info",
+                title="Paper book full — waiting for exits",
+                detail=(
+                    f"{int(open_count)} open paper positions (max 3). "
+                    "New entries pause until a position closes; exits still run."
+                ),
+                reason_code="max_open_positions",
+            )
             return []
         opened: list[dict[str, Any]] = []
         # Wide freshness-first pool. Ordering by score alone let stale SMA@95
@@ -769,17 +779,26 @@ class PaperTrainingService:
         cands = fresh if fresh else pool
         cands = [c for c in cands if float(c.score or 0) >= 50.0] or cands
 
-        # Adaptive priority: detectors beat SMA; primary setups outrank Micro
-        # on the same symbol so Micro cannot block larger opportunities.
+        # Adaptive priority: hard primary (breakout/momentum/…) outranks Micro;
+        # Micro outranks soft primary (range_mean / SMA) so Micro can actually
+        # reach paper entry instead of being permanently crowded out.
         from app.services.paper_opportunity_detectors import MICRO_STRATEGY_KEYS
 
-        _PRIMARY_BOOST = {
+        _HARD_PRIMARY = {
             "momentum_continuation",
             "breakout",
             "dip_pullback_reversal",
-            "range_mean_reversion",
             "catalyst_retest",
         }
+
+        def _strategy_tier(sk: str) -> int:
+            if sk in _HARD_PRIMARY:
+                return 3
+            if sk in MICRO_STRATEGY_KEYS:
+                return 2
+            if sk == "range_mean_reversion":
+                return 1
+            return 0  # sma / unknown
 
         def _entry_priority(c: MarketScanCandidate) -> float:
             base = float(c.score or 0)
@@ -787,40 +806,46 @@ class PaperTrainingService:
             if sk == "sma_crossover" or not sk:
                 base = min(base, 68.0)
             elif sk in MICRO_STRATEGY_KEYS:
-                # Micro earns a seat, not dominance — evidence can raise score later.
-                base += 6.0
+                base += 8.0
+            elif sk in _HARD_PRIMARY:
+                base += 14.0
             else:
-                base += 12.0
+                base += 10.0
             if sk == "catalyst_retest":
-                base += 6.0
-            if sk in _PRIMARY_BOOST - {"catalyst_retest"}:
                 base += 4.0
             return base
 
         def _better_for_symbol(
             a: MarketScanCandidate, b: MarketScanCandidate
         ) -> MarketScanCandidate:
-            """Prefer primary over Micro on conflicts unless Micro clearly leads."""
+            """Higher-tier strategy wins unless the lower tier clearly dominates."""
             pa, pb = _entry_priority(a), _entry_priority(b)
             ska = (a.strategy_key or "").lower()
             skb = (b.strategy_key or "").lower()
-            a_micro = ska in MICRO_STRATEGY_KEYS
-            b_micro = skb in MICRO_STRATEGY_KEYS
-            if a_micro and not b_micro and pb + 8.0 >= pa:
-                return b
-            if b_micro and not a_micro and pa + 8.0 >= pb:
-                return a
+            ta, tb = _strategy_tier(ska), _strategy_tier(skb)
+            if ta != tb:
+                # Need +12 score-priority to overturn tier (keeps hard primary safe).
+                if ta > tb:
+                    return a if pa + 12.0 >= pb else b
+                return b if pb + 12.0 >= pa else a
             return a if pa >= pb else b
 
         cands = sorted(cands, key=_entry_priority, reverse=True)
-        # One best strategy per symbol (primary > Micro > SMA when close).
+        # One best strategy per symbol.
         best_by_symbol: dict[str, MarketScanCandidate] = {}
+        deferred_micro: list[tuple[str, str]] = []
         for c in cands:
             prior = best_by_symbol.get(c.symbol)
             if prior is None:
                 best_by_symbol[c.symbol] = c
-            else:
-                best_by_symbol[c.symbol] = _better_for_symbol(c, prior)
+                continue
+            winner = _better_for_symbol(c, prior)
+            loser = prior if winner is c else c
+            best_by_symbol[c.symbol] = winner
+            lose_sk = (loser.strategy_key or "").lower()
+            win_sk = (winner.strategy_key or "").lower()
+            if lose_sk in MICRO_STRATEGY_KEYS and win_sk not in MICRO_STRATEGY_KEYS:
+                deferred_micro.append((c.symbol, win_sk))
         cands = sorted(best_by_symbol.values(), key=_entry_priority, reverse=True)[:24]
         open_syms = {
             p.symbol
@@ -839,6 +864,18 @@ class PaperTrainingService:
         if resolved is None:
             return []
 
+        # Surface real deferral reasons (not silent drops).
+        for sym, winner_sk in deferred_micro[:8]:
+            self._emit_decision_event(
+                symbol=sym,
+                outcome="info",
+                title=f"Micro deferred on {sym}",
+                detail=(
+                    f"Micro setup present but {winner_sk} owns this symbol "
+                    "(hard primary / larger opportunity). Paper only."
+                ),
+                reason_code="micro_deferred_for_primary",
+            )
         from app.services.institutional_memory import InstitutionalMemoryService
         from app.services.trading_intelligence_service import TradingIntelligenceService
 

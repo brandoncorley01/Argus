@@ -13,6 +13,7 @@ import type {
   CockpitSnapshot,
   CockpitWallTile,
   CockpitWatch,
+  StrategyActivity,
 } from "@/lib/founder/cockpitTypes";
 import { money, moneyPnl } from "@/lib/founder/simple";
 import { formatAgeLabel, formatLiveClock, formatTimestamp } from "@/lib/format";
@@ -304,7 +305,13 @@ function RiskRewardBar({
   );
 }
 
-function StrategyMonitor({ watches }: { watches: CockpitWatch[] }) {
+function StrategyMonitor({
+  watches,
+  activity,
+}: {
+  watches: CockpitWatch[];
+  activity: StrategyActivity | null | undefined;
+}) {
   const rows = useMemo(() => {
     const statusRank: Record<string, number> = {
       TRADE: 0,
@@ -321,68 +328,90 @@ function StrategyMonitor({ watches }: { watches: CockpitWatch[] }) {
             (statusRank[b.monitor_status ?? ""] ?? 9) ||
           b.score - a.score,
       )
-      .slice(0, 12);
+      .slice(0, 14);
   }, [watches]);
 
-  if (rows.length === 0) {
-    return (
-      <section className="panel rise" aria-label="Strategy Monitor">
-        <h2 style={{ marginTop: 0 }}>Strategy Monitor</h2>
-        <p className="muted-note">
-          No live setups yet — Argus will list symbol → strategy → plan → why here
-          as the scanner runs.
-        </p>
-      </section>
-    );
-  }
+  const totals = activity ?? null;
 
   return (
     <section className="panel rise" aria-label="Strategy Monitor">
       <h2 style={{ marginTop: 0 }}>Strategy Monitor</h2>
       <p className="muted-note" style={{ marginTop: 0 }}>
-        Market → strategy → setup → entry plan → decision → why (all strategies,
-        paper only).
+        Live pipeline from scans — not labels. Market → strategy → plan → why
+        (paper only).
       </p>
-      <ul className="strategy-monitor-list">
-        {rows.map((w) => {
-          const status = w.monitor_status || w.stage_raw || "SCANNING";
-          const label = w.strategy_label || w.strategy_key || "Strategy";
-          const entry = w.entry_zone_display || w.entry_zone || "—";
-          const rr =
-            w.risk_reward != null && w.risk_reward !== ""
-              ? String(w.risk_reward)
-              : "—";
-          const edge =
-            w.expected_net_edge_usd != null
-              ? `$${w.expected_net_edge_usd}`
-              : "—";
-          return (
-            <li key={w.id} className={`strategy-monitor-row status-${status.toLowerCase()}`}>
-              <div className="strategy-monitor-head">
-                <strong>{w.symbol}</strong>
-                <span className="strategy-monitor-strategy">{label}</span>
-                <span className={`strategy-monitor-badge`}>{status}</span>
-              </div>
-              <div className="strategy-monitor-meta">
-                {w.market_regime ? (
-                  <span>Regime {w.market_regime}</span>
-                ) : null}
-                <span>Entry {entry}</span>
-                <span>
-                  Stop {w.stop_loss ?? "—"} · Target {w.take_profit ?? "—"}
-                </span>
-                <span>
-                  R:R {rr} · Net edge {edge}
-                </span>
-                <span>Confidence {w.confidence}</span>
-              </div>
-              <p className="strategy-monitor-why">
-                {w.primary_reason || w.waiting_for || w.why || "Evaluating…"}
-              </p>
-            </li>
-          );
-        })}
-      </ul>
+      {totals ? (
+        <div className="strategy-monitor-totals" aria-label="Strategy activity totals">
+          <span>Markets scanned {totals.markets_scanned}</span>
+          <span>Strategies running {totals.strategies_running}</span>
+          <span>Setups found {totals.setups_found}</span>
+          <span>Watching {totals.watching}</span>
+          <span>Ready {totals.ready}</span>
+          <span>Positions open {totals.positions_open}</span>
+          <span>Trades closed {totals.trades_closed}</span>
+          <span>Realized net {moneyPnl(totals.realized_net_pnl)}</span>
+          <span>Paper equity {money(totals.paper_equity)}</span>
+        </div>
+      ) : null}
+      {rows.length === 0 ? (
+        <p className="muted-note">
+          No live setups in the current watch window — waiting for the next scan.
+        </p>
+      ) : (
+        <ul className="strategy-monitor-list">
+          {rows.map((w) => {
+            const status = w.monitor_status || w.stage_raw || "SCANNING";
+            const label = w.strategy_label || w.strategy_key || "Strategy";
+            const entry = w.entry_zone_display || w.entry_zone || "—";
+            const rr =
+              w.risk_reward != null && w.risk_reward !== ""
+                ? String(w.risk_reward)
+                : "—";
+            const edge =
+              w.expected_net_edge_usd != null
+                ? `$${w.expected_net_edge_usd}`
+                : "—";
+            return (
+              <li
+                key={w.id}
+                className={`strategy-monitor-row status-${status.toLowerCase()}`}
+              >
+                <div className="strategy-monitor-head">
+                  <strong>{w.symbol}</strong>
+                  <span className="strategy-monitor-strategy">{label}</span>
+                  <span className="strategy-monitor-badge">{status}</span>
+                </div>
+                <div className="strategy-monitor-meta">
+                  {w.market_regime ? <span>Regime {w.market_regime}</span> : null}
+                  <span>Entry {entry}</span>
+                  <span>
+                    Stop {w.stop_loss ?? "—"} · Target {w.take_profit ?? "—"}
+                  </span>
+                  <span>
+                    R:R {rr} · Net edge {edge}
+                  </span>
+                  <span>Confidence {w.confidence}</span>
+                </div>
+                <p className="strategy-monitor-why">
+                  {w.primary_reason || w.waiting_for || w.why || "Evaluating…"}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {totals?.by_strategy ? (
+        <div className="strategy-monitor-by" aria-label="Per-strategy 6h counts">
+          {Object.entries(totals.by_strategy)
+            .sort((a, b) => (b[1].evaluations ?? 0) - (a[1].evaluations ?? 0))
+            .slice(0, 10)
+            .map(([key, s]) => (
+              <span key={key}>
+                {key}: W{s.watching ?? 0}/E{s.entered ?? 0}/A{s.avoided ?? 0}
+              </span>
+            ))}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1478,7 +1507,10 @@ export function TradingCockpit({
         </div>
       </section>
 
-      <StrategyMonitor watches={cockpit?.watches ?? []} />
+      <StrategyMonitor
+        watches={cockpit?.watches ?? []}
+        activity={cockpit?.strategy_activity}
+      />
 
       <section className="panel rise desk-activity" aria-label="Activity">
         <div className="live-activity-boards desk-activity-boards">

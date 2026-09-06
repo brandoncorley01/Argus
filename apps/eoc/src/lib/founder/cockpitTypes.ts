@@ -88,6 +88,34 @@ export type CockpitMonitorRow = {
   focus: boolean;
 };
 
+export type StrategyActivity = {
+  window?: string;
+  markets_scanned: number;
+  strategies_running: number;
+  strategies_enabled?: string[];
+  setups_found: number;
+  watching: number;
+  ready: number;
+  avoided?: number;
+  positions_open: number;
+  trades_closed: number;
+  realized_net_pnl: string;
+  paper_equity: string | null;
+  by_strategy?: Record<
+    string,
+    {
+      evaluations?: number;
+      watching?: number;
+      ready?: number;
+      avoided?: number;
+      entered?: number;
+    }
+  >;
+  micro_keys?: string[];
+  last_scan_at?: string | null;
+  paper_only?: boolean;
+};
+
 export type CockpitSnapshot = {
   generated_at: string;
   headline: string | null;
@@ -112,6 +140,7 @@ export type CockpitSnapshot = {
   next_step: string | null;
   wall: CockpitWallTile[];
   watches: CockpitWatch[];
+  strategy_activity?: StrategyActivity | null;
   monitor?: CockpitMonitorRow[];
   doing: Array<{ text: string; tone: string }>;
   decided: Array<{

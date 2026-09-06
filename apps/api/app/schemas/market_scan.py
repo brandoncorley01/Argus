@@ -159,9 +159,13 @@ class CockpitSnapshotRead(BaseModel):
     next_step: str | None = None
     wall: list[dict[str, Any]]
     watches: list[dict[str, Any]]
+    strategy_activity: dict[str, Any] | None = None
     monitor: list[dict[str, Any]] = []
     doing: list[dict[str, Any]]
     decided: list[dict[str, Any]]
+    rejection_summary: list[dict[str, Any]] = []
+    rejected_live: list[dict[str, Any]] = []
+    last_cycle_completed_at: datetime | None = None
     scan_interval_seconds: int
     watch_ttl_seconds: int
     market_discovery: dict[str, Any] | None = None

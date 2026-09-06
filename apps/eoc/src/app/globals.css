@@ -1961,6 +1961,22 @@ table.data th {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
+.strategy-monitor-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.strategy-monitor-by {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 .strategy-monitor-list {
   list-style: none;
   margin: 0.5rem 0 0;

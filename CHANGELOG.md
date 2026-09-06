@@ -7,6 +7,7 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Strategy execution proof:** Micro was generating Watching but never entered because `range_mean_reversion` always won same-symbol conflict; tier ranking now lets Micro beat soft primary while still yielding to breakout/momentum/catalyst/dip; Strategy Monitor totals from real pipeline counts; max-open and micro-defer reasons surfaced (`live-monitor-v2.80`)
 - **Micro Trading + Strategy Monitor:** paper `range_micro` / `trend_pullback_micro` detectors with cost gate; Micro yields to primary on same symbol; memory patterns `micro_range` / `micro_trend_pullback`; Command Strategy Monitor (market→strategy→plan→why); strategy_performance tracks net P&L / expectancy / costs (`live-monitor-v2.79`)
 - **Organic growth lane:** size ~1/3 of equity (capped $200); scorecard shows growth lane vs gambling pace; Home capital copy matches bank-winners / redeploy-dips posture (`live-monitor-v2.78`)
 - **Founder scale-out:** bank half the position at +1R (after 3m hold) so cash frees for dip redeploys; runner still seeks full take-profit; max 3 concurrent Founder positions; auto-enter Founder-only (`live-monitor-v2.77`)
