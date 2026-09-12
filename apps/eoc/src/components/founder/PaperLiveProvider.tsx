@@ -23,6 +23,7 @@ export type PaperLiveAccount = {
   openCount: number;
   startingCash?: string | null;
   netVsStart?: string | null;
+  totalPnl?: string | null;
   fillCount?: number | null;
   capitalExplanation?: string | null;
 };
@@ -31,6 +32,8 @@ export type PaperLivePulse = {
   fetchedAt: string | null;
   account: PaperLiveAccount;
   positions: PositionSummary[];
+  todayEquityPnl: number | null;
+  todayPnlBasis: string | null;
   totalRealizedPnl: number | null;
   openUnrealizedPnl: number | null;
   closedTradeCount: number;
@@ -54,18 +57,22 @@ type PulseResponse = {
     open_position_count: number;
     starting_cash?: string;
     net_vs_starting_cash?: string;
+    total_pnl?: string;
     fill_count?: number;
     capital_explanation?: string;
   };
   positions?: PositionSummary[];
   open_positions?: Array<{
     symbol: string;
+    strategy_key?: string | null;
     unrealized_pnl: string | null;
     mark_price: string | null;
     stop_loss: string | null;
     take_profit: string | null;
   }>;
   total_realized_pnl?: string;
+  today_equity_pnl?: string | null;
+  today_pnl_basis?: string | null;
   today_realized_pnl?: string;
   today_day_key?: string;
   today_closed_trade_count?: number;
@@ -84,6 +91,8 @@ function seedPulse(
     fetchedAt: null,
     account,
     positions,
+    todayEquityPnl: null,
+    todayPnlBasis: null,
     totalRealizedPnl: totalPnl,
     openUnrealizedPnl: null,
     closedTradeCount: 0,
@@ -128,6 +137,7 @@ export function PaperLiveProvider({
             pnl_percent: null,
             opened_at: null,
             strategy_version_id: null,
+            strategy_key: p.strategy_key ?? null,
             stop_loss: p.stop_loss,
             take_profit: p.take_profit,
             state: "open",
@@ -143,10 +153,14 @@ export function PaperLiveProvider({
         openCount: data.summary.open_position_count,
         startingCash: data.summary.starting_cash ?? null,
         netVsStart: data.summary.net_vs_starting_cash ?? null,
+        totalPnl: data.summary.total_pnl ?? null,
         fillCount: data.summary.fill_count ?? null,
         capitalExplanation: data.summary.capital_explanation ?? null,
       },
       positions,
+      todayEquityPnl:
+        data.today_equity_pnl != null ? Number(data.today_equity_pnl) : null,
+      todayPnlBasis: data.today_pnl_basis ?? null,
       totalRealizedPnl:
         data.today_realized_pnl != null
           ? Number(data.today_realized_pnl)

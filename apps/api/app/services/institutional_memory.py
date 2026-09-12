@@ -405,11 +405,11 @@ class InstitutionalMemoryService:
         if expectancy is not None and similar_count >= 3:
             if expectancy > Decimal("0.25"):
                 learned_adj += 4
-            elif expectancy < WEAK_EXPECTANCY:
-                learned_adj -= 8
+            elif expectancy <= WEAK_EXPECTANCY:
+                learned_adj -= 10
         if strategy_regime_expectancy is not None and len(sr_nets) >= 5:
-            if strategy_regime_expectancy < WEAK_EXPECTANCY:
-                learned_adj -= 6
+            if strategy_regime_expectancy <= WEAK_EXPECTANCY:
+                learned_adj -= 8
             elif strategy_regime_expectancy > Decimal("0.25"):
                 learned_adj += 3
 
@@ -423,7 +423,13 @@ class InstitutionalMemoryService:
         if (
             similar_count >= MIN_EVIDENCE_FOR_HARD_AVOID
             and expectancy is not None
-            and expectancy < WEAK_EXPECTANCY
+            and expectancy <= WEAK_EXPECTANCY
+        ):
+            action = "AVOID"
+        elif (
+            len(sr_nets) >= MIN_EVIDENCE_FOR_HARD_AVOID
+            and strategy_regime_expectancy is not None
+            and strategy_regime_expectancy <= WEAK_EXPECTANCY
         ):
             action = "AVOID"
         elif learned_score >= EXECUTE_SCORE:

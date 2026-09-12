@@ -12,6 +12,7 @@ import json
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import InstitutionalRole, User, UserRole
 from app.models.market_intelligence import MarketInstrument
+from app.models.paper_trading import PaperPortfolio, PaperPosition
 from app.schemas.market import IngestBatchRequest, OhlcvBarIngest
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthenticatedPrincipal
@@ -58,11 +60,35 @@ COINBASE_CANDLES_URL = (
 )
 
 # (timeframe label, granularity seconds, bars to request)
-# Short charts only — refreshed every minute for opportunity scanning.
 REFRESH_TIMEFRAMES: tuple[tuple[str, int, int], ...] = (
-    ("1m", 60, 80),
-    ("5m", 300, 50),
+    ("1m", 60, 40),
+    ("5m", 300, 24),
 )
+# Cron path: 1m only so Feed stays fresh under the 2-minute schedule.
+REFRESH_TIMEFRAMES_FAST: tuple[tuple[str, int, int], ...] = (("1m", 60, 40),)
+# Parallel Coinbase GETs — sequential refresh of 70+ symbols made Feed "outdated".
+# Cap concurrency so ingest + worker jobs do not stampede the DB pool.
+_FETCH_WORKERS = 8
+_MAX_REFRESH = 36
+_HTTP_TIMEOUT_SEC = 6
+
+
+def prioritized_refresh_symbols(
+    *,
+    active_symbols: list[str],
+    founder_open_symbols: list[str],
+    other_open_symbols: list[str],
+    limit: int = _MAX_REFRESH,
+) -> list[str]:
+    """Bound refresh work without ever evicting Founder open risk."""
+    active = [s.upper() for s in active_symbols]
+    ordered = [
+        *[s.upper() for s in founder_open_symbols],
+        *[s.upper() for s in other_open_symbols],
+        *[s for s in DEFAULT_SYMBOLS if s in active],
+        *active,
+    ]
+    return list(dict.fromkeys(ordered))[: max(0, limit)]
 
 
 class MarketPriceRefreshError(Exception):
@@ -145,46 +171,101 @@ class MarketPriceRefreshService:
                     .order_by(MarketInstrument.symbol.asc())
                 )
             )
-            target = [i.symbol.upper() for i in active] or list(DEFAULT_SYMBOLS)
+            other_open_symbols = list(
+                self.db.scalars(
+                    select(PaperPosition.symbol)
+                    .join(
+                        PaperPortfolio,
+                        PaperPortfolio.id == PaperPosition.portfolio_id,
+                    )
+                    .where(
+                        PaperPortfolio.status == "active",
+                        PaperPortfolio.name != "Founder Learning Desk",
+                        PaperPosition.quantity != 0,
+                    )
+                    .distinct()
+                    .order_by(PaperPosition.symbol.asc())
+                )
+            )
+            active_symbols = [i.symbol.upper() for i in active]
+            founder_open_symbols = list(
+                self.db.scalars(
+                    select(PaperPosition.symbol)
+                    .join(
+                        PaperPortfolio,
+                        PaperPortfolio.id == PaperPosition.portfolio_id,
+                    )
+                    .where(
+                        PaperPortfolio.status == "active",
+                        PaperPortfolio.name == "Founder Learning Desk",
+                        PaperPosition.quantity != 0,
+                    )
+                    .distinct()
+                    .order_by(PaperPosition.symbol.asc())
+                )
+            )
+            # Open risk always gets a fresh mark. Core markets follow, then a
+            # bounded rotating/discovery universe. Never evict an open symbol
+            # merely because it sorts after the refresh cap.
+            target = prioritized_refresh_symbols(
+                active_symbols=active_symbols,
+                founder_open_symbols=founder_open_symbols,
+                other_open_symbols=other_open_symbols,
+            ) or list(DEFAULT_SYMBOLS)
         else:
-            target = [s.upper() for s in symbols]
+            target = list(dict.fromkeys(s.upper() for s in symbols))
         # Cap refresh size so discovery cannot blow the 2-minute price cron.
-        # Raised with MAX_DISCOVERY_ACTIVE so promoted runners keep fresh bars.
-        _MAX_REFRESH = 72
-        if len(target) > _MAX_REFRESH:
-            core = [s for s in DEFAULT_SYMBOLS if s in target]
-            extra = [s for s in target if s not in core][: _MAX_REFRESH - len(core)]
-            target = list(core) + extra
+        if symbols is not None and len(target) > _MAX_REFRESH:
+            target = target[:_MAX_REFRESH]
         frames = timeframes or REFRESH_TIMEFRAMES
         now = datetime.now(UTC).replace(microsecond=0)
         accepted = 0
         failed: list[dict[str, str]] = []
         per_symbol: dict[str, int] = {}
 
-        bars: list[OhlcvBarIngest] = []
+        fetch_jobs: list[tuple[str, str, int, datetime, datetime]] = []
         for symbol in target:
-            # Drop test/manual junk bars so the next mark uses the public feed.
-            try:
-                from app.services.paper_trading_service import PaperTradingService
-
-                PaperTradingService(self.db).purge_untrusted_bars(symbol)
-                self.db.commit()
-            except Exception:  # noqa: BLE001 — refresh must continue even if purge fails
-                self.db.rollback()
-
-            symbol_count = 0
             for tf_label, granularity, bar_count in frames:
                 start = now - timedelta(seconds=granularity * bar_count)
-                try:
-                    raw = self._fetch_candles(
-                        symbol, start=start, end=now, granularity=granularity
-                    )
-                except MarketPriceRefreshError as exc:
+                fetch_jobs.append((symbol, tf_label, granularity, start, now))
+
+        bars: list[OhlcvBarIngest] = []
+        symbol_counts: dict[str, int] = {s: 0 for s in target}
+
+        def _one(
+            job: tuple[str, str, int, datetime, datetime],
+        ) -> tuple[str, str, list[list[float]] | None, str | None, str | None]:
+            symbol, tf_label, granularity, start, end = job
+            try:
+                raw = self._fetch_candles(
+                    symbol, start=start, end=end, granularity=granularity
+                )
+                return symbol, tf_label, raw, None, None
+            except MarketPriceRefreshError as exc:
+                return symbol, tf_label, None, exc.code, exc.message
+
+        # Release the DB checkout before Coinbase HTTP (10–40s). Holding an
+        # open transaction across network I/O caused idle-in-transaction pileups
+        # and QueuePool timeouts that looked like constant API failures.
+        try:
+            if self.db.in_transaction():
+                self.db.commit()
+        except Exception:  # noqa: BLE001
+            try:
+                self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+
+        with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+            futures = [pool.submit(_one, job) for job in fetch_jobs]
+            for fut in as_completed(futures):
+                symbol, tf_label, raw, err_code, err_msg = fut.result()
+                if err_code:
                     failed.append(
                         {
                             "symbol": f"{symbol}:{tf_label}",
-                            "code": exc.code,
-                            "message": exc.message,
+                            "code": err_code,
+                            "message": err_msg or "fetch failed",
                         }
                     )
                     continue
@@ -200,6 +281,10 @@ class MarketPriceRefreshService:
                         }
                     )
                     continue
+                granularity = next(
+                    (g for label, g, _ in frames if label == tf_label),
+                    60 if tf_label == "1m" else 300,
+                )
                 for row in raw:
                     # Coinbase: [time, low, high, open, close, volume]
                     ts, low, high, open_, close, volume = row
@@ -220,9 +305,11 @@ class MarketPriceRefreshService:
                             external_id=f"cb-{symbol}-{tf_label}-{int(ts)}",
                         )
                     )
-                    symbol_count += 1
-            if symbol_count:
-                per_symbol[symbol] = symbol_count
+                    symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+
+        for symbol, count in symbol_counts.items():
+            if count:
+                per_symbol[symbol] = count
             elif not any(f.get("symbol", "").startswith(f"{symbol}:") for f in failed):
                 failed.append(
                     {
@@ -346,7 +433,7 @@ class MarketPriceRefreshService:
             headers={"User-Agent": "ArgusPaperTraining/1.0", "Accept": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — public HTTPS
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SEC) as resp:  # noqa: S310 — public HTTPS
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:

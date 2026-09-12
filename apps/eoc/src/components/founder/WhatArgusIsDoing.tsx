@@ -101,7 +101,7 @@ export function WhatArgusIsDoing({
             setMessage(null);
             startTransition(async () => {
               const res = await refreshRecentPricesAction();
-              setMessage(res.message);
+              setMessage(res?.message ?? "Could not refresh prices.");
               router.refresh();
             });
           }}

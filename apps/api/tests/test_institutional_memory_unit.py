@@ -173,6 +173,44 @@ def test_consult_execute_when_strong_and_positive() -> None:
     assert Decimal(out["learned_opportunity_score"]) >= EXECUTE_SCORE
 
 
+def test_consult_executes_above_raised_paper_threshold() -> None:
+    svc = InstitutionalMemoryService(db=None)  # type: ignore[arg-type]
+
+    def no_prior_knowledge(_pid, *, limit=400):  # noqa: ARG001
+        return []
+
+    svc.list_knowledge = no_prior_knowledge  # type: ignore[method-assign]
+    out = svc.consult_before_entry(
+        portfolio_id=__import__("uuid").uuid4(),
+        symbol="ARB-USD",
+        strategy_key="range_micro",
+        market_regime="range",
+        base_score=58.5,
+        paper_confidence_delta=Decimal("0"),
+        confidence_label_score=Decimal("58.5"),
+    )
+    assert out["action"] == "EXECUTE"
+
+
+def test_consult_waits_below_execute_threshold() -> None:
+    svc = InstitutionalMemoryService(db=None)  # type: ignore[arg-type]
+
+    def no_prior_knowledge(_pid, *, limit=400):  # noqa: ARG001
+        return []
+
+    svc.list_knowledge = no_prior_knowledge  # type: ignore[method-assign]
+    out = svc.consult_before_entry(
+        portfolio_id=__import__("uuid").uuid4(),
+        symbol="ARB-USD",
+        strategy_key="range_micro",
+        market_regime="range",
+        base_score=51.1,
+        paper_confidence_delta=Decimal("0"),
+        confidence_label_score=Decimal("51.1"),
+    )
+    assert out["action"] == "WAIT"
+
+
 def test_momentum_and_breakout_detectors() -> None:
     # Rising series for momentum
     bars = [_bar(100 + i * 0.2, v=100 + i) for i in range(30)]

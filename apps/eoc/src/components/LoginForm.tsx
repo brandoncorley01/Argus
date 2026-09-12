@@ -2,6 +2,24 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 
+const AUTO_RECOVER_COOLDOWN_MS = 10 * 60_000;
+
+function canAutoRecover(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem("argus-auto-recover-at") || "0");
+    return Date.now() - last > AUTO_RECOVER_COOLDOWN_MS;
+  } catch {
+    return true;
+  }
+}
+
+function markAutoRecover(): void {
+  try {
+    sessionStorage.setItem("argus-auto-recover-at", String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+}
 type Reachability = {
   desired_running?: boolean;
   docker_engine?: boolean;
@@ -23,7 +41,7 @@ function formatDeps(r: Reachability | null): string {
     bit(r.docker_engine, "Docker"),
     bit(r.postgres, "Postgres"),
     bit(r.redis, "Redis"),
-    bit(r.api_ready, "API"),
+    bit(r.api_health ?? r.api_ready, "API"),
   ].join(" · ");
 }
 
@@ -48,15 +66,15 @@ export function LoginForm() {
       const body = (await res.json().catch(() => null)) as Reachability | null;
       if (body) {
         setStatusLine(formatDeps(body));
-        setApiReady(Boolean(body.api_ready));
+        setApiReady(Boolean(body.api_health ?? body.api_ready));
         setDesiredRunning(Boolean(body.desired_running));
         setMessage(
-          body.api_ready
+          body.api_health
             ? "Argus API is ready. Sign in when ready."
             : body.message ||
-                "Recovery finished but the API is still down. Open Docker Desktop and use Start Argus.",
+                "Recovery finished but the API is still down. Open Docker Desktop and use Boot Argus.",
         );
-        return Boolean(body.api_ready);
+        return Boolean(body.api_health);
       }
       return false;
     } catch {
@@ -81,13 +99,18 @@ export function LoginForm() {
         const body = (await res.json().catch(() => null)) as Reachability | null;
         if (cancelled || !body) return;
         setStatusLine(formatDeps(body));
-        setApiReady(Boolean(body.api_ready));
+        setApiReady(Boolean(body.api_health ?? body.api_ready));
         setDesiredRunning(Boolean(body.desired_running));
-        if (!body.api_ready) {
+        if (!body.api_health) {
           setMessage(body.message || "Argus API is unreachable.");
           // Only auto-recover when Founder already asked Argus to stay Running.
-          if (body.desired_running && !autoRecoverStarted.current) {
+          if (
+            body.desired_running &&
+            !autoRecoverStarted.current &&
+            canAutoRecover()
+          ) {
             autoRecoverStarted.current = true;
+            markAutoRecover();
             void runRecover();
           }
         } else {
@@ -199,6 +222,7 @@ export function LoginForm() {
           style={{ marginBottom: "1rem", width: "100%" }}
           disabled={recovering || pending}
           onClick={() => {
+            markAutoRecover();
             void runRecover();
           }}
         >

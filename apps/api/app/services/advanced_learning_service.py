@@ -93,6 +93,12 @@ def classify_trade_pattern(review: PostTradeReview, snapshot: TradeDecisionSnaps
     won = review.outcome == "win" and review.realized_pnl > 0
     lost = review.realized_pnl < 0
 
+    # Micro subtypes first — feed Institutional Memory distinctly.
+    if strategy in {"range_micro"} or "micro_range" in text_blob:
+        return "micro_range"
+    if strategy in {"trend_pullback_micro"} or "micro_trend" in text_blob:
+        return "micro_trend_pullback"
+
     if "dip" in text_blob or "reversal" in text_blob or (
         regime == "trend_down" and ("bounce" in text_blob or "mean" in text_blob)
     ):

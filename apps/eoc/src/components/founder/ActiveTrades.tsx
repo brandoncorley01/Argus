@@ -23,10 +23,28 @@ export type PositionSummary = {
   price_status?: string;
   opened_at: string | null;
   strategy_version_id: string | null;
+  strategy_key?: string | null;
   stop_loss: string | null;
   take_profit: string | null;
   state: string;
 };
+
+function strategyLabel(strategyKey: string | null | undefined): string {
+  const key = strategyKey?.trim().toLowerCase();
+  if (!key) return "Unknown — legacy position";
+  const labels: Record<string, string> = {
+    sma_crossover: "SMA Crossover",
+    momentum_continuation: "Momentum Continuation",
+    breakout: "Breakout",
+    dip_pullback_reversal: "Dip Pullback Reversal",
+    catalyst_retest: "Catalyst Retest",
+    range_mean_reversion: "Range Mean Reversion",
+    peak_exhaustion_protection: "Peak Exhaustion Guard",
+    range_micro: "Range Micro (Penny)",
+    trend_pullback_micro: "Trend Pullback Micro (Penny)",
+  };
+  return labels[key] ?? key.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 /** Matches API TAKE_PROFIT_MIN_HOLD_SECONDS — take-profit waits this long after entry. */
 const TAKE_PROFIT_MIN_HOLD_SEC = 120;
@@ -269,6 +287,12 @@ export function ActiveTrades({
               </p>
             ) : null}
             <dl className="considering-dl">
+              <div>
+                <dt>Strategy used</dt>
+                <dd title={p.strategy_key ?? undefined}>
+                  {strategyLabel(p.strategy_key)}
+                </dd>
+              </div>
               <div>
                 <dt>Entry price</dt>
                 <dd>{priceMoney(p.average_cost)}</dd>

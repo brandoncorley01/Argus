@@ -7,7 +7,7 @@ pause-new-entries, and kill switch.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -24,7 +24,11 @@ from app.models.paper_training import (
 )
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthenticatedPrincipal
-from app.services.paper_trading_service import PaperTradingError, PaperTradingService
+from app.services.paper_trading_service import (
+    PAPER_MARK_STALE_AFTER,
+    PaperTradingError,
+    PaperTradingService,
+)
 from app.services.plain_language import (
     BIAS_PLAIN,
     STAGE_PLAIN,
@@ -37,27 +41,247 @@ MIN_BARS = 25
 # Match anticipated live connected-account size for Founder learning.
 FOUNDER_LEARNING_DESK_NAME = "Founder Learning Desk"
 LEARNING_STARTING_CASH = Decimal("300")
-# ~50% of the $300 book — 1–2 concurrent slots with dollar-scale wins.
-LEARNING_DEFAULT_NOTIONAL = Decimal("150")
+# Sweet spot: meaningful per-trade size, but never drain cash available.
+# ~$100 on a $300 book (≈1/3) — reserve gate stops a fully locked desk.
+LEARNING_DEFAULT_NOTIONAL = Decimal("100")
+# Cap per-entry size so organic compound never becomes a single-bet gamble.
+LEARNING_MAX_NOTIONAL = Decimal("150")
+# Target ~1/3 of equity per entry (matches $100 on $300 start).
+LEARNING_NOTIONAL_EQUITY_FRACTION = Decimal("0.33")
+# Keep ≥40% of equity as free cash (floor $100) so the desk grows
+# *available* cash for redeploy / other uses — not just mark-to-market equity.
+LEARNING_CASH_RESERVE_FRACTION = Decimal("0.40")
+LEARNING_MIN_CASH_RESERVE = Decimal("100")
+# Hard ceiling on capital sitting in open positions vs equity.
+LEARNING_MAX_DEPLOYED_FRACTION = Decimal("0.55")
 # Legacy practice size that produced ~$0.25 days; auto-upgraded when cash allows.
 LEGACY_TINY_NOTIONAL = Decimal("30")
 # Dig-out: keep trading with remaining cash (never invents capital).
 MIN_DIG_OUT_CASH = Decimal("5")
 DIG_OUT_NOTIONAL_FRACTION = Decimal("0.25")  # up to 25% of remaining buying power
-# Reachable paper targets: 1.5R after a noise-tolerant stop (was 2R @ 1.5%).
-MIN_TAKE_PROFIT_R = Decimal("1.5")
-# Floor stop distance — wide enough to survive 1m noise, still risk-capped.
-MIN_STOP_DISTANCE_PCT = Decimal("0.02")  # 2.0%
-# Skip automatic entries whose planned dollar reward is still trivial.
+# Take-profit must clear at least this reward:risk multiple of stop distance.
+MIN_TAKE_PROFIT_R = Decimal("2")
+# Floor stop distance so 2R targets cannot collapse into micro-scalps.
+MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
+# At the standard $100 size, require $3 planned reward. Organic sizing can
+# safely step down while rebuilding cash, so scale the floor with notional
+# while never accepting less than $1 of planned upside.
 MIN_EXPECTED_REWARD_USD = Decimal("3")
-# Stops and targets use the same urgency — no 2-minute TP handicap.
-TAKE_PROFIT_MIN_HOLD_SECONDS = 0
-# Commercial-style families: when detectors fire, enter — do not bury them
-# under institutional memory WAIT/AVOID or thin-reward skips.
-SIMPLE_BOT_STRATEGIES = frozenset({"dca", "trend_momentum", "grid_trading"})
-# Interval DCA (Bitsgap-style): buy majors on a clock when Automatic is on.
-INTERVAL_DCA_SECONDS = 4 * 60 * 60
-INTERVAL_DCA_SYMBOLS = ("BTC-USD", "ETH-USD", "SOL-USD")
+MIN_SCALED_EXPECTED_REWARD_USD = Decimal("1")
+# Do not take-profit a brand-new entry in the same automation pass.
+TAKE_PROFIT_MIN_HOLD_SECONDS = 120
+# Founder desk: bank half the position at +1R so cash frees for dips
+# while the runner can still seek the full take-profit.
+SCALE_OUT_R = Decimal("1")
+SCALE_OUT_HOLD_SECONDS = 180
+SCALE_OUT_FRACTION = Decimal("0.5")
+# After partial bank, close the runner at +1.5R so the $300 desk recycles
+# instead of sitting full until a distant 2R target (paper only).
+RUNNER_BANK_R = Decimal("1.5")
+RUNNER_BANK_HOLD_SECONDS = 600
+# Stale green: held a long time with modest progress — free the slot.
+STALE_BANK_R = Decimal("0.75")
+STALE_BANK_HOLD_SECONDS = 14400  # 4 hours
+MICRO_MAX_HOLD_SECONDS = 14400  # 4 hours; recycle if the micro thesis did not resolve
+MICRO_MIN_TAKE_PROFIT_R = Decimal("1.5")
+MICRO_COST_BPS_RT = Decimal("6")
+MICRO_MIN_NET_REWARD_USD = Decimal("0.75")
+STRATEGY_EXPLORATION_SAMPLE = 5
+# Desk must beat idle cash before digging deeper on a red day.
+DESK_CASH_BENCHMARK_MIN_TRADES = 10
+ENTRY_CANDIDATE_MAX_AGE = PAPER_MARK_STALE_AFTER
+
+
+def candidate_market_data_is_fresh(
+    *,
+    evaluated_at: datetime | None,
+    market_data_at: datetime | None,
+    now: datetime,
+) -> bool:
+    cutoff = now - ENTRY_CANDIDATE_MAX_AGE
+    return bool(
+        evaluated_at is not None
+        and evaluated_at >= cutoff
+        and market_data_at is not None
+        and market_data_at >= cutoff
+    )
+
+
+def strategy_loses_to_cash(
+    *, trades: int, expectancy_after_costs: Decimal | None
+) -> bool:
+    """True when a sampled strategy's net expectancy fails to beat idle cash (0)."""
+    return (
+        trades >= STRATEGY_EXPLORATION_SAMPLE
+        and expectancy_after_costs is not None
+        and expectancy_after_costs <= 0
+    )
+
+
+def desk_should_sit_vs_cash(
+    *,
+    closed_trades: int,
+    total_pnl: Decimal | None,
+    today_equity_pnl: Decimal | None,
+) -> bool:
+    """Capital-preservation brake: do not add risk while losing to doing nothing.
+
+    Idle cash has ~0 expectancy. If the Founder desk is underwater after reseeds
+    and today's mark-to-market account change is also negative, new entries pause
+    until either the day turns or the book is no longer behind cash.
+    """
+    if closed_trades < DESK_CASH_BENCHMARK_MIN_TRADES:
+        return False
+    if total_pnl is None or total_pnl > 0:
+        return False
+    if today_equity_pnl is None:
+        return closed_trades >= 20 and total_pnl < 0
+    return today_equity_pnl < 0
+
+
+def strategy_portfolio_priority_adjustment(
+    *, trades: int, expectancy_after_costs: Decimal | None
+) -> float:
+    """Balance controlled strategy exploration with proven net expectancy.
+
+    Untested strategies receive a bounded exploration boost. Sampled strategies
+    that lose to cash are hard-blocked elsewhere; this penalty still demotes
+    them in ranking if they somehow reach the candidate pool.
+    """
+    if trades < STRATEGY_EXPLORATION_SAMPLE:
+        return float((STRATEGY_EXPLORATION_SAMPLE - max(0, trades)) * 3)
+    if expectancy_after_costs is None:
+        return 0.0
+    if expectancy_after_costs > 0:
+        return min(15.0, float(expectancy_after_costs * Decimal("3")))
+    # Losing to cash: heavy demotion (entry loop also hard-skips these).
+    loss_penalty = Decimal("25") + min(
+        Decimal("40"), abs(expectancy_after_costs) * Decimal("40")
+    )
+    evidence_penalty = min(Decimal("20"), Decimal(trades) / Decimal("5"))
+    return -float(loss_penalty + evidence_penalty)
+
+
+def cash_reserve_target(*, equity: Decimal) -> Decimal:
+    """Minimum free cash the Founder desk should keep uninvested."""
+    if equity <= 0:
+        return LEARNING_MIN_CASH_RESERVE
+    pct = (equity * LEARNING_CASH_RESERVE_FRACTION).quantize(Decimal("0.01"))
+    return max(LEARNING_MIN_CASH_RESERVE, pct)
+
+
+def organic_entry_notional(*, equity: Decimal, buying_power: Decimal) -> Decimal:
+    """Size for organic growth: ~1/3 equity, never breach cash reserve.
+
+    Steps size up as the book grows and down when cash is thin — paper only.
+    Returns 0 when a new entry would violate the liquidity sweet spot.
+    """
+    if equity <= 0 or buying_power <= 0:
+        return Decimal("0")
+    reserve = cash_reserve_target(equity=equity)
+    deployable = (buying_power - reserve).quantize(Decimal("0.01"))
+    if deployable < MIN_DIG_OUT_CASH:
+        return Decimal("0")
+    invested = max(Decimal("0"), equity - buying_power)
+    if equity > 0 and (invested / equity) >= LEARNING_MAX_DEPLOYED_FRACTION:
+        return Decimal("0")
+    target = (equity * LEARNING_NOTIONAL_EQUITY_FRACTION).quantize(Decimal("0.01"))
+    target = max(MIN_DIG_OUT_CASH, min(target, LEARNING_MAX_NOTIONAL))
+    return min(target, deployable).quantize(Decimal("0.01"))
+
+
+def organic_growth_pace(
+    *,
+    starting_cash: Decimal,
+    equity: Decimal,
+    closed_trades: int,
+    max_dd: Decimal | None,
+    cash_available: Decimal | None = None,
+) -> dict[str, Any]:
+    """Honest growth lane — milestones, not get-rich promises."""
+    net = (equity - starting_cash).quantize(Decimal("0.01"))
+    pct = (
+        ((equity - starting_cash) / starting_cash * Decimal("100")).quantize(
+            Decimal("0.1")
+        )
+        if starting_cash > 0
+        else Decimal("0")
+    )
+    reserve = cash_reserve_target(equity=equity)
+    cash = (
+        cash_available.quantize(Decimal("0.01"))
+        if cash_available is not None
+        else None
+    )
+    liquidity_ok = cash is None or cash >= reserve
+    # Checkpoints assume steady paper practice, not calendar miracles.
+    if cash is not None and cash < reserve and equity >= LEARNING_MIN_CASH_RESERVE:
+        lane = "rebuild_liquidity"
+        guide = (
+            f"Cash available ${cash} is below the ~{int(LEARNING_CASH_RESERVE_FRACTION * 100)}% "
+            f"liquidity target (${reserve}). Bank winners / free slots before "
+            "new size — grow free cash, not just equity marks."
+        )
+    elif closed_trades < 5:
+        lane = "building_sample"
+        guide = (
+            "Organic growth needs a sample first — aim for 5+ closed paper trades "
+            "before judging the curve."
+        )
+    elif max_dd is not None and starting_cash > 0 and max_dd > starting_cash * Decimal(
+        "0.25"
+    ):
+        lane = "protect"
+        guide = (
+            "Drawdown is large vs starting cash — prioritize capital preservation "
+            "over faster growth."
+        )
+    elif pct >= Decimal("25") and closed_trades < 20:
+        lane = "too_fast_review"
+        guide = (
+            "Equity jumped quickly on a small sample — treat as luck until more "
+            "trades confirm expectancy. Do not size up aggressively."
+        )
+    elif net > 0:
+        lane = "organic"
+        guide = (
+            "Healthy lane: keep ~40%+ as cash available, invest a measured slice, "
+            "bank partial winners, redeploy into dips. Grow free cash and equity "
+            "together — not day-to-day doubles."
+        )
+    elif net < 0:
+        lane = "recovery"
+        guide = (
+            "Below start — cut risk, keep exits honest, rebuild with high-quality "
+            "setups only."
+        )
+    else:
+        lane = "flat"
+        guide = "Flat vs start — focus on expectancy and clean exits before growing size."
+    return {
+        "starting_cash": starting_cash,
+        "equity": equity.quantize(Decimal("0.01")),
+        "cash_available": cash,
+        "cash_reserve_target": reserve,
+        "liquidity_ok": liquidity_ok,
+        "net_vs_start": net,
+        "growth_pct": pct,
+        "lane": lane,
+        "guide": guide,
+        "checkpoints": {
+            "after_20_trades": "Seek positive expectancy after costs (not a $ target).",
+            "after_40_trades": "Equity above start with drawdown under ~15% of start.",
+            "liquidity": (
+                f"Keep ≥{int(LEARNING_CASH_RESERVE_FRACTION * 100)}% equity "
+                f"(min ${LEARNING_MIN_CASH_RESERVE}) as cash available."
+            ),
+            "never": "Do not chase +50% in a few days — that trains gambling.",
+        },
+        "disclaimer": (
+            "Paper only. These lanes guide learning pace; they do not promise profit "
+            "or unlock live trading."
+        ),
+    }
 
 
 def normalize_exit_levels(
@@ -95,6 +319,28 @@ def expected_reward_usd(
     if price <= 0 or notional <= 0 or target <= price:
         return Decimal("0")
     return (notional * ((target - price) / price)).quantize(Decimal("0.01"))
+
+
+def expected_reward_floor_usd(
+    *, notional: Decimal, strategy_key: str | None = None
+) -> Decimal:
+    """Meaningful reward floor proportional to governed organic sizing."""
+    if notional <= 0:
+        return MIN_EXPECTED_REWARD_USD
+    if strategy_key in {"range_micro", "trend_pullback_micro"}:
+        scaled_micro = (
+            Decimal("1.50") * notional / LEARNING_DEFAULT_NOTIONAL
+        ).quantize(Decimal("0.01"))
+        return max(MICRO_MIN_NET_REWARD_USD, scaled_micro)
+    scaled = (
+        MIN_EXPECTED_REWARD_USD * notional / LEARNING_DEFAULT_NOTIONAL
+    ).quantize(Decimal("0.01"))
+    return min(
+        MIN_EXPECTED_REWARD_USD,
+        max(MIN_SCALED_EXPECTED_REWARD_USD, scaled),
+    )
+
+
 FEEDBACK_CODES = {
     "good_decision",
     "bad_decision",
@@ -134,8 +380,7 @@ class PaperTrainingService:
             return row
         row = PaperTrainingSettings(
             portfolio_id=portfolio_id,
-            # Default Automatic so paper bots actually trade without a UI toggle.
-            mode="automatic",
+            mode="coaching",
             default_notional=LEARNING_DEFAULT_NOTIONAL,
         )
         self.db.add(row)
@@ -454,17 +699,60 @@ class PaperTrainingService:
             if dd > max_dd:
                 max_dd = dd
 
+        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        starting = LEARNING_STARTING_CASH
+        equity_now = LEARNING_STARTING_CASH
+        cash_now: Decimal | None = None
+        account_total_pnl = total_pnl
+        if portfolio is not None:
+            try:
+                summary = self.paper.portfolio_summary(portfolio_id)
+                starting = Decimal(str(summary.get("starting_cash") or starting))
+                equity_now = Decimal(
+                    str(summary.get("total_account_value") or portfolio.cash_balance)
+                )
+                cash_now = Decimal(
+                    str(
+                        portfolio.cash_balance
+                        - (portfolio.reserved_cash or Decimal("0"))
+                    )
+                )
+                account_total_pnl = Decimal(
+                    str(summary.get("total_pnl") or Decimal("0"))
+                )
+            except Exception:  # noqa: BLE001
+                equity_now = Decimal(str(portfolio.cash_balance or starting))
+                cash_now = Decimal(str(portfolio.cash_balance or 0))
+                starting = LEARNING_STARTING_CASH
+        growth = organic_growth_pace(
+            starting_cash=starting,
+            equity=equity_now,
+            closed_trades=len(pnls),
+            max_dd=max_dd if pnls else None,
+            cash_available=cash_now,
+        )
+        from app.services.equity_growth_algorithm import plan_equity_growth
+
+        ega = plan_equity_growth(
+            starting_cash=starting,
+            equity=equity_now,
+            buying_power=cash_now if cash_now is not None else Decimal("0"),
+            closed_trades=len(pnls),
+            max_dd=max_dd if pnls else None,
+            total_pnl=account_total_pnl,
+        )
         readiness = self._live_readiness(
             closed_count=len(pnls),
             win_rate=win_rate,
             feedback_count=int(feedback_count),
             max_dd=max_dd,
             profit_factor=profit_factor,
+            total_pnl=account_total_pnl,
         )
         return {
             "paper_trades_completed": len(pnls),
             "win_rate": win_rate,
-            "total_paper_pnl": total_pnl,
+            "total_paper_pnl": account_total_pnl,
             "average_win": avg_win,
             "average_loss": avg_loss,
             "profit_factor": profit_factor,
@@ -472,6 +760,8 @@ class PaperTrainingService:
             "trades_with_founder_feedback": int(feedback_count),
             "live_readiness": readiness["status"],
             "live_readiness_detail": readiness["detail"],
+            "organic_growth": growth,
+            "equity_growth_algorithm": ega,
             "disclaimer": (
                 "Paper results are simulated. Live readiness never unlocks live trading."
             ),
@@ -485,6 +775,7 @@ class PaperTrainingService:
         feedback_count: int,
         max_dd: Decimal,
         profit_factor: Decimal | None,
+        total_pnl: Decimal | None = None,
     ) -> dict[str, str]:
         if closed_count < 5:
             return {
@@ -500,6 +791,10 @@ class PaperTrainingService:
                 ),
             }
         issues = []
+        if total_pnl is not None and total_pnl <= 0:
+            issues.append(
+                "account equity has not grown after costs and paper cash reseeds"
+            )
         if win_rate is not None and win_rate < Decimal("0.4"):
             issues.append("win rate below 40%")
         if profit_factor is not None and profit_factor < Decimal("1"):
@@ -520,6 +815,8 @@ class PaperTrainingService:
             and profit_factor >= Decimal("1.2")
             and win_rate is not None
             and win_rate >= Decimal("0.45")
+            and total_pnl is not None
+            and total_pnl > 0
         ):
             return {
                 "status": "Eligible for Formal Live Review",
@@ -559,50 +856,332 @@ class PaperTrainingService:
         return list(open_ids | auto_ids)
 
     def maybe_auto_enter_from_scan(
-        self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None
+        self,
+        *,
+        portfolio_id: uuid.UUID,
+        actor: AuthenticatedPrincipal | None,
+        allowed_strategy_keys: set[str] | None = None,
+        excluded_strategy_keys: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """If Automatic Practice is on, enter clear Watching candidates (paper only)."""
         settings = self.get_or_create_settings(portfolio_id)
         if settings.mode != "automatic":
             return []
-        portfolio = self.db.get(PaperPortfolio, portfolio_id)
+        # General and dedicated Micro workers may wake together. Serialize each
+        # portfolio's entry decision so cash/slot checks cannot race.
+        portfolio = self.db.scalar(
+            select(PaperPortfolio)
+            .where(PaperPortfolio.id == portfolio_id)
+            .with_for_update(skip_locked=True)
+        )
         if portfolio is None or portfolio.kill_switch_active or portfolio.pause_new_entries_active:
             return []
-        # Do not grind a depleted learning desk — leave cash intact and explain on Home.
+        # Fixture/test books left on "automatic" flooded the worker (75+ Train
+        # positions) and exhausted the Founder desk. New entries are Founder-only.
+        if (portfolio.name or "") != FOUNDER_LEARNING_DESK_NAME:
+            return []
+        # Do not grind a depleted learning desk — size down to remaining cash
+        # instead of refusing all entries (empty books destroy expectancy learning).
         buying_power = portfolio.cash_balance - (portfolio.reserved_cash or Decimal("0"))
-        if buying_power < settings.default_notional:
-            if buying_power < Decimal("1"):
+        total_pnl: Decimal | None = None
+        starting_cash = LEARNING_STARTING_CASH
+        try:
+            summary = self.paper.portfolio_summary(portfolio_id)
+            equity = Decimal(
+                str(summary.get("total_account_value") or buying_power)
+            )
+            raw_total = summary.get("total_pnl")
+            if raw_total is not None:
+                total_pnl = Decimal(str(raw_total))
+            starting_cash = Decimal(
+                str(summary.get("starting_cash") or starting_cash)
+            )
+        except Exception:  # noqa: BLE001
+            equity = buying_power
+
+        from app.services.equity_growth_algorithm import (
+            equity_growth_entry_notional,
+            plan_equity_growth,
+            strategy_eligible_for_growth,
+        )
+
+        closed_n = len(self.paper.list_closed_trades(portfolio_id, limit=200))
+        ega_plan = plan_equity_growth(
+            starting_cash=starting_cash,
+            equity=equity,
+            buying_power=buying_power,
+            closed_trades=closed_n,
+            max_dd=None,
+            total_pnl=total_pnl,
+        )
+        ega_lane = str(ega_plan.get("lane") or "flat")
+        # EGA owns deploy size when trading is allowed; reserve floors still win.
+        entry_notional = Decimal(str(ega_plan.get("base_entry_notional") or 0))
+        reserve = cash_reserve_target(equity=equity)
+        if entry_notional <= 0:
+            # Distinguish liquidity rebuild vs genuine reserve hold.
+            reason = (
+                "ega_lane_hold"
+                if ega_lane in {"rebuild_liquidity", "protect"}
+                and buying_power >= reserve
+                else "cash_reserve_hold"
+            )
+            self._emit_decision_event(
+                symbol="*",
+                outcome="info",
+                title=(
+                    "EGA holding cash — growth lane pause"
+                    if reason == "ega_lane_hold"
+                    else "Holding cash available — liquidity target"
+                ),
+                detail=(
+                    f"EGA lane={ega_lane}; cash available ${buying_power:.2f}; "
+                    f"reserve ${reserve:.2f}; equity ${equity:.2f}. "
+                    "New entries pause; exits still run. Paper only."
+                ),
+                reason_code=reason,
+            )
+            return []
+        if buying_power < MIN_DIG_OUT_CASH:
+            self._emit_decision_event(
+                symbol="*",
+                outcome="info",
+                title="Paper capital too low for new entries",
+                detail=(
+                    f"Cash available is ${buying_power:.2f}; automatic entries need "
+                    f"at least ${MIN_DIG_OUT_CASH:.2f}. "
+                    "Open positions can still exit. "
+                    "Use Reseed learning desk to restore $300 practice cash."
+                ),
+                reason_code="insufficient_paper_cash",
+            )
+            return []
+        if settings.default_notional != entry_notional:
+            prev = settings.default_notional
+            settings.default_notional = entry_notional
+            self.db.commit()
+            if entry_notional > prev:
                 self._emit_decision_event(
                     symbol="*",
                     outcome="info",
-                    title="Paper capital too low for new entries",
+                    title="EGA size stepped up with equity lane",
                     detail=(
-                        f"Cash available is ${buying_power:.2f}; automatic entries need "
-                        f"about ${settings.default_notional:.2f}. "
-                        "Open positions can still exit. "
-                        "Use Reseed learning desk to restore $300 practice cash."
+                        f"Equity Growth Algorithm: entries now ${entry_notional:.2f} "
+                        f"(lane={ega_lane}, equity ${equity:.2f}, reserve "
+                        f"${reserve:.2f}). Paper only."
                     ),
-                    reason_code="insufficient_paper_cash",
+                    reason_code="ega_size_up",
                 )
+            elif entry_notional < prev:
+                self._emit_decision_event(
+                    symbol="*",
+                    outcome="info",
+                    title="EGA size reduced for capital preservation",
+                    detail=(
+                        f"Lane={ega_lane}; buying power ${buying_power:.2f}; "
+                        f"reserve ${reserve:.2f}; entries now ${entry_notional:.2f} "
+                        "(paper only)."
+                    ),
+                    reason_code="ega_size_down",
+                )
+        # Cap concurrent Founder risk — EGA tightens while underwater/protecting.
+        max_open = int(ega_plan.get("max_open_positions") or 2)
+        open_count = self.db.scalar(
+            select(func.count())
+            .select_from(PaperPosition)
+            .where(
+                PaperPosition.portfolio_id == portfolio_id,
+                PaperPosition.quantity != 0,
+            )
+        ) or 0
+        if int(open_count) >= max_open:
+            self._emit_decision_event(
+                symbol="*",
+                outcome="info",
+                title="Paper book full — waiting for exits",
+                detail=(
+                    f"{int(open_count)} open paper positions (EGA max {max_open}, "
+                    f"lane={ega_lane}). "
+                    "New entries pause until a position closes; exits still run."
+                ),
+                reason_code="max_open_positions",
+            )
             return []
+
+        # Beat idle cash / HODL: if the desk is underwater after reseeds and
+        # today's account equity change is also red, sit in cash — do not dig.
+        today_equity_pnl: Decimal | None = None
+        try:
+            day_eq = self.paper.day_equity_pnl(portfolio_id)
+            raw_day = day_eq.get("today_equity_pnl")
+            if raw_day is not None:
+                today_equity_pnl = Decimal(str(raw_day))
+        except Exception:  # noqa: BLE001
+            today_equity_pnl = None
+        if desk_should_sit_vs_cash(
+            closed_trades=closed_n,
+            total_pnl=total_pnl,
+            today_equity_pnl=today_equity_pnl,
+        ):
+            day_txt = (
+                f"${today_equity_pnl:+.2f}"
+                if today_equity_pnl is not None
+                else "unavailable"
+            )
+            tot_txt = f"${total_pnl:+.2f}" if total_pnl is not None else "n/a"
+            self._emit_decision_event(
+                symbol="*",
+                outcome="info",
+                title="Sitting in cash — losing to idle hold",
+                detail=(
+                    f"Total P/L {tot_txt} after reseeds; today's equity P/L "
+                    f"{day_txt}. Idle cash would have done better — new entries "
+                    "paused until the day turns or the book beats cash. "
+                    "Open positions can still exit. Paper only."
+                ),
+                reason_code="sit_in_cash_vs_hodl",
+            )
+            return []
+
         opened: list[dict[str, Any]] = []
-        cands = list(
+        # Wide freshness-first pool. Ordering by score alone let stale SMA@95
+        # crowd out live detectors (range/breakout/momentum/catalyst) forever.
+        now = datetime.now(UTC)
+        pool = list(
             self.db.scalars(
                 select(MarketScanCandidate)
                 .where(
                     MarketScanCandidate.stage == "Watching",
                     MarketScanCandidate.risk_status == "clear",
+                    MarketScanCandidate.bias == "Bullish",
                 )
-                .order_by(desc(MarketScanCandidate.score))
-                .limit(24)
+                .order_by(desc(MarketScanCandidate.evaluated_at))
+                .limit(200)
             )
         )
-        # Prefer freshest Watching candidates with usable score.
-        cands = [
+        fresh = [
             c
-            for c in cands
-            if float(c.score or 0) >= 45.0
-        ] or cands
+            for c in pool
+            if candidate_market_data_is_fresh(
+                evaluated_at=c.evaluated_at,
+                market_data_at=c.market_data_at,
+                now=now,
+            )
+        ]
+        # Never fall back to stale candidates. A missed entry is safer than a
+        # paper order whose stop/target is based on old short-timeframe data.
+        cands = fresh
+        allowed = (
+            {key.lower() for key in allowed_strategy_keys}
+            if allowed_strategy_keys is not None
+            else None
+        )
+        excluded = {key.lower() for key in (excluded_strategy_keys or set())}
+        if allowed is not None:
+            cands = [
+                c for c in cands if (c.strategy_key or "").lower() in allowed
+            ]
+        if excluded:
+            cands = [
+                c for c in cands if (c.strategy_key or "").lower() not in excluded
+            ]
+        if not cands:
+            return []
+        cands = [c for c in cands if float(c.score or 0) >= 50.0] or cands
+
+        # Adaptive priority: hard primary (breakout/momentum/…) outranks Micro;
+        # Micro outranks soft primary (range_mean / SMA) so Micro can actually
+        # reach paper entry instead of being permanently crowded out.
+        from app.services.paper_opportunity_detectors import MICRO_STRATEGY_KEYS
+        from app.services.trading_intelligence_service import TradingIntelligenceService
+
+        _HARD_PRIMARY = {
+            "momentum_continuation",
+            "breakout",
+            "dip_pullback_reversal",
+            "catalyst_retest",
+        }
+        intelligence = TradingIntelligenceService(self.db)
+        performance_rows = intelligence.strategy_performance(
+            portfolio_id=portfolio_id
+        )
+        performance_by_strategy = {
+            str(row.get("strategy_key") or ""): row for row in performance_rows
+        }
+
+        def _portfolio_adjustment(sk: str) -> float:
+            evidence = performance_by_strategy.get(sk)
+            if evidence is None:
+                return strategy_portfolio_priority_adjustment(
+                    trades=0, expectancy_after_costs=None
+                )
+            raw_expectancy = evidence.get("expectancy")
+            expectancy = (
+                Decimal(str(raw_expectancy))
+                if raw_expectancy is not None
+                else None
+            )
+            return strategy_portfolio_priority_adjustment(
+                trades=int(evidence.get("trades") or 0),
+                expectancy_after_costs=expectancy,
+            )
+
+        def _strategy_tier(sk: str) -> int:
+            if sk in _HARD_PRIMARY:
+                return 3
+            if sk in MICRO_STRATEGY_KEYS:
+                return 2
+            if sk == "range_mean_reversion":
+                return 1
+            return 0  # sma / unknown
+
+        def _entry_priority(c: MarketScanCandidate) -> float:
+            base = float(c.score or 0)
+            sk = (c.strategy_key or "").lower()
+            if sk == "sma_crossover" or not sk:
+                base = min(base, 68.0)
+            elif sk in MICRO_STRATEGY_KEYS:
+                base += 8.0
+            elif sk in _HARD_PRIMARY:
+                base += 14.0
+            else:
+                base += 10.0
+            if sk == "catalyst_retest":
+                base += 4.0
+            return base + _portfolio_adjustment(sk)
+
+        def _better_for_symbol(
+            a: MarketScanCandidate, b: MarketScanCandidate
+        ) -> MarketScanCandidate:
+            """Higher-tier strategy wins unless the lower tier clearly dominates."""
+            pa, pb = _entry_priority(a), _entry_priority(b)
+            ska = (a.strategy_key or "").lower()
+            skb = (b.strategy_key or "").lower()
+            ta, tb = _strategy_tier(ska), _strategy_tier(skb)
+            if ta != tb:
+                # Need +12 score-priority to overturn tier (keeps hard primary safe).
+                if ta > tb:
+                    return a if pa + 12.0 >= pb else b
+                return b if pb + 12.0 >= pa else a
+            return a if pa >= pb else b
+
+        cands = sorted(cands, key=_entry_priority, reverse=True)
+        # One best strategy per symbol.
+        best_by_symbol: dict[str, MarketScanCandidate] = {}
+        deferred_micro: list[tuple[str, str]] = []
+        for c in cands:
+            prior = best_by_symbol.get(c.symbol)
+            if prior is None:
+                best_by_symbol[c.symbol] = c
+                continue
+            winner = _better_for_symbol(c, prior)
+            loser = prior if winner is c else c
+            best_by_symbol[c.symbol] = winner
+            lose_sk = (loser.strategy_key or "").lower()
+            win_sk = (winner.strategy_key or "").lower()
+            if lose_sk in MICRO_STRATEGY_KEYS and win_sk not in MICRO_STRATEGY_KEYS:
+                deferred_micro.append((c.symbol, win_sk))
+        cands = sorted(best_by_symbol.values(), key=_entry_priority, reverse=True)[:24]
         open_syms = {
             p.symbol
             for p in self.db.scalars(
@@ -612,7 +1191,7 @@ class PaperTrainingService:
                 )
             )
         }
-        # Short cool-off after exit — avoid same-minute flip, keep re-entry alive.
+        # Cool-off after exit so the same symbol is not flipped every minute.
         recently_exited = self._symbols_exited_since(
             portfolio_id, within_seconds=120
         )
@@ -620,10 +1199,20 @@ class PaperTrainingService:
         if resolved is None:
             return []
 
+        # Surface real deferral reasons (not silent drops).
+        for sym, winner_sk in deferred_micro[:8]:
+            self._emit_decision_event(
+                symbol=sym,
+                outcome="info",
+                title=f"Micro deferred on {sym}",
+                detail=(
+                    f"Micro setup present but {winner_sk} owns this symbol "
+                    "(hard primary / larger opportunity). Paper only."
+                ),
+                reason_code="micro_deferred_for_primary",
+            )
         from app.services.institutional_memory import InstitutionalMemoryService
-        from app.services.trading_intelligence_service import TradingIntelligenceService
 
-        intelligence = TradingIntelligenceService(self.db)
         memory = InstitutionalMemoryService(self.db)
 
         for cand in cands:
@@ -635,6 +1224,76 @@ class PaperTrainingService:
                 # Long-only: never convert bearish/neutral probes into buys.
                 continue
             cand_detail = dict(cand.detail or {})
+            strategy_key = (cand.strategy_key or "sma_crossover").lower()
+            strategy_evidence = performance_by_strategy.get(strategy_key)
+            strategy_trades = int((strategy_evidence or {}).get("trades") or 0)
+            raw_expectancy = (strategy_evidence or {}).get("expectancy")
+            strategy_expectancy = (
+                Decimal(str(raw_expectancy))
+                if raw_expectancy is not None
+                else None
+            )
+            cand_detail["strategy_portfolio"] = {
+                "trades": strategy_trades,
+                "expectancy_after_costs": raw_expectancy,
+                "priority_adjustment": _portfolio_adjustment(strategy_key),
+                "exploration_sample_target": STRATEGY_EXPLORATION_SAMPLE,
+                "founder_portfolio_only": True,
+            }
+            cand.detail = cand_detail
+            if strategy_loses_to_cash(
+                trades=strategy_trades,
+                expectancy_after_costs=strategy_expectancy,
+            ):
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"Strategy loses to cash — skip {cand.symbol}",
+                    detail=(
+                        f"{strategy_key} has {strategy_trades} closed trades with "
+                        f"expectancy {strategy_expectancy} after costs "
+                        "(≤ idle cash). Sitting out until evidence turns."
+                    ),
+                    reason_code="strategy_loses_to_cash",
+                )
+                continue
+            if not strategy_eligible_for_growth(
+                trades=strategy_trades,
+                expectancy_after_costs=strategy_expectancy,
+                lane=ega_lane,
+                total_pnl=total_pnl,
+            ):
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"EGA filters {strategy_key} on {cand.symbol}",
+                    detail=(
+                        f"Lane={ega_lane}: only positive-expectancy or "
+                        f"under-sampled strategies may deploy while recovering. "
+                        f"trades={strategy_trades}, expectancy={strategy_expectancy}."
+                    ),
+                    reason_code="ega_strategy_filter",
+                )
+                continue
+            cand_notional = equity_growth_entry_notional(
+                equity=equity,
+                buying_power=buying_power,
+                lane=ega_lane,
+                trades=strategy_trades,
+                expectancy_after_costs=strategy_expectancy,
+            )
+            if cand_notional <= 0:
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"EGA size zero for {cand.symbol}",
+                    detail=(
+                        f"Lane={ega_lane} × expectancy sizing yielded no deployable "
+                        f"notional for {strategy_key}."
+                    ),
+                    reason_code="ega_size_zero",
+                )
+                continue
             # Do not chase extreme peak tips (PAPER discipline). Extended
             # late-stage runners stay eligible — memory + reward gates still apply.
             disc_class = str(
@@ -654,123 +1313,158 @@ class PaperTrainingService:
                     reason_code="discovery_chase_avoid",
                 )
                 continue
-            strategy_key = (cand.strategy_key or "sma_crossover").strip().lower()
-            bot_fast_lane = strategy_key in SIMPLE_BOT_STRATEGIES
-            # --- Institutional memory consult BEFORE paper entry (PAPER only) ---
-            # Simple bot families skip WAIT/AVOID burial — commercial bots
-            # do not ask a memory court for permission to DCA/trend/grid.
-            consult: dict[str, Any]
-            action: str
-            if bot_fast_lane:
-                consult = {
-                    "action": "EXECUTE",
-                    "learned_opportunity_score": float(cand.score or 0),
-                    "similar_setup_count": 0,
-                    "evidence_strength": "bot_fast_lane",
-                    "prior_review_ids": [],
-                    "fast_lane": strategy_key,
-                    "paper_only": True,
-                }
-                action = "EXECUTE"
-            else:
-                regime = intelligence.infer_market_regime(cand.symbol)
-                delta = intelligence._paper_adaptive_delta(
-                    portfolio_id=portfolio_id,
-                    strategy_key=strategy_key,
-                )
-                rr = None
-                if cand.entry_zone and cand.stop_loss and cand.take_profit:
-                    risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
-                    reward = abs(float(cand.take_profit) - float(cand.entry_zone))
-                    if risk > 0:
-                        rr = reward / risk
-                conf, _label, factors = intelligence.score_confidence(
-                    score=float(cand.score or 0),
-                    bias=cand.bias or "Neutral",
-                    risk_status=cand.risk_status or "blocked",
-                    regime=regime,
-                    stale=False,
-                    risk_reward=rr,
-                    paper_confidence_delta=delta,
-                    strategy_key=strategy_key,
-                )
-                vol_cond = "normal"
-                if factors.get("volume_ok") is True or cand_detail.get(
-                    "relative_volume_high"
-                ):
-                    vol_cond = "elevated"
-                elif factors.get("volume_ok") is False:
-                    vol_cond = "thin"
-                consult = memory.consult_before_entry(
-                    portfolio_id=portfolio_id,
-                    symbol=cand.symbol,
-                    strategy_key=strategy_key,
-                    market_regime=regime,
-                    base_score=float(cand.score or 0),
-                    paper_confidence_delta=delta,
-                    confidence_label_score=conf,
-                    volume_condition=vol_cond,
-                    trade_pattern=str(
-                        cand_detail.get("trade_pattern")
-                        or cand_detail.get("discovery_opportunity_class")
-                        or cand_detail.get("pattern")
-                        or ""
-                    )
-                    or None,
-                )
-                action = str(consult.get("action") or "WAIT")
-                if action != "EXECUTE":
-                    self.audit.append(
-                        action="paper.training.memory_gate",
-                        resource_type="market_scan_candidate",
-                        resource_id=str(cand.id),
-                        actor_user_id=resolved.user.id,
-                        payload={
-                            "symbol": cand.symbol,
-                            "gate_action": action,
-                            "learned_opportunity_score": consult.get(
-                                "learned_opportunity_score"
-                            ),
-                            "similar_setup_count": consult.get("similar_setup_count"),
-                            "evidence_strength": consult.get("evidence_strength"),
-                            "prior_review_ids": consult.get("prior_review_ids"),
-                            "paper_only": True,
-                        },
-                    )
+
+            # Catalyst-retest playbook: BTC must be supportive; optional positive
+            # headline tag (never invents news — only matches stored headlines).
+            if (cand.strategy_key or "") == "catalyst_retest":
+                btc_regime = intelligence.infer_market_regime("BTC-USD")
+                if btc_regime in {"trend_down", "volatile"}:
                     self._emit_decision_event(
                         symbol=cand.symbol,
                         outcome="info",
-                        title=f"Memory {action.lower()} on {cand.symbol}",
+                        title=f"BTC not supportive for {cand.symbol}",
                         detail=(
-                            f"Learned score {consult.get('learned_opportunity_score')}; "
-                            f"similar setups {consult.get('similar_setup_count')}; "
-                            f"evidence {consult.get('evidence_strength')}. No paper order."
+                            f"catalyst_retest requires supportive BTC; "
+                            f"BTC regime={btc_regime}."
                         ),
-                        reason_code=f"memory_{action.lower()}",
+                        reason_code="btc_regime_block",
                     )
                     continue
-            # Normalize stops/targets. Bot fast-lane skips the thin-reward veto
-            # so DCA/trend/grid are not blocked by geometry haircuts.
+                news_hit = self._positive_catalyst_headline(cand.symbol)
+                cand_detail["catalyst_news"] = news_hit
+                if news_hit.get("found"):
+                    cand_detail["catalyst_classified"] = "positive_keyword"
+                    # Soft score boost when a matching headline exists.
+                    try:
+                        cand.score = min(
+                            Decimal("98"),
+                            Decimal(str(cand.score or 0)) + Decimal("4"),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                else:
+                    cand_detail["catalyst_classified"] = "price_volume_only"
+                cand.detail = cand_detail
+
+            # --- Institutional memory consult BEFORE paper entry (PAPER only) ---
+            regime = intelligence.infer_market_regime(cand.symbol)
+            delta = intelligence._paper_adaptive_delta(
+                portfolio_id=portfolio_id,
+                strategy_key=cand.strategy_key or "sma_crossover",
+            )
+            rr = None
+            if cand.entry_zone and cand.stop_loss and cand.take_profit:
+                risk = abs(float(cand.entry_zone) - float(cand.stop_loss))
+                reward = abs(float(cand.take_profit) - float(cand.entry_zone))
+                if risk > 0:
+                    rr = reward / risk
+            conf, _label, factors = intelligence.score_confidence(
+                score=float(cand.score or 0),
+                bias=cand.bias or "Neutral",
+                risk_status=cand.risk_status or "blocked",
+                regime=regime,
+                stale=False,
+                risk_reward=rr,
+                paper_confidence_delta=delta,
+            )
+            vol_cond = "normal"
+            if factors.get("volume_ok") is True or cand_detail.get("relative_volume_high"):
+                vol_cond = "elevated"
+            elif factors.get("volume_ok") is False:
+                vol_cond = "thin"
+            consult = memory.consult_before_entry(
+                portfolio_id=portfolio_id,
+                symbol=cand.symbol,
+                strategy_key=cand.strategy_key or "sma_crossover",
+                market_regime=regime,
+                base_score=float(cand.score or 0),
+                paper_confidence_delta=delta,
+                confidence_label_score=conf,
+                volume_condition=vol_cond,
+                trade_pattern=str(
+                    cand_detail.get("trade_pattern")
+                    or cand_detail.get("discovery_opportunity_class")
+                    or cand_detail.get("pattern")
+                    or ""
+                )
+                or None,
+            )
+            action = str(consult.get("action") or "WAIT")
+            if action != "EXECUTE":
+                self.audit.append(
+                    action="paper.training.memory_gate",
+                    resource_type="market_scan_candidate",
+                    resource_id=str(cand.id),
+                    actor_user_id=resolved.user.id,
+                    payload={
+                        "symbol": cand.symbol,
+                        "gate_action": action,
+                        "learned_opportunity_score": consult.get(
+                            "learned_opportunity_score"
+                        ),
+                        "similar_setup_count": consult.get("similar_setup_count"),
+                        "evidence_strength": consult.get("evidence_strength"),
+                        "prior_review_ids": consult.get("prior_review_ids"),
+                        "paper_only": True,
+                    },
+                )
+                self._emit_decision_event(
+                    symbol=cand.symbol,
+                    outcome="info",
+                    title=f"Memory {action.lower()} on {cand.symbol}",
+                    detail=(
+                        f"Learned score {consult.get('learned_opportunity_score')}; "
+                        f"similar setups {consult.get('similar_setup_count')}; "
+                        f"evidence {consult.get('evidence_strength')}. No paper order."
+                    ),
+                    reason_code=f"memory_{action.lower()}",
+                )
+                continue
+            # Refuse penny economics: normalize stops/targets, then require a
+            # meaningful planned dollar reward at the desk notional.
             entry_px = cand.current_price or cand.entry_zone
             if entry_px is None or entry_px <= 0:
                 continue
+            is_micro = (cand.strategy_key or "") in {
+                "range_micro",
+                "trend_pullback_micro",
+            }
             norm_stop, norm_target = normalize_exit_levels(
-                entry_px, cand.stop_loss, cand.take_profit
+                entry_px,
+                cand.stop_loss,
+                cand.take_profit,
+                min_r=(
+                    MICRO_MIN_TAKE_PROFIT_R if is_micro else MIN_TAKE_PROFIT_R
+                ),
             )
             reward_usd = expected_reward_usd(
                 price=entry_px,
                 target=norm_target,
-                notional=settings.default_notional,
+                notional=cand_notional,
             )
-            if (not bot_fast_lane) and reward_usd < MIN_EXPECTED_REWARD_USD:
+            reward_floor = expected_reward_floor_usd(
+                notional=cand_notional,
+                strategy_key=cand.strategy_key,
+            )
+            reward_after_costs = (
+                reward_usd
+                - (
+                    cand_notional
+                    * MICRO_COST_BPS_RT
+                    / Decimal("10000")
+                ).quantize(Decimal("0.01"))
+                if is_micro
+                else reward_usd
+            )
+            if reward_after_costs < reward_floor:
                 self._emit_decision_event(
                     symbol=cand.symbol,
                     outcome="info",
                     title=f"Skipped thin target on {cand.symbol}",
                     detail=(
-                        f"Planned reward ${reward_usd} is below the "
-                        f"${MIN_EXPECTED_REWARD_USD} minimum at "
-                        f"${settings.default_notional} notional. "
+                        f"Planned net reward ${reward_after_costs} is below the "
+                        f"${reward_floor} size-adjusted minimum at "
+                        f"${cand_notional} notional. "
                         "Waiting for a setup with real dollar upside."
                     ),
                     reason_code="reward_too_small",
@@ -783,7 +1477,7 @@ class PaperTrainingService:
                 order = self._open_paper_from_candidate(
                     portfolio_id=portfolio_id,
                     cand=cand,
-                    notional=settings.default_notional,
+                    notional=cand_notional,
                     actor=resolved,
                     memory_consult=consult,
                 )
@@ -796,9 +1490,21 @@ class PaperTrainingService:
                         "learned_opportunity_score": consult.get(
                             "learned_opportunity_score"
                         ),
+                        "ega_notional": str(cand_notional),
+                        "ega_lane": ega_lane,
                     }
                 )
                 open_syms.add(cand.symbol)
+                if len(open_syms) >= max_open:
+                    break
+                buying_power = (buying_power - cand_notional).quantize(Decimal("0.01"))
+                entry_notional = equity_growth_entry_notional(
+                    equity=equity,
+                    buying_power=buying_power,
+                    lane=ega_lane,
+                )
+                if entry_notional <= 0:
+                    break
                 self.audit.append(
                     action="paper.training.auto_enter",
                     resource_type="paper_order",
@@ -808,6 +1514,12 @@ class PaperTrainingService:
                         "symbol": cand.symbol,
                         "candidate_id": str(cand.id),
                         "institutional_memory": consult,
+                        "strategy_portfolio": cand_detail.get("strategy_portfolio"),
+                        "ega": {
+                            "version": ega_plan.get("version"),
+                            "lane": ega_lane,
+                            "notional": str(cand_notional),
+                        },
                         "paper_only": True,
                     },
                 )
@@ -816,8 +1528,9 @@ class PaperTrainingService:
                     outcome="entered",
                     title=f"Entered {cand.symbol}",
                     detail=(
-                        f"Opened a ${settings.default_notional} paper long after memory "
-                        f"EXECUTE (score {consult.get('learned_opportunity_score')}). "
+                        f"Opened a ${cand_notional} paper long after memory "
+                        f"EXECUTE (score {consult.get('learned_opportunity_score')}; "
+                        f"EGA lane={ega_lane}). "
                         f"Stop {cand.stop_loss}; target {cand.take_profit}."
                     ),
                     reason_code="auto_enter",
@@ -930,13 +1643,21 @@ class PaperTrainingService:
                 "candidate_id": str(cand.id),
                 "stop_loss": str(stop),
                 "take_profit": str(target),
+                "initial_stop_loss": str(stop),
                 "entry_zone": str(cand.entry_zone) if cand.entry_zone is not None else str(price),
                 "institutional_memory": memory_consult,
+                "strategy_key": cand.strategy_key,
+                "playbook": (cand.detail or {}).get("playbook") or cand.strategy_key,
+                "trade_pattern": (cand.detail or {}).get("trade_pattern")
+                or (cand.detail or {}).get("pattern"),
                 "discovery_source": (cand.detail or {}).get("discovery_source"),
                 "discovery_opportunity_class": (cand.detail or {}).get(
                     "discovery_opportunity_class"
                 ),
                 "discovered_market": bool((cand.detail or {}).get("discovered_market")),
+                "catalyst_news": (cand.detail or {}).get("catalyst_news"),
+                "catalyst_classified": (cand.detail or {}).get("catalyst_classified"),
+                "scaled_out": False,
             },
         )
         try:
@@ -956,8 +1677,26 @@ class PaperTrainingService:
         self.db.refresh(order)
         return order
 
+    def open_position_symbols_for_strategies(
+        self, *, portfolio_id: uuid.UUID, strategy_keys: set[str]
+    ) -> list[str]:
+        """Return open symbols whose active entry plan belongs to a strategy lane."""
+        symbols: list[str] = []
+        for pos in self.paper.list_positions(portfolio_id):
+            if not pos.quantity or pos.quantity <= 0:
+                continue
+            plan = self.paper._exit_plan_levels(portfolio_id, pos.symbol)
+            if str(plan.get("strategy_key") or "") in strategy_keys:
+                symbols.append(pos.symbol)
+        return symbols
+
     def evaluate_paper_exits(
-        self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None = None
+        self,
+        *,
+        portfolio_id: uuid.UUID,
+        actor: AuthenticatedPrincipal | None = None,
+        allowed_strategy_keys: set[str] | None = None,
+        excluded_strategy_keys: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Close paper longs when verified marks hit stored stop or target.
 
@@ -978,27 +1717,281 @@ class PaperTrainingService:
         ]
         for pos in positions:
             plan = self.paper._exit_plan_levels(portfolio_id, pos.symbol)
+            strategy_key = str(plan.get("strategy_key") or "")
+            if allowed_strategy_keys is not None and strategy_key not in allowed_strategy_keys:
+                continue
+            if excluded_strategy_keys is not None and strategy_key in excluded_strategy_keys:
+                continue
+            is_micro = strategy_key in {"range_micro", "trend_pullback_micro"}
             stop = plan.get("stop_loss")
             target = plan.get("take_profit")
             if stop is None and target is None:
                 continue
             avg = getattr(pos, "average_cost", None)
-            if avg is not None and avg > 0:
-                stop, target = normalize_exit_levels(avg, stop, target)
-            mark, _mark_at = self.paper._latest_mark(pos.symbol)
-            if mark is None:
+            # Do not re-normalize an already-trailed stop above entry — that
+            # would wipe the ratchet back to a fresh 1.5% protective stop.
+            if (
+                avg is not None
+                and avg > 0
+                and (stop is None or stop < avg)
+            ):
+                stop, target = normalize_exit_levels(
+                    avg,
+                    stop,
+                    target,
+                    min_r=(
+                        MICRO_MIN_TAKE_PROFIT_R
+                        if is_micro
+                        else MIN_TAKE_PROFIT_R
+                    ),
+                )
+            mark, mark_at = self.paper._latest_mark(pos.symbol)
+            if (
+                mark is None
+                or mark_at is None
+                or datetime.now(UTC) - mark_at > PAPER_MARK_STALE_AFTER
+            ):
                 continue
+            # Trail only after meaningful progress — early BE at +1R clipped winners
+            # into noise exits and destroyed expectancy (paper only; live locked).
+            planned_stop = stop
+            ratcheted = False
+            risk_unit: Decimal | None = None
+            r_mult: Decimal | None = None
+            held_seconds = self._position_held_seconds(portfolio_id, pos.symbol)
+            if avg is not None and avg > 0:
+                initial_stop = plan.get("initial_stop_loss")
+                if initial_stop is None and stop is not None and stop < avg:
+                    initial_stop = stop
+                if initial_stop is not None and initial_stop < avg:
+                    risk_unit = avg - initial_stop
+                else:
+                    risk_unit = avg * MIN_STOP_DISTANCE_PCT
+                if risk_unit is not None and risk_unit > 0:
+                    r_mult = (mark - avg) / risk_unit
+            if (
+                avg is not None
+                and avg > 0
+                and stop is not None
+                and stop < avg
+                and risk_unit is not None
+                and risk_unit > 0
+                and r_mult is not None
+            ):
+                if r_mult >= Decimal("2"):
+                    trail = avg + risk_unit  # lock ~1R
+                    if trail > stop:
+                        stop = trail
+                        ratcheted = True
+                elif r_mult >= Decimal("1.5"):
+                    trail = avg + (risk_unit * Decimal("0.5"))
+                    if trail > stop:
+                        stop = trail
+                        ratcheted = True
+            # Founder desk: bank half at +1R so cash returns for dip redeploys.
+            # Full runners still seek the planned take-profit on the remainder.
+            if (
+                (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
+                and not bool(plan.get("scaled_out"))
+                and avg is not None
+                and avg > 0
+                and risk_unit is not None
+                and risk_unit > 0
+                and r_mult is not None
+                and r_mult >= SCALE_OUT_R
+                and held_seconds >= float(SCALE_OUT_HOLD_SECONDS)
+            ):
+                half = (abs(pos.quantity) * SCALE_OUT_FRACTION).quantize(
+                    Decimal("0.00000001")
+                )
+                if half > 0 and half < abs(pos.quantity):
+                    entry_order_id = plan.get("entry_order_id")
+                    entry_key = str(entry_order_id) if entry_order_id else "none"
+                    try:
+                        order = self.paper.submit_order(
+                            portfolio_id=portfolio_id,
+                            actor=resolved,
+                            symbol=pos.symbol,
+                            side="sell",
+                            order_type="market",
+                            quantity=half,
+                            limit_price=mark,
+                            idempotency_key=(
+                                f"exit:{portfolio_id}:{pos.symbol}:"
+                                f"scale_out:{entry_key}"
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        try:
+                            self.db.rollback()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self.audit.append(
+                            action="paper.training.auto_exit_failed",
+                            resource_type="paper_position",
+                            resource_id=str(pos.id),
+                            actor_user_id=resolved.user.id,
+                            payload={
+                                "symbol": pos.symbol,
+                                "reason": "scale_out",
+                                "mark": str(mark),
+                                "error": str(exc)[:240],
+                            },
+                        )
+                        continue
+                    if entry_order_id is not None:
+                        entry_order = self.db.get(PaperOrder, entry_order_id)
+                        if entry_order is not None:
+                            self.paper._event(
+                                entry_order,
+                                "paper_exit_plan",
+                                entry_order.status,
+                                entry_order.status,
+                                {
+                                    "stop_loss": str(stop) if stop is not None else None,
+                                    "take_profit": (
+                                        str(target) if target is not None else None
+                                    ),
+                                    "initial_stop_loss": str(
+                                        plan.get("initial_stop_loss") or planned_stop
+                                    )
+                                    if (plan.get("initial_stop_loss") or planned_stop)
+                                    else None,
+                                    "entry_zone": str(avg),
+                                    "scaled_out": True,
+                                    "strategy_key": plan.get("strategy_key"),
+                                },
+                            )
+                    self.paper._event(
+                        order,
+                        "paper_exit_triggered",
+                        order.status,
+                        order.status,
+                        {
+                            "reason": "scale_out",
+                            "mark": str(mark),
+                            "quantity": str(half),
+                            "stop_loss": str(stop) if stop is not None else None,
+                            "take_profit": (
+                                str(target) if target is not None else None
+                            ),
+                        },
+                    )
+                    self.audit.append(
+                        action="paper.training.auto_exit",
+                        resource_type="paper_order",
+                        resource_id=str(order.id),
+                        actor_user_id=resolved.user.id,
+                        payload={
+                            "symbol": pos.symbol,
+                            "reason": "scale_out",
+                            "mark": str(mark),
+                            "quantity": str(half),
+                        },
+                    )
+                    self._emit_decision_event(
+                        portfolio_id=portfolio_id,
+                        symbol=pos.symbol,
+                        outcome="exited",
+                        title=f"Banked partial profit on {pos.symbol}",
+                        detail=(
+                            f"Sold half at {mark} after +{SCALE_OUT_R}R so cash "
+                            "can redeploy into dips; runner still open."
+                        ),
+                        reason_code="scale_out",
+                    )
+                    closed.append(
+                        {
+                            "symbol": pos.symbol,
+                            "order_id": str(order.id),
+                            "reason": "scale_out",
+                            "mark": str(mark),
+                        }
+                    )
+                    continue
+            if (
+                ratcheted
+                and planned_stop is not None
+                and stop is not None
+                and stop > planned_stop
+                and mark > stop
+            ):
+                entry_order_id = plan.get("entry_order_id")
+                if entry_order_id is not None:
+                    entry_order = self.db.get(PaperOrder, entry_order_id)
+                    if entry_order is not None:
+                        self.paper._event(
+                            entry_order,
+                            "paper_exit_plan",
+                            entry_order.status,
+                            entry_order.status,
+                            {
+                                "stop_loss": str(stop),
+                                "take_profit": (
+                                    str(target) if target is not None else None
+                                ),
+                                "initial_stop_loss": str(
+                                    plan.get("initial_stop_loss") or planned_stop
+                                )
+                                if (plan.get("initial_stop_loss") or planned_stop)
+                                else None,
+                                "trailed": True,
+                                "scaled_out": bool(plan.get("scaled_out")),
+                                "entry_zone": str(avg),
+                                "strategy_key": plan.get("strategy_key"),
+                            },
+                        )
+                        try:
+                            self.db.commit()
+                        except Exception:  # noqa: BLE001
+                            try:
+                                self.db.rollback()
+                            except Exception:  # noqa: BLE001
+                                pass
+                # Fall through — take-profit / stop may still apply this pass.
             reason: str | None = None
             if stop is not None and mark <= stop:
-                reason = "stop_loss"
-            elif target is not None and mark >= target:
-                # Ultra-tight targets were closing entries in the same scan pass.
-                # Stop-loss still fires immediately; take-profit needs a minimum hold.
-                held_ok = self._position_held_seconds(portfolio_id, pos.symbol) >= (
-                    TAKE_PROFIT_MIN_HOLD_SECONDS
+                reason = (
+                    "trailing_stop"
+                    if planned_stop is not None and stop > planned_stop
+                    else "stop_loss"
                 )
+            elif target is not None and mark >= target:
+                held_ok = held_seconds >= float(TAKE_PROFIT_MIN_HOLD_SECONDS)
                 if held_ok:
                     reason = "take_profit"
+            elif (
+                (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
+                and bool(plan.get("scaled_out"))
+                and r_mult is not None
+                and r_mult >= RUNNER_BANK_R
+                and held_seconds >= float(RUNNER_BANK_HOLD_SECONDS)
+            ):
+                # Recycle capital: don't sit full waiting for distant 2R after
+                # already banking half.
+                reason = "runner_bank"
+            elif (
+                (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
+                and r_mult is not None
+                and r_mult >= STALE_BANK_R
+                and held_seconds >= float(STALE_BANK_HOLD_SECONDS)
+            ):
+                reason = "stale_bank"
+            elif is_micro and held_seconds >= float(MICRO_MAX_HOLD_SECONDS):
+                # A short-timeframe thesis that has not resolved within four
+                # hours is no longer the setup that was entered. Close it using
+                # a fresh verified mark so capital and learning can recycle.
+                reason = "micro_time_exit"
+            elif self._catalyst_momentum_weakened(
+                portfolio_id=portfolio_id,
+                symbol=pos.symbol,
+                entry_order_id=plan.get("entry_order_id"),
+                mark=mark,
+                avg=avg,
+            ):
+                held_ok = held_seconds >= 600.0
+                if held_ok:
+                    reason = "momentum_fade"
             if reason is None:
                 continue
             entry_order_id = plan.get("entry_order_id")
@@ -1097,9 +2090,33 @@ class PaperTrainingService:
             why = (
                 f"Stop-loss hit at {mark} (stop {stop})."
                 if reason == "stop_loss"
-                else f"Take-profit hit at {mark} (target {target})."
+                else (
+                    f"Trailing stop hit at {mark} (stop {stop})."
+                    if reason == "trailing_stop"
+                    else (
+                        f"Momentum faded at {mark}."
+                        if reason == "momentum_fade"
+                        else (
+                            f"Micro thesis expired after {MICRO_MAX_HOLD_SECONDS // 3600}h "
+                            f"at fresh mark {mark}."
+                            if reason == "micro_time_exit"
+                            else (
+                            f"Banked runner at {mark} after +{RUNNER_BANK_R}R "
+                            "(capital recycle)."
+                            if reason == "runner_bank"
+                            else (
+                                f"Stale-bank exit at {mark} after long hold "
+                                f"with +{STALE_BANK_R}R progress."
+                                if reason == "stale_bank"
+                                else f"Take-profit hit at {mark} (target {target})."
+                            )
+                            )
+                        )
+                    )
+                )
             )
             self._emit_decision_event(
+                portfolio_id=portfolio_id,
                 symbol=pos.symbol,
                 outcome="exited",
                 title=f"Exited {pos.symbol} ({reason.replace('_', ' ')})",
@@ -1135,6 +2152,133 @@ class PaperTrainingService:
         if closed:
             self.db.commit()
         return closed
+
+    def _positive_catalyst_headline(self, symbol: str) -> dict[str, Any]:
+        """Best-effort keyword match against stored news (never invents headlines)."""
+        from app.models.market_intelligence import MarketNewsItem
+
+        base = symbol.upper().split("-")[0]
+        if not base or len(base) < 2:
+            return {"found": False}
+        positive = (
+            "surge",
+            "rally",
+            "partnership",
+            "listing",
+            "approval",
+            "upgrade",
+            "adoption",
+            "inflow",
+            "record",
+            "breakthrough",
+            "launch",
+        )
+        negative = (
+            "hack",
+            "exploit",
+            "ban",
+            "lawsuit",
+            "sec charge",
+            "collapse",
+            "insolvent",
+            "delist",
+        )
+        cutoff = datetime.now(UTC).timestamp() - 72 * 3600
+        cutoff_dt = datetime.fromtimestamp(cutoff, tz=UTC)
+        rows = list(
+            self.db.scalars(
+                select(MarketNewsItem)
+                .where(MarketNewsItem.published_at >= cutoff_dt)
+                .order_by(desc(MarketNewsItem.published_at))
+                .limit(80)
+            )
+        )
+        base_l = base.lower()
+        for row in rows:
+            text = f"{row.headline} {row.body or ''}".lower()
+            if base_l not in text:
+                continue
+            if any(n in text for n in negative):
+                return {
+                    "found": True,
+                    "positive": False,
+                    "headline": row.headline[:240],
+                }
+            if any(p in text for p in positive):
+                return {
+                    "found": True,
+                    "positive": True,
+                    "headline": row.headline[:240],
+                }
+            return {
+                "found": True,
+                "positive": None,
+                "headline": row.headline[:240],
+            }
+        return {"found": False}
+
+    def _catalyst_momentum_weakened(
+        self,
+        *,
+        portfolio_id: uuid.UUID,
+        symbol: str,
+        entry_order_id: Any,
+        mark: Decimal,
+        avg: Decimal | None,
+    ) -> bool:
+        """Exit catalyst_retest longs when short momentum rolls over while still green."""
+        if avg is None or avg <= 0 or mark <= avg or entry_order_id is None:
+            return False
+        from app.models.paper_trading import PaperOrderEvent
+
+        payload = self.db.execute(
+            select(PaperOrderEvent.payload)
+            .where(
+                PaperOrderEvent.order_id == entry_order_id,
+                PaperOrderEvent.event_type == "paper_exit_plan",
+            )
+            .order_by(PaperOrderEvent.occurred_at.desc())
+            .limit(1)
+        ).scalar()
+        if not isinstance(payload, dict):
+            return False
+        strategy = str(payload.get("strategy_key") or payload.get("playbook") or "")
+        pattern = str(
+            payload.get("trade_pattern")
+            or payload.get("discovery_opportunity_class")
+            or ""
+        )
+        if strategy != "catalyst_retest" and pattern != "catalyst_retest":
+            return False
+
+        from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
+
+        inst = self.db.scalar(
+            select(MarketInstrument).where(MarketInstrument.symbol == symbol.upper())
+        )
+        if inst is None:
+            return False
+        rows = list(
+            self.db.scalars(
+                select(MarketOhlcvBar)
+                .where(
+                    MarketOhlcvBar.instrument_id == inst.id,
+                    MarketOhlcvBar.timeframe.in_(("1m", "5m")),
+                )
+                .order_by(MarketOhlcvBar.close_time.desc())
+                .limit(16)
+            )
+        )
+        if len(rows) < 12:
+            return False
+        closes = [Decimal(str(r.close)) for r in reversed(rows)]
+        fast = sum(closes[-5:], Decimal("0")) / Decimal("5")
+        slow = sum(closes[-12:], Decimal("0")) / Decimal("12")
+        # Require giveback from the recent local peak — do not exit merely because
+        # a short SMA dipped while price is still grinding higher.
+        peak = max(closes[-8:])
+        giveback = peak > 0 and mark <= peak * Decimal("0.995")
+        return giveback and fast < slow * Decimal("0.997")
 
     def _position_held_seconds(self, portfolio_id: uuid.UUID, symbol: str) -> float:
         """Seconds since the latest buy fill for this open symbol."""
@@ -1178,6 +2322,7 @@ class PaperTrainingService:
     def _emit_decision_event(
         self,
         *,
+        portfolio_id: uuid.UUID | None = None,
         symbol: str,
         outcome: str,
         title: str,
@@ -1188,6 +2333,37 @@ class PaperTrainingService:
         try:
             from app.models.market_scan import MarketScanEvent
 
+            if portfolio_id is None:
+                portfolio_id = self.db.scalar(
+                    select(PaperPortfolio.id).where(
+                        PaperPortfolio.name == FOUNDER_LEARNING_DESK_NAME
+                    )
+                )
+            portfolio = (
+                self.db.get(PaperPortfolio, portfolio_id)
+                if portfolio_id is not None
+                else None
+            )
+            if (
+                portfolio is None
+                or (portfolio.name or "") != FOUNDER_LEARNING_DESK_NAME
+            ):
+                return
+            now = datetime.now(UTC)
+            recent = self.db.scalar(
+                select(MarketScanEvent.id)
+                .where(
+                    MarketScanEvent.component == "paper_training",
+                    MarketScanEvent.symbol == symbol,
+                    MarketScanEvent.outcome == outcome,
+                    MarketScanEvent.reason_code == reason_code,
+                    MarketScanEvent.occurred_at >= now - timedelta(minutes=5),
+                )
+                .order_by(desc(MarketScanEvent.occurred_at))
+                .limit(1)
+            )
+            if recent is not None:
+                return
             self.db.add(
                 MarketScanEvent(
                     cycle_id=None,
@@ -1201,164 +2377,12 @@ class PaperTrainingService:
                     detail=detail[:500],
                     strategy_key="sma_crossover",
                     correlation_id=f"paper-{outcome}-{symbol}-{uuid.uuid4().hex[:10]}",
-                    occurred_at=datetime.now(UTC),
-                    payload={},
+                    occurred_at=now,
+                    payload={"portfolio_id": str(portfolio_id)},
                 )
             )
         except Exception:  # noqa: BLE001 — UI stream must never block trading
             pass
-
-    def ensure_founder_desk_for_worker(self) -> uuid.UUID | None:
-        """Worker hook: force Founder Learning Desk into Automatic Practice.
-
-        Does not create a desk (needs an authenticated actor). Upgrades an
-        existing desk so scan automation actually buys without a UI visit.
-        """
-        existing = self.db.scalar(
-            select(PaperPortfolio).where(
-                PaperPortfolio.name == FOUNDER_LEARNING_DESK_NAME
-            )
-        )
-        if existing is None:
-            return None
-        self._upgrade_learning_desk_for_pnl(existing)
-        return existing.id
-
-    def maybe_interval_dca(
-        self, *, portfolio_id: uuid.UUID, actor: AuthenticatedPrincipal | None
-    ) -> list[dict[str, Any]]:
-        """Bitsgap-style interval DCA on majors — paper only, long only.
-
-        Places a notional slice buy when Automatic Practice is on, cash
-        allows, the symbol is not already open, and no DCA buy hit that
-        symbol within INTERVAL_DCA_SECONDS. No memory court. No live unlock.
-        """
-        settings = self.get_or_create_settings(portfolio_id)
-        if settings.mode != "automatic":
-            return []
-        portfolio = self.db.get(PaperPortfolio, portfolio_id)
-        if (
-            portfolio is None
-            or portfolio.kill_switch_active
-            or portfolio.pause_new_entries_active
-        ):
-            return []
-        resolved = self._resolve_actor(actor, portfolio)
-        if resolved is None:
-            return []
-        buying_power = portfolio.cash_balance - (
-            portfolio.reserved_cash or Decimal("0")
-        )
-        slice_notional = (settings.default_notional / Decimal("2")).quantize(
-            Decimal("0.01")
-        )
-        if slice_notional < Decimal("25"):
-            slice_notional = min(settings.default_notional, buying_power)
-        if buying_power < slice_notional or slice_notional <= 0:
-            return []
-        open_syms = {
-            p.symbol
-            for p in self.db.scalars(
-                select(PaperPosition).where(
-                    PaperPosition.portfolio_id == portfolio_id,
-                    PaperPosition.quantity != 0,
-                )
-            )
-        }
-        opened: list[dict[str, Any]] = []
-        cutoff = datetime.now(UTC).timestamp() - INTERVAL_DCA_SECONDS
-        for symbol in INTERVAL_DCA_SYMBOLS:
-            if symbol in open_syms:
-                continue
-            if self._recent_dca_buy(portfolio_id, symbol, since_ts=cutoff):
-                continue
-            mark = self.paper._latest_mark(symbol)
-            price = mark[0] if isinstance(mark, tuple) else mark
-            if price is None or price <= 0:
-                continue
-            stop, target = normalize_exit_levels(price, None, None)
-            try:
-                qty = (slice_notional / price).quantize(Decimal("0.00000001"))
-                if qty <= 0:
-                    continue
-                order = self.paper.submit_order(
-                    portfolio_id=portfolio_id,
-                    actor=resolved,
-                    symbol=symbol,
-                    side="buy",
-                    order_type="market",
-                    quantity=qty,
-                    limit_price=price,
-                    idempotency_key=(
-                        f"interval-dca:{portfolio_id}:{symbol}:"
-                        f"{int(datetime.now(UTC).timestamp() // INTERVAL_DCA_SECONDS)}"
-                    ),
-                )
-                self.paper._event(
-                    order,
-                    "paper_exit_plan",
-                    order.status,
-                    order.status,
-                    {
-                        "stop_loss": str(stop),
-                        "take_profit": str(target),
-                        "entry_zone": str(price),
-                        "strategy_key": "dca",
-                        "interval_dca": True,
-                        "paper_only": True,
-                    },
-                )
-                opened.append(
-                    {
-                        "symbol": symbol,
-                        "order_id": str(order.id),
-                        "strategy_key": "dca",
-                        "notional": str(slice_notional),
-                        "interval_dca": True,
-                    }
-                )
-                open_syms.add(symbol)
-                buying_power -= slice_notional
-                if buying_power < slice_notional:
-                    break
-                self.audit.append(
-                    action="paper.training.interval_dca",
-                    resource_type="paper_order",
-                    resource_id=str(order.id),
-                    actor_user_id=resolved.user.id,
-                    payload={
-                        "symbol": symbol,
-                        "notional": str(slice_notional),
-                        "interval_seconds": INTERVAL_DCA_SECONDS,
-                        "paper_only": True,
-                    },
-                )
-            except Exception:  # noqa: BLE001 — never poison scan automation
-                try:
-                    self.db.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
-                continue
-        if opened:
-            self.db.commit()
-        return opened
-
-    def _recent_dca_buy(
-        self, portfolio_id: uuid.UUID, symbol: str, *, since_ts: float
-    ) -> bool:
-        """True if a paper buy for symbol landed after since_ts (epoch seconds)."""
-        since = datetime.fromtimestamp(since_ts, tz=UTC)
-        row = self.db.scalars(
-            select(PaperOrder)
-            .where(
-                PaperOrder.portfolio_id == portfolio_id,
-                PaperOrder.symbol == symbol,
-                PaperOrder.side == "buy",
-                PaperOrder.created_at >= since,
-            )
-            .limit(1)
-        ).first()
-        return row is not None
 
     def ensure_learning_desk(
         self, *, actor: AuthenticatedPrincipal
@@ -1370,7 +2394,7 @@ class PaperTrainingService:
             )
         )
         if existing is not None:
-            self._upgrade_learning_desk_for_pnl(existing)
+            self._upgrade_legacy_tiny_notional(existing)
             return existing
         portfolio = self.paper.create_portfolio(
             name=FOUNDER_LEARNING_DESK_NAME,
@@ -1384,41 +2408,31 @@ class PaperTrainingService:
         self.db.refresh(portfolio)
         return portfolio
 
-    def _upgrade_learning_desk_for_pnl(self, portfolio: PaperPortfolio) -> None:
-        """Force Automatic Practice + meaningful size when cash allows.
+    def _upgrade_legacy_tiny_notional(self, portfolio: PaperPortfolio) -> None:
+        """Bump legacy $30 practice size when the desk still has enough cash.
 
-        Existing desks stuck in coaching or on $30/$100 tickets never show
-        real dollar P&L. Dig-out desks with thin cash are left alone.
+        Dig-out desks with reduced cash are left alone so notional stays
+        within buying power.
         """
         settings = self.get_or_create_settings(portfolio.id)
+        if settings.default_notional > LEGACY_TINY_NOTIONAL:
+            return
         buying_power = portfolio.cash_balance - (
             portfolio.reserved_cash or Decimal("0")
         )
-        changed = False
-        previous_mode = settings.mode
-        previous_notional = settings.default_notional
-        if settings.mode != "automatic":
-            settings.mode = "automatic"
-            changed = True
-        if (
-            settings.default_notional < LEARNING_DEFAULT_NOTIONAL
-            and buying_power >= LEARNING_DEFAULT_NOTIONAL
-        ):
-            settings.default_notional = LEARNING_DEFAULT_NOTIONAL
-            changed = True
-        if not changed:
+        if buying_power < LEARNING_DEFAULT_NOTIONAL:
             return
+        previous = settings.default_notional
+        settings.default_notional = LEARNING_DEFAULT_NOTIONAL
         self.audit.append(
-            action="paper.training.learning_desk_upgraded",
+            action="paper.training.notional_upgraded",
             resource_type="paper_portfolio",
             resource_id=str(portfolio.id),
             actor_user_id=portfolio.owner_user_id,
             payload={
-                "previous_mode": previous_mode,
-                "mode": settings.mode,
-                "previous_default_notional": str(previous_notional),
-                "default_notional": str(settings.default_notional),
-                "reason": "paper_pnl_path_must_trade_automatically_at_dollar_scale",
+                "previous_default_notional": str(previous),
+                "default_notional": str(LEARNING_DEFAULT_NOTIONAL),
+                "reason": "legacy_tiny_notional_unacceptable_daily_pnl",
                 "paper_only": True,
             },
         )

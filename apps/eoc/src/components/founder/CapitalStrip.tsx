@@ -93,9 +93,9 @@ export function CapitalStrip() {
         </p>
       ) : (
         <p className="muted-note capital-strip-footnote">
-          Learning desk targets ~$300 starting cash with ~$100 per practice entry.
-          Equity moves when prices mark open trades or when Argus opens/closes paper
-          positions
+          Sweet spot: keep ~40%+ as cash available (floor $100), invest ~1/3 equity per
+          entry (cap $150). Grow free cash for redeploy — not a fully locked book. Paper
+          only; live locked
           {drift > 1
             ? ` · check: cash + marks ≈ ${money(implied)} vs equity ${money(equity)}`
             : ""}

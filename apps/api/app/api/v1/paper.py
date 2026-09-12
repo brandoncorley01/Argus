@@ -13,6 +13,7 @@ from app.schemas.paper import (
     CheckpointRead,
     ClearSymbolPracticeResponse,
     ClosedTradeRead,
+    DayEquityPnlRead,
     FillRead,
     KillSwitchRequest,
     OrderRead,
@@ -154,6 +155,21 @@ def pause_new_entries(
                 portfolio_id, active=body.active, actor=principal
             )
         )
+    except PaperTradingError as exc:
+        raise _http(exc) from exc
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/day-equity-pnl",
+    response_model=DayEquityPnlRead,
+)
+def day_equity_pnl(
+    portfolio_id: uuid.UUID,
+    _: AuthenticatedPrincipal = Depends(RequireAnyAuthenticatedRead),
+    service: PaperTradingService = Depends(get_service),
+) -> DayEquityPnlRead:
+    try:
+        return DayEquityPnlRead.model_validate(service.day_equity_pnl(portfolio_id))
     except PaperTradingError as exc:
         raise _http(exc) from exc
 

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
@@ -20,9 +20,9 @@ from app.models.market_scan import MarketScanCandidate, MarketScanCycle, MarketS
 from app.models.paper_trading import PaperPortfolio, PaperPosition
 from app.services.strategy_engine import Bar, SmaCrossoverStrategy
 
-SCAN_INTERVAL = timedelta(minutes=1)
+SCAN_INTERVAL = timedelta(minutes=3)
 # Short-TF practice (1m/5m): marks older than this need a price refresh.
-STALE_BAR = timedelta(minutes=5)
+STALE_BAR = timedelta(minutes=8)
 MIN_BARS = 25
 EVENT_RETENTION = timedelta(days=7)
 MAX_EVENTS_PER_CYCLE = 200
@@ -261,6 +261,25 @@ class MarketScanService:
             self._prune_old_events()
             latest = self.latest_cycle()
             now = _utcnow()
+            # Never start a second scan while one is still running — that piled up
+            # ARQ jobs, starved the API pool, and made Home flicker Stopped.
+            if (
+                not force
+                and latest is not None
+                and latest.status == "running"
+                and latest.started_at is not None
+            ):
+                age = now - latest.started_at
+                if age < timedelta(minutes=12):
+                    return latest
+                latest.status = "failed"
+                latest.completed_at = now
+                latest.detail = {
+                    **(latest.detail if isinstance(latest.detail, dict) else {}),
+                    "error": "scan_stuck_watchdog",
+                    "running_for_seconds": int(age.total_seconds()),
+                }
+                self.db.commit()
             if (
                 not force
                 and latest is not None
@@ -273,8 +292,9 @@ class MarketScanService:
                     self.db.commit()
                 return latest
 
-            # Keep 1m/5m bars fresh so each minute scan has real short-TF data.
-            self._ensure_short_tf_prices(now)
+            # Price cron owns Coinbase HTTP. Nested refresh here made scans
+            # take many minutes, piled ARQ backlog, and starved Founder API calls.
+            # self._ensure_short_tf_prices(now)
 
             correlation_id = f"scan-{now.strftime('%Y%m%dT%H%M')}"
             cycle = MarketScanCycle(
@@ -531,8 +551,9 @@ class MarketScanService:
 
                 price = Decimal(str(bars[-1].close))
                 if exposure > 0:
-                    # Bullish probe — observation only; no order placement.
-                    score = Decimal("70") + Decimal(str(min(25.0, abs(exposure) * 25)))
+                    # Bullish SMA probe — kept as one tool, not the default edge.
+                    # Lower base score so adaptive detectors outrank SMA when both fire.
+                    score = Decimal("52") + Decimal(str(min(18.0, abs(exposure) * 18)))
                     stage = "Watching"
                     pipeline["watching"] += 1
                     pipeline["qualified"] += 1
@@ -719,7 +740,7 @@ class MarketScanService:
                                 stage="Rejected",
                                 score=sig.score,
                                 risk_status="clear",
-                                reason_code=sig.reason_code or "peak_exhaustion",
+                                reason_code=sig.reason_code or "detector_neutral",
                                 reason_text=sig.reason_text,
                                 price=price,
                                 market_data_at=bar_close_time,
@@ -728,7 +749,10 @@ class MarketScanService:
                                     **sig.detail,
                                     "trade_pattern": sig.pattern,
                                     "pattern": sig.pattern,
-                                    "protection_only": True,
+                                    "protection_only": (
+                                        sig.strategy_key
+                                        == "peak_exhaustion_protection"
+                                    ),
                                     "paper_only": True,
                                 },
                             )
@@ -1016,41 +1040,12 @@ class MarketScanService:
         return bars, timeframe, close_time
 
     def _ensure_short_tf_prices(self, now: datetime) -> None:
-        """Refresh 1m/5m candles when the book is stale before a scan cycle."""
-        # Only short TFs count — a fresh 15m bar must not skip a 1m refresh.
-        latest_bar_at = self.db.scalar(
-            select(MarketOhlcvBar.close_time)
-            .where(MarketOhlcvBar.timeframe.in_(("1m", "5m")))
-            .order_by(desc(MarketOhlcvBar.close_time))
-            .limit(1)
-        )
-        if latest_bar_at is not None and (now - latest_bar_at) < timedelta(seconds=90):
-            return
-        try:
-            from app.services.market_price_refresh_service import (
-                MarketPriceRefreshError,
-                MarketPriceRefreshService,
-            )
+        """Legacy hook — price cron refreshes bars; do not nest Coinbase here.
 
-            # Short frames only — keep the scan path fast.
-            MarketPriceRefreshService(self.db).refresh_recent_prices(
-                actor=None,
-                timeframes=(("1m", 60, 80), ("5m", 300, 50)),
-            )
-        except MarketPriceRefreshError:
-            # Scan continues with whatever verified bars already exist.
-            try:
-                self.db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
-            return
-        except Exception:  # noqa: BLE001 — never block scanning on refresh failure
-            # Unique races can poison the session; clear before the cycle continues.
-            try:
-                self.db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
-            return
+        Kept so call sites / tests can stay no-ops without inventing prices.
+        """
+        _ = now
+        return
 
     def _load_bar_rows(
         self, instrument_id: uuid.UUID, *, limit: int
@@ -1285,7 +1280,10 @@ class MarketScanService:
                 .order_by(MarketInstrument.symbol.asc())
             )
         )
-        candidates = self.list_candidates(limit=50)
+        candidates = self.list_candidates(limit=120)
+        strategy_activity = self._strategy_activity_snapshot(
+            portfolio_id=portfolio_id
+        )
         by_symbol = {c.symbol: c for c in candidates}
         open_count, open_position_symbols = self._founder_open_positions(portfolio_id)
         open_syms = set(open_position_symbols)
@@ -1355,8 +1353,19 @@ class MarketScanService:
 
         watches = []
         for cand in candidates:
-            # Active focus stages first; Expired stays visible but must not freeze Live Desk.
-            if cand.stage not in {"Watching", "Risk Review", "Evaluating", "Expired"}:
+            # Active focus stages + Micro AVOID / Entered for Strategy Monitor.
+            detail = cand.detail or {}
+            is_monitor_avoid = cand.stage == "Rejected" and (
+                bool(detail.get("avoid"))
+                or cand.reason_code == "micro_cost_gate"
+            )
+            if cand.stage not in {
+                "Watching",
+                "Risk Review",
+                "Evaluating",
+                "Expired",
+                "Entered",
+            } and not is_monitor_avoid:
                 continue
             watches.append(self._founder_watch_plan(cand, default_notional=default_notional))
         # Stable order: active watches before expired so UI rotation prefers live work.
@@ -1373,7 +1382,7 @@ class MarketScanService:
         risk_check = [w for w in watches if w["stage_raw"] == "Risk Review"]
 
         doing = self._doing_lines(status, candidates)
-        decided = self._decided_lines(limit=24)
+        decided = self._decided_lines(limit=24, portfolio_id=portfolio_id)
         current_market = status.get("current_market")
         focus_symbols = list(
             dict.fromkeys(
@@ -1449,6 +1458,7 @@ class MarketScanService:
             "next_step": status.get("next_step"),
             "wall": wall,
             "watches": watches,
+            "strategy_activity": strategy_activity,
             "monitor": monitor,
             "doing": doing,
             "decided": [
@@ -1466,6 +1476,262 @@ class MarketScanService:
             "scan_interval_seconds": int(SCAN_INTERVAL.total_seconds()),
             "watch_ttl_seconds": int(CANDIDATE_WATCH_TTL.total_seconds()),
             "market_discovery": self._discovery_status(),
+        }
+
+    def _strategy_activity_snapshot(
+        self, *, portfolio_id: uuid.UUID | None
+    ) -> dict[str, Any]:
+        """Genuine pipeline counts for Strategy Monitor — never fabricated."""
+        from app.models.paper_trading import PaperPosition
+        from app.services.paper_opportunity_detectors import DETECTORS, MICRO_STRATEGY_KEYS
+
+        now = _utcnow()
+        since = now - timedelta(hours=6)
+        rows = list(
+            self.db.execute(
+                select(
+                    MarketScanCandidate.strategy_key,
+                    MarketScanCandidate.stage,
+                    func.count().label("n"),
+                )
+                .where(MarketScanCandidate.evaluated_at >= since)
+                .group_by(
+                    MarketScanCandidate.strategy_key,
+                    MarketScanCandidate.stage,
+                )
+            )
+        )
+        by_strategy: dict[str, dict[str, int]] = {}
+        watching = ready = avoided = entered = 0
+        for sk, stage, n in rows:
+            key = (sk or "unknown").lower()
+            bucket = by_strategy.setdefault(
+                key,
+                {
+                    "evaluations": 0,
+                    "watching": 0,
+                    "ready": 0,
+                    "avoided": 0,
+                    "entered": 0,
+                },
+            )
+            count = int(n)
+            bucket["evaluations"] += count
+            if stage == "Watching":
+                bucket["watching"] += count
+                watching += count
+            elif stage == "Rejected":
+                bucket["avoided"] += count
+                avoided += count
+            elif stage == "Entered":
+                bucket["entered"] += count
+                entered += count
+            elif stage == "Risk Review":
+                bucket["ready"] += count
+                ready += count
+
+        ready_live = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(MarketScanCandidate)
+                .where(
+                    MarketScanCandidate.stage == "Watching",
+                    MarketScanCandidate.risk_status == "clear",
+                    MarketScanCandidate.bias == "Bullish",
+                    MarketScanCandidate.score >= 70,
+                    MarketScanCandidate.evaluated_at >= now - timedelta(minutes=45),
+                )
+            )
+            or 0
+        )
+        watching_live = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(MarketScanCandidate)
+                .where(
+                    MarketScanCandidate.stage == "Watching",
+                    MarketScanCandidate.evaluated_at >= now - timedelta(minutes=45),
+                )
+            )
+            or 0
+        )
+
+        open_pos = 0
+        closed_trades = 0
+        realized = Decimal("0")
+        equity = None
+        micro_position_symbols: list[str] = []
+        cash_available: Decimal | None = None
+        micro_available_notional = Decimal("0")
+        micro_reserve_target: Decimal | None = None
+        if portfolio_id is not None:
+            open_pos = int(
+                self.db.scalar(
+                    select(func.count())
+                    .select_from(PaperPosition)
+                    .where(
+                        PaperPosition.portfolio_id == portfolio_id,
+                        PaperPosition.quantity != 0,
+                    )
+                )
+                or 0
+            )
+            try:
+                from app.services.paper_trading_service import PaperTradingService
+
+                paper = PaperTradingService(self.db)
+                summary = paper.portfolio_summary(portfolio_id)
+                equity = str(summary.get("total_account_value"))
+                cash_available = Decimal(str(summary.get("buying_power") or 0))
+                from app.services.paper_training_service import (
+                    cash_reserve_target,
+                    organic_entry_notional,
+                )
+
+                equity_dec = Decimal(str(summary.get("total_account_value") or 0))
+                micro_reserve_target = cash_reserve_target(equity=equity_dec)
+                micro_available_notional = organic_entry_notional(
+                    equity=equity_dec,
+                    buying_power=cash_available,
+                )
+                for position in paper.list_positions(portfolio_id):
+                    plan = paper._exit_plan_levels(portfolio_id, position.symbol)
+                    if str(plan.get("strategy_key") or "") in MICRO_STRATEGY_KEYS:
+                        micro_position_symbols.append(position.symbol)
+                closed = paper.list_closed_trades(portfolio_id, limit=200)
+                closed_trades = len(closed)
+                realized = sum(
+                    (Decimal(str(t.get("realized_pnl") or 0)) for t in closed),
+                    Decimal("0"),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        micro_live_rows = list(
+            self.db.execute(
+                select(MarketScanCandidate.strategy_key, func.count())
+                .where(
+                    MarketScanCandidate.strategy_key.in_(MICRO_STRATEGY_KEYS),
+                    MarketScanCandidate.stage == "Watching",
+                    MarketScanCandidate.evaluated_at >= now - timedelta(minutes=45),
+                )
+                .group_by(MarketScanCandidate.strategy_key)
+            )
+        )
+        micro_watching_by_strategy = {
+            str(strategy_key): int(count)
+            for strategy_key, count in micro_live_rows
+        }
+        micro_watching = sum(micro_watching_by_strategy.values())
+
+        micro_worker_health = "unknown"
+        micro_last_heartbeat: str | None = None
+        try:
+            from app.models import RegisteredService, ServiceHealthProjection
+
+            health_row = self.db.execute(
+                select(
+                    ServiceHealthProjection.status,
+                    ServiceHealthProjection.last_observed_at,
+                )
+                .join(
+                    RegisteredService,
+                    RegisteredService.id == ServiceHealthProjection.service_id,
+                )
+                .where(RegisteredService.service_key == "micro_strategy")
+            ).first()
+            if health_row is not None:
+                micro_worker_health = str(
+                    getattr(health_row[0], "value", health_row[0])
+                )
+                micro_last_heartbeat = _as_iso(health_row[1])
+        except Exception:  # noqa: BLE001
+            pass
+
+        if micro_worker_health != "healthy":
+            micro_state = "worker_unhealthy"
+            micro_why = "Dedicated Micro worker heartbeat is not healthy."
+        elif micro_position_symbols:
+            micro_state = "position_open"
+            micro_why = (
+                f"Managing {len(micro_position_symbols)} open Micro position(s)."
+            )
+        elif micro_available_notional <= 0:
+            micro_state = "cash_reserve"
+            micro_why = (
+                "Waiting for exits to free cash above the liquidity reserve."
+            )
+        elif micro_watching > 0:
+            micro_state = "watching"
+            micro_why = (
+                f"{micro_watching} fresh Micro setup(s) are watching; none has "
+                "passed confidence, memory, cost, and risk gates yet."
+            )
+        else:
+            micro_state = "scanning"
+            micro_why = "Worker is healthy; scanning for a qualifying Micro setup."
+
+        last_cycle = self.db.scalars(
+            select(MarketScanCycle)
+            .where(MarketScanCycle.status == "succeeded")
+            .order_by(desc(MarketScanCycle.completed_at))
+            .limit(1)
+        ).first()
+        markets_scanned = int(last_cycle.symbols_scanned or 0) if last_cycle else 0
+
+        enabled_keys = [
+            "sma_crossover",
+            "momentum_continuation",
+            "breakout",
+            "dip_pullback_reversal",
+            "catalyst_retest",
+            "range_mean_reversion",
+            "peak_exhaustion_protection",
+            "range_micro",
+            "trend_pullback_micro",
+        ]
+
+        return {
+            "window": "6h",
+            "markets_scanned": markets_scanned,
+            "strategies_running": len(DETECTORS) + 1,
+            "strategies_enabled": enabled_keys,
+            "setups_found": watching + ready + entered,
+            "watching": watching_live,
+            "ready": ready_live,
+            "avoided": avoided,
+            "positions_open": open_pos,
+            "trades_closed": closed_trades,
+            "realized_net_pnl": str(realized.quantize(Decimal("0.01"))),
+            "paper_equity": equity,
+            "by_strategy": by_strategy,
+            "micro_keys": sorted(MICRO_STRATEGY_KEYS),
+            "micro_status": {
+                "state": micro_state,
+                "worker_health": micro_worker_health,
+                "last_heartbeat": micro_last_heartbeat,
+                "watching": micro_watching,
+                "watching_by_strategy": micro_watching_by_strategy,
+                "position_count": len(micro_position_symbols),
+                "position_symbols": sorted(micro_position_symbols),
+                "cash_available": (
+                    str(cash_available) if cash_available is not None else None
+                ),
+                "cash_reserve_target": (
+                    str(micro_reserve_target)
+                    if micro_reserve_target is not None
+                    else None
+                ),
+                "available_notional": str(micro_available_notional),
+                "why": micro_why,
+                "paper_only": True,
+            },
+            "last_scan_at": (
+                last_cycle.completed_at.isoformat()
+                if last_cycle and last_cycle.completed_at
+                else None
+            ),
+            "paper_only": True,
         }
 
     def _founder_watch_plan(
@@ -1540,16 +1806,78 @@ class MarketScanService:
         else:
             entry_dec = Decimal(str(entry))
 
+        sk = (cand.strategy_key or STRATEGY_KEY or "").lower()
+        micro_subtype = detail.get("micro_subtype") or (
+            sk if sk in {"range_micro", "trend_pullback_micro"} else None
+        )
+        strategy_label = {
+            "sma_crossover": "SMA Crossover",
+            "momentum_continuation": "Momentum Continuation",
+            "breakout": "Breakout",
+            "dip_pullback_reversal": "Dip Pullback",
+            "catalyst_retest": "Catalyst Retest",
+            "range_mean_reversion": "Range Mean Reversion",
+            "peak_exhaustion_protection": "Peak Exhaustion Guard",
+            "range_micro": "Range Micro",
+            "trend_pullback_micro": "Trend Pullback Micro",
+        }.get(sk, sk.replace("_", " ").title() if sk else "Unknown")
+        if micro_subtype == "range_micro":
+            strategy_label = "Range Micro"
+        elif micro_subtype == "trend_pullback_micro":
+            strategy_label = "Trend Pullback Micro"
+
+        # Founder Strategy Monitor status vocabulary.
+        if detail.get("avoid") or cand.reason_code == "micro_cost_gate":
+            monitor_status = "AVOID"
+        elif cand.stage == "Watching" and cand.risk_status == "clear":
+            monitor_status = "READY" if float(cand.score or 0) >= 70 else "WATCHING"
+        elif cand.stage == "Risk Review":
+            monitor_status = "WAIT"
+        elif cand.stage == "Entered":
+            monitor_status = "TRADE"
+        elif cand.stage in {"Rejected", "Expired"}:
+            monitor_status = "AVOID"
+        else:
+            monitor_status = "SCANNING"
+
+        rr = detail.get("risk_reward")
+        if rr is None and price and stop and target and price > stop:
+            try:
+                rr = str(
+                    ((target - price) / (price - stop)).quantize(Decimal("0.01"))
+                )
+            except Exception:  # noqa: BLE001
+                rr = None
+        net_edge = detail.get("expected_net_edge_usd")
+        if net_edge is None and pot_profit is not None:
+            # Rough after-cost edge for monitor (3bps each way on planned notional).
+            try:
+                cost = default_notional * Decimal("0.0006")
+                net_edge = str((pot_profit - cost).quantize(Decimal("0.01")))
+            except Exception:  # noqa: BLE001
+                net_edge = None
+
+        entry_zone_display = None
+        ez_lo = detail.get("entry_zone_low")
+        ez_hi = detail.get("entry_zone_high")
+        if ez_lo and ez_hi:
+            entry_zone_display = f"{ez_lo}–{ez_hi}"
+        elif entry_dec is not None:
+            entry_zone_display = str(entry_dec)
+
         return {
             "id": str(cand.id),
             "symbol": cand.symbol,
             "stage_raw": cand.stage,
+            "monitor_status": monitor_status,
             "outlook": BIAS_PLAIN.get(cand.bias, cand.bias),
             "confidence": confidence_from_score(float(cand.score)),
             "score": float(cand.score),
             "why": plain_rejection(cand.reason_code, cand.reason_text),
             "waiting_for": narrative["waiting_for"],
             "narrative": narrative["statement"],
+            "primary_reason": plain_rejection(cand.reason_code, cand.reason_text)
+            or narrative["waiting_for"],
             # ISO strings — JSON-safe for EOC / RSC props
             "watching_since": since_dt.isoformat(),
             "watched_seconds": watched_seconds,
@@ -1559,9 +1887,13 @@ class MarketScanService:
             "next_eval_in_seconds": next_eval_in,
             "current_price": _dec(price),
             "entry_zone": _dec(entry_dec),
+            "entry_zone_display": entry_zone_display,
             "stop_loss": _dec(stop),
             "take_profit": _dec(target),
-            "risk_reward": detail.get("risk_reward"),
+            "risk_reward": rr,
+            "expected_net_edge_usd": (
+                str(net_edge) if net_edge is not None else None
+            ),
             "paper_capital_planned": str(default_notional),
             "max_dollar_loss": _dec(max_loss),
             "potential_dollar_profit": _dec(pot_profit),
@@ -1580,6 +1912,9 @@ class MarketScanService:
             "resistance": detail.get("resistance"),
             "timeframe": cand.timeframe,
             "strategy_key": cand.strategy_key,
+            "strategy_label": strategy_label,
+            "micro_subtype": micro_subtype,
+            "market_regime": detail.get("market_regime_hint"),
             "risk_status": cand.risk_status,
             "reason_code": cand.reason_code,
             "market_data_at": (
@@ -1805,12 +2140,18 @@ class MarketScanService:
         )
         return rows
 
-    def _decided_lines(self, *, limit: int = 12) -> list[dict[str, Any]]:
+    def _decided_lines(
+        self, *, limit: int = 12, portfolio_id: uuid.UUID | None = None
+    ) -> list[dict[str, Any]]:
         from app.services.plain_language import plain_rejection
 
         events = self.list_events(limit=80)
         out: list[dict[str, Any]] = []
         for e in events:
+            if e.component == "paper_training" and portfolio_id is not None:
+                event_portfolio_id = str((e.payload or {}).get("portfolio_id") or "")
+                if event_portfolio_id != str(portfolio_id):
+                    continue
             outcome = (e.outcome or "").lower()
             # Always surface paper enter/exit explanations.
             if outcome in {"entered", "exited"}:

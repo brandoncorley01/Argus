@@ -28,12 +28,19 @@ async function setSessionFromLogin(login: LoginResponse, setCookieLines: string[
     : [];
 
   const session = parsed.find((c) => c.name === SESSION_COOKIE);
+  // Persist across browser restarts — session cookies without maxAge caused
+  // Founder logouts overnight while Argus was still Running.
+  const maxAge = Math.max(
+    60,
+    Math.floor((Date.parse(login.expires_at) - Date.now()) / 1000) || 7 * 24 * 3600,
+  );
   if (session) {
     jar.set(SESSION_COOKIE, session.value, {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
       secure: process.env.SESSION_COOKIE_SECURE === "true",
+      maxAge,
     });
   }
 
@@ -42,6 +49,7 @@ async function setSessionFromLogin(login: LoginResponse, setCookieLines: string[
     sameSite: "lax",
     path: "/",
     secure: process.env.SESSION_COOKIE_SECURE === "true",
+    maxAge,
   });
 }
 
@@ -122,6 +130,10 @@ export async function logoutAction(): Promise<void> {
 
 export async function requireUser(): Promise<CurrentUser> {
   try {
+    // Do NOT cookies().set() here — Next.js forbids mutating cookies during
+    // Server Component render. That threw, redirected to /login, and login
+    // bounced back to /today (ERR_TOO_MANY_REDIRECTS).
+    // Session persistence: login sets maxAge; API slides expires_at on /auth/me.
     return await apiFetch<CurrentUser>("/api/v1/auth/me");
   } catch (err) {
     if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {

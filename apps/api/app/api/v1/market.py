@@ -358,20 +358,33 @@ def scan_cockpit(
     resolved_portfolio_id = portfolio_id
     try:
         if resolved_portfolio_id is None:
-            auto = db.scalars(
-                select(PaperTrainingSettings.portfolio_id).where(
-                    PaperTrainingSettings.mode == "automatic"
+            # Prefer the Founder Learning Desk — never an arbitrary "automatic"
+            # fixture book (Ops/Train) which makes Strategy Monitor look empty.
+            from app.services.paper_training_service import FOUNDER_LEARNING_DESK_NAME
+
+            founder = db.scalars(
+                select(PaperPortfolio).where(
+                    PaperPortfolio.name == FOUNDER_LEARNING_DESK_NAME
                 )
             ).first()
-            if auto is not None:
-                resolved_portfolio_id = auto
+            if founder is not None:
+                resolved_portfolio_id = founder.id
             else:
-                # Prefer newest portfolio (Founder book) over oldest fixture books.
-                newest = db.scalars(
-                    select(PaperPortfolio).order_by(PaperPortfolio.created_at.desc())
+                auto = db.scalars(
+                    select(PaperTrainingSettings.portfolio_id).where(
+                        PaperTrainingSettings.mode == "automatic"
+                    )
                 ).first()
-                if newest is not None:
-                    resolved_portfolio_id = newest.id
+                if auto is not None:
+                    resolved_portfolio_id = auto
+                else:
+                    newest = db.scalars(
+                        select(PaperPortfolio).order_by(
+                            PaperPortfolio.created_at.desc()
+                        )
+                    ).first()
+                    if newest is not None:
+                        resolved_portfolio_id = newest.id
         if resolved_portfolio_id is not None:
             try:
                 settings = PaperTrainingService(db).get_or_create_settings(

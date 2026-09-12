@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -39,7 +39,22 @@ from app.models.paper_trading import (
     SessionStatus,
 )
 from app.services.audit_service import AuditService
+
+PAPER_MARK_STALE_AFTER = timedelta(minutes=8)
+# Midnight equity baselines tolerate downtime gaps in 1m bars, but never invent
+# prices when the last trustworthy pre-midnight mark is older than this.
+DAY_EQUITY_BASELINE_MARK_MAX_AGE = timedelta(hours=48)
+DAY_EQUITY_BASELINE_MARK_FRESH = timedelta(minutes=30)
 from app.services.auth_service import AuthenticatedPrincipal
+
+PAPER_MARK_STALE_AFTER = timedelta(minutes=8)
+
+
+def total_pnl_after_reseeds(
+    *, total_value: Decimal, starting_cash: Decimal, reseed_cash_flow: Decimal
+) -> Decimal:
+    """Trading account P&L with external paper reseed cash removed."""
+    return total_value - starting_cash - reseed_cash_flow
 
 
 class PaperTradingError(Exception):
@@ -251,6 +266,25 @@ class PaperTradingService:
             or 0
         )
         net_vs_start = total_value - starting_cash
+        # Reseeds are external paper-capital injections (or removals), not trading
+        # profit. Subtract their net cash flow so resets cannot turn cumulative
+        # losses into an apparent win.
+        reseed_cash_flow = Decimal(
+            str(
+                self.db.scalar(
+                    select(func.coalesce(func.sum(PaperCashLedger.amount), 0)).where(
+                        PaperCashLedger.portfolio_id == portfolio_id,
+                        PaperCashLedger.entry_type == "learning_reseed",
+                    )
+                )
+                or 0
+            )
+        )
+        total_pnl = total_pnl_after_reseeds(
+            total_value=total_value,
+            starting_cash=starting_cash,
+            reseed_cash_flow=reseed_cash_flow,
+        )
         reseed_count = int(
             self.db.scalar(
                 select(func.count())
@@ -299,7 +333,9 @@ class PaperTradingService:
                 f"Started at ${starting_cash:.2f} paper cash. "
                 f"Now ${portfolio.cash_balance:.2f} cash + "
                 f"${committed:.2f} in open trades "
-                f"(equity ${total_value:.2f}). "
+                f"(equity ${total_value:.2f}, {net_vs_start:+.2f} vs start). "
+                f"Organic growth lane: bank partial winners, redeploy dips, "
+                f"compound size slowly — not day-to-day doubles. "
                 f"{fill_count} paper fills recorded."
             )
         elif fill_count > 0:
@@ -334,6 +370,7 @@ class PaperTradingService:
             "status": portfolio.status,
             "starting_cash": starting_cash,
             "net_vs_starting_cash": net_vs_start,
+            "total_pnl": total_pnl,
             "fill_count": fill_count,
             "order_count": order_count,
             "capital_explanation": capital_explanation,
@@ -471,10 +508,10 @@ class PaperTradingService:
                 unrealized = (mark - pos.average_cost) * pos.quantity
                 if committed > 0:
                     pnl_pct = (unrealized / committed) * Decimal("100")
-                # Stale if older than 6h
+                # Short-timeframe paper strategies require current marks.
                 if mark_at is not None:
                     age = datetime.now(UTC) - mark_at
-                    if age.total_seconds() > 6 * 3600:
+                    if age > PAPER_MARK_STALE_AFTER:
                         price_status = "stale"
             rows.append(
                 {
@@ -498,6 +535,7 @@ class PaperTradingService:
                     "strategy_version_id": (
                         last_order.strategy_version_id if last_order else None
                     ),
+                    "strategy_key": plan.get("strategy_key"),
                     "stop_loss": stop_level,
                     "take_profit": target_level,
                     "state": (
@@ -528,7 +566,14 @@ class PaperTradingService:
             .limit(1)
         ).first()
         if row is None:
-            return {"stop_loss": None, "take_profit": None, "entry_order_id": None}
+            return {
+                "stop_loss": None,
+                "take_profit": None,
+                "entry_order_id": None,
+                "initial_stop_loss": None,
+                "scaled_out": False,
+                "strategy_key": None,
+            }
         payload = row[0] or {}
         entry_order_id = row[1]
 
@@ -544,64 +589,148 @@ class PaperTradingService:
         return {
             "stop_loss": _dec("stop_loss"),
             "take_profit": _dec("take_profit"),
+            "initial_stop_loss": _dec("initial_stop_loss"),
             "entry_order_id": entry_order_id,
+            "scaled_out": bool(payload.get("scaled_out")),
+            "strategy_key": payload.get("strategy_key"),
         }
+
+    @staticmethod
+    def _linked_entry_order_id(exit_order: PaperOrder) -> uuid.UUID | None:
+        """Read the durable entry link from an automated exit idempotency key."""
+        key = str(exit_order.idempotency_key or "")
+        if not key.startswith("exit:"):
+            return None
+        try:
+            return uuid.UUID(key.rsplit(":", 1)[-1])
+        except (ValueError, TypeError):
+            return None
+
+    def list_realized_exit_legs(
+        self, portfolio_id: uuid.UUID
+    ) -> list[dict[str, Any]]:
+        """Entry-linked realized legs, net of allocated entry and exit fees.
+
+        Legacy unlinked sells are intentionally excluded instead of assigning
+        them a fabricated cost basis from positions cleared by paper reseeds.
+        """
+        _ = self.get_portfolio(portfolio_id)
+        rows = list(
+            self.db.execute(
+                select(PaperFill, PaperOrder)
+                .join(PaperOrder, PaperOrder.id == PaperFill.order_id)
+                .where(
+                    PaperOrder.portfolio_id == portfolio_id,
+                    PaperFill.side == "sell",
+                )
+                .order_by(PaperFill.filled_at.asc())
+            )
+        )
+        entry_cache: dict[uuid.UUID, PaperFill | None] = {}
+        legs: list[dict[str, Any]] = []
+        for exit_fill, exit_order in rows:
+            entry_order_id = self._linked_entry_order_id(exit_order)
+            if entry_order_id is None:
+                continue
+            if entry_order_id not in entry_cache:
+                entry_cache[entry_order_id] = self.db.scalar(
+                    select(PaperFill)
+                    .where(
+                        PaperFill.order_id == entry_order_id,
+                        PaperFill.side == "buy",
+                    )
+                    .order_by(PaperFill.filled_at.asc())
+                    .limit(1)
+                )
+            entry_fill = entry_cache[entry_order_id]
+            if (
+                entry_fill is None
+                or entry_fill.portfolio_id != portfolio_id
+                or entry_fill.symbol != exit_fill.symbol
+                or entry_fill.quantity <= 0
+            ):
+                continue
+            allocated_entry_fee = (
+                Decimal(entry_fill.fee)
+                * Decimal(exit_fill.quantity)
+                / Decimal(entry_fill.quantity)
+            )
+            exit_fee = Decimal(exit_fill.fee or 0)
+            gross = (
+                Decimal(exit_fill.price) - Decimal(entry_fill.price)
+            ) * Decimal(exit_fill.quantity)
+            net = gross - allocated_entry_fee - exit_fee
+            reason_parts = str(exit_order.idempotency_key).split(":")
+            legs.append(
+                {
+                    "fill_id": exit_fill.id,
+                    "entry_order_id": entry_order_id,
+                    "exit_order_id": exit_order.id,
+                    "symbol": exit_fill.symbol,
+                    "quantity": Decimal(exit_fill.quantity),
+                    "entry_quantity": Decimal(entry_fill.quantity),
+                    "entry_price": Decimal(entry_fill.price),
+                    "exit_price": Decimal(exit_fill.price),
+                    "gross_realized_pnl": gross,
+                    "entry_fee_allocated": allocated_entry_fee,
+                    "exit_fee": exit_fee,
+                    "realized_pnl": net,
+                    "filled_at": exit_fill.filled_at,
+                    "opened_at": entry_fill.filled_at,
+                    "holding_seconds": max(
+                        0,
+                        int(
+                            (
+                                exit_fill.filled_at - entry_fill.filled_at
+                            ).total_seconds()
+                        ),
+                    ),
+                    "exit_reason": (
+                        reason_parts[-2] if len(reason_parts) >= 2 else None
+                    ),
+                }
+            )
+        return legs
 
     def list_closed_trades(
         self, portfolio_id: uuid.UUID, *, limit: int = 5
     ) -> list[dict[str, Any]]:
-        """Recent sell fills with realized P&L from chronological replay."""
-        _ = self.get_portfolio(portfolio_id)
+        """Completed entry-linked trades with partial exits aggregated."""
         safe = min(max(limit, 1), 500)
-        all_fills = list(
-            self.db.scalars(
-                select(PaperFill)
-                .join(PaperOrder, PaperOrder.id == PaperFill.order_id)
-                .where(PaperOrder.portfolio_id == portfolio_id)
-                .order_by(PaperFill.filled_at.asc())
+        grouped: dict[uuid.UUID, dict[str, Any]] = {}
+        for leg in self.list_realized_exit_legs(portfolio_id):
+            entry_id = leg["entry_order_id"]
+            trade = grouped.setdefault(
+                entry_id,
+                {
+                    **leg,
+                    "quantity": Decimal("0"),
+                    "gross_realized_pnl": Decimal("0"),
+                    "entry_fee_allocated": Decimal("0"),
+                    "exit_fee": Decimal("0"),
+                    "realized_pnl": Decimal("0"),
+                    "exit_leg_count": 0,
+                },
             )
-        )
-        closed: list[dict[str, Any]] = []
-        # Per-symbol running position for entry attribution.
-        state: dict[str, dict[str, Any]] = {}
-        for fill in all_fills:
-            st = state.setdefault(
-                fill.symbol,
-                {"qty": Decimal("0"), "avg": Decimal("0"), "opened_at": None},
-            )
-            if fill.side == "buy":
-                new_qty = st["qty"] + fill.quantity
-                if new_qty > 0:
-                    st["avg"] = ((st["qty"] * st["avg"]) + (fill.quantity * fill.price)) / new_qty
-                st["qty"] = new_qty
-                if st["opened_at"] is None:
-                    st["opened_at"] = fill.filled_at
-            else:
-                entry = st["avg"]
-                realized = (fill.price - entry) * fill.quantity
-                opened_at = st["opened_at"]
-                holding = None
-                if opened_at is not None:
-                    holding = int((fill.filled_at - opened_at).total_seconds())
-                closed.append(
-                    {
-                        "fill_id": fill.id,
-                        "symbol": fill.symbol,
-                        "quantity": fill.quantity,
-                        "entry_price": entry,
-                        "exit_price": fill.price,
-                        "realized_pnl": realized,
-                        "filled_at": fill.filled_at,
-                        "holding_seconds": holding,
-                        "exit_reason": None,
-                    }
-                )
-                st["qty"] = st["qty"] - fill.quantity
-                if st["qty"] <= 0:
-                    st["qty"] = Decimal("0")
-                    st["avg"] = Decimal("0")
-                    st["opened_at"] = None
-        closed.reverse()
+            trade["quantity"] += leg["quantity"]
+            trade["gross_realized_pnl"] += leg["gross_realized_pnl"]
+            trade["entry_fee_allocated"] += leg["entry_fee_allocated"]
+            trade["exit_fee"] += leg["exit_fee"]
+            trade["realized_pnl"] += leg["realized_pnl"]
+            trade["exit_leg_count"] += 1
+            if leg["filled_at"] >= trade["filled_at"]:
+                trade["fill_id"] = leg["fill_id"]
+                trade["exit_order_id"] = leg["exit_order_id"]
+                trade["exit_price"] = leg["exit_price"]
+                trade["filled_at"] = leg["filled_at"]
+                trade["holding_seconds"] = leg["holding_seconds"]
+                trade["exit_reason"] = leg["exit_reason"]
+        closed = [
+            trade
+            for trade in grouped.values()
+            if trade["quantity"] >= trade["entry_quantity"]
+        ]
+        closed.sort(key=lambda trade: trade["filled_at"], reverse=True)
         return closed[:safe]
 
     def day_realized_pnl(
@@ -624,20 +753,216 @@ class PaperTradingService:
         day_start = datetime.combine(moment.date(), time.min, tzinfo=tz)
         day_end = day_start + timedelta(days=1)
         total = Decimal("0")
-        count = 0
-        for trade in self.list_closed_trades(portfolio_id, limit=500):
-            filled_at = trade.get("filled_at")
+        leg_count = 0
+        for leg in self.list_realized_exit_legs(portfolio_id):
+            filled_at = leg.get("filled_at")
             if filled_at is None:
                 continue
             if filled_at.tzinfo is None:
                 filled_at = filled_at.replace(tzinfo=UTC)
             local = filled_at.astimezone(tz)
             if day_start <= local < day_end:
-                total += Decimal(str(trade["realized_pnl"]))
-                count += 1
+                total += Decimal(str(leg["realized_pnl"]))
+                leg_count += 1
+        closed_count = 0
+        for trade in self.list_closed_trades(portfolio_id, limit=500):
+            filled_at = trade.get("filled_at")
+            if filled_at is None:
+                continue
+            if filled_at.tzinfo is None:
+                filled_at = filled_at.replace(tzinfo=UTC)
+            if day_start <= filled_at.astimezone(tz) < day_end:
+                closed_count += 1
         return {
             "today_realized_pnl": total,
-            "today_closed_trade_count": count,
+            "today_closed_trade_count": closed_count,
+            "today_realized_exit_leg_count": leg_count,
+            "pnl_basis": "entry_linked_net_after_fees",
+            "day_start": day_start.isoformat(),
+            "day_end": day_end.isoformat(),
+            "timezone": tz_name,
+        }
+
+    def day_equity_pnl(
+        self,
+        portfolio_id: uuid.UUID,
+        *,
+        tz_name: str = "America/New_York",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Mark-to-market account change since local midnight.
+
+        Reconstructs midnight cash from the immutable cash ledger and midnight
+        open quantity from verified fills after the latest prior reseed. This is
+        the honest primary daily result: realized gains cannot hide larger open
+        losses. If evidence is incomplete, returns unavailable rather than
+        fabricating a green number.
+        """
+        from datetime import time
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(tz_name)
+        moment = now.astimezone(tz) if now is not None else datetime.now(tz)
+        day_start = datetime.combine(moment.date(), time.min, tzinfo=tz)
+        day_end = day_start + timedelta(days=1)
+        start_utc = day_start.astimezone(UTC)
+
+        reset_today = self.db.scalar(
+            select(PaperCashLedger.id)
+            .where(
+                PaperCashLedger.portfolio_id == portfolio_id,
+                PaperCashLedger.entry_type.in_(
+                    ("initial_deposit", "learning_reseed")
+                ),
+                PaperCashLedger.created_at > start_utc,
+            )
+            .limit(1)
+        )
+        if reset_today is not None:
+            return {
+                "today_equity_pnl": None,
+                "baseline_account_value": None,
+                "current_account_value": None,
+                "today_realized_pnl": self.day_realized_pnl(
+                    portfolio_id, tz_name=tz_name, now=moment
+                )["today_realized_pnl"],
+                "today_mark_to_market_component": None,
+                "baseline_mark_max_age_minutes": None,
+                "pnl_basis": "unavailable_after_capital_reset",
+                "day_start": day_start.isoformat(),
+                "day_end": day_end.isoformat(),
+                "timezone": tz_name,
+            }
+
+        cash_row = self.db.scalar(
+            select(PaperCashLedger)
+            .where(
+                PaperCashLedger.portfolio_id == portfolio_id,
+                PaperCashLedger.created_at <= start_utc,
+            )
+            .order_by(PaperCashLedger.created_at.desc())
+            .limit(1)
+        )
+        if cash_row is None:
+            baseline_cash = self._starting_cash(portfolio_id)
+        else:
+            baseline_cash = Decimal(cash_row.balance_after)
+
+        prior_reseed_at = self.db.scalar(
+            select(PaperCashLedger.created_at)
+            .where(
+                PaperCashLedger.portfolio_id == portfolio_id,
+                PaperCashLedger.entry_type == "learning_reseed",
+                PaperCashLedger.created_at <= start_utc,
+            )
+            .order_by(PaperCashLedger.created_at.desc())
+            .limit(1)
+        )
+        fill_cutoff = prior_reseed_at or datetime.min.replace(tzinfo=UTC)
+        quantity_rows = list(
+            self.db.execute(
+                select(
+                    PaperFill.symbol,
+                    func.sum(
+                        case(
+                            (PaperFill.side == "buy", PaperFill.quantity),
+                            else_=-PaperFill.quantity,
+                        )
+                    ),
+                )
+                .where(
+                    PaperFill.portfolio_id == portfolio_id,
+                    PaperFill.filled_at > fill_cutoff,
+                    PaperFill.filled_at <= start_utc,
+                )
+                .group_by(PaperFill.symbol)
+            )
+        )
+
+        baseline_market_value = Decimal("0")
+        baseline_complete = True
+        oldest_mark_age = timedelta(0)
+        for symbol, raw_quantity in quantity_rows:
+            quantity = Decimal(raw_quantity or 0)
+            if quantity <= 0:
+                continue
+            instrument = self.db.scalar(
+                select(MarketInstrument).where(
+                    MarketInstrument.symbol == str(symbol).upper()
+                )
+            )
+            if instrument is None:
+                baseline_complete = False
+                break
+            bars = list(
+                self.db.scalars(
+                    select(MarketOhlcvBar)
+                    .where(
+                        MarketOhlcvBar.instrument_id == instrument.id,
+                        MarketOhlcvBar.close_time <= start_utc,
+                    )
+                    .order_by(MarketOhlcvBar.close_time.desc())
+                    .limit(80)
+                )
+            )
+            mark_row = next(
+                (
+                    bar
+                    for bar in bars
+                    if self._bar_is_trustworthy(str(symbol), bar)
+                    and start_utc - bar.close_time
+                    <= DAY_EQUITY_BASELINE_MARK_MAX_AGE
+                ),
+                None,
+            )
+            if mark_row is None:
+                baseline_complete = False
+                break
+            mark_age = start_utc - mark_row.close_time
+            if mark_age > oldest_mark_age:
+                oldest_mark_age = mark_age
+            baseline_market_value += quantity * Decimal(mark_row.close)
+
+        current = self.portfolio_summary(portfolio_id)
+        current_value = Decimal(str(current["total_account_value"]))
+        realized = Decimal(
+            str(
+                self.day_realized_pnl(
+                    portfolio_id, tz_name=tz_name, now=moment
+                )["today_realized_pnl"]
+            )
+        )
+        if not baseline_complete or not bool(current.get("marks_complete")):
+            return {
+                "today_equity_pnl": None,
+                "baseline_account_value": None,
+                "current_account_value": current_value,
+                "today_realized_pnl": realized,
+                "today_mark_to_market_component": None,
+                "baseline_mark_max_age_minutes": None,
+                "pnl_basis": "unavailable_incomplete_marks",
+                "day_start": day_start.isoformat(),
+                "day_end": day_end.isoformat(),
+                "timezone": tz_name,
+            }
+
+        baseline_value = baseline_cash + baseline_market_value
+        equity_pnl = current_value - baseline_value
+        aged = oldest_mark_age > DAY_EQUITY_BASELINE_MARK_FRESH
+        return {
+            "today_equity_pnl": equity_pnl,
+            "baseline_account_value": baseline_value,
+            "current_account_value": current_value,
+            "today_realized_pnl": realized,
+            "today_mark_to_market_component": equity_pnl - realized,
+            "baseline_mark_max_age_minutes": int(
+                oldest_mark_age.total_seconds() // 60
+            ),
+            "pnl_basis": (
+                "account_equity_change_since_midnight_open_marks_aged"
+                if aged
+                else "account_equity_change_since_midnight"
+            ),
             "day_start": day_start.isoformat(),
             "day_end": day_end.isoformat(),
             "timezone": tz_name,

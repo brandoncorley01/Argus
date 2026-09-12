@@ -251,3 +251,24 @@ def test_live_readiness_thresholds(db_session: Session) -> None:
         profit_factor=Decimal("1.2"),
     )
     assert mid["status"] == "Early Testing"
+
+    losing_overall = svc._live_readiness(
+        closed_count=25,
+        win_rate=Decimal("0.55"),
+        feedback_count=8,
+        max_dd=Decimal("10"),
+        profit_factor=Decimal("1.2"),
+        total_pnl=Decimal("-12.50"),
+    )
+    assert losing_overall["status"] == "Needs Improvement"
+    assert "account equity has not grown" in losing_overall["detail"]
+
+    flat_overall = svc._live_readiness(
+        closed_count=25,
+        win_rate=Decimal("0.55"),
+        feedback_count=8,
+        max_dd=Decimal("10"),
+        profit_factor=Decimal("1.2"),
+        total_pnl=Decimal("0"),
+    )
+    assert flat_overall["status"] == "Needs Improvement"

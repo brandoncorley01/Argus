@@ -31,12 +31,14 @@ export type CockpitWatch = {
   id: string;
   symbol: string;
   stage_raw: string;
+  monitor_status?: string;
   outlook: string;
   confidence: string;
   score: number;
   why: string;
   waiting_for: string;
   narrative: string;
+  primary_reason?: string;
   watching_since: string;
   watched_seconds: number;
   expires_at: string;
@@ -45,9 +47,11 @@ export type CockpitWatch = {
   next_eval_in_seconds: number | null;
   current_price: string | null;
   entry_zone: string | null;
+  entry_zone_display?: string | null;
   stop_loss: string | null;
   take_profit: string | null;
-  risk_reward: number | null;
+  risk_reward: number | string | null;
+  expected_net_edge_usd?: string | null;
   paper_capital_planned: string;
   max_dollar_loss: string | null;
   potential_dollar_profit: string | null;
@@ -58,6 +62,9 @@ export type CockpitWatch = {
   resistance: number | null;
   timeframe: string;
   strategy_key: string;
+  strategy_label?: string;
+  micro_subtype?: string | null;
+  market_regime?: string | null;
   risk_status: string;
   reason_code: string | null;
   market_data_at: string | null;
@@ -79,6 +86,48 @@ export type CockpitMonitorRow = {
   last_analyzed_at: string | null;
   analyzed_age_seconds: number | null;
   focus: boolean;
+};
+
+export type StrategyActivity = {
+  window?: string;
+  markets_scanned: number;
+  strategies_running: number;
+  strategies_enabled?: string[];
+  setups_found: number;
+  watching: number;
+  ready: number;
+  avoided?: number;
+  positions_open: number;
+  trades_closed: number;
+  realized_net_pnl: string;
+  paper_equity: string | null;
+  by_strategy?: Record<
+    string,
+    {
+      evaluations?: number;
+      watching?: number;
+      ready?: number;
+      avoided?: number;
+      entered?: number;
+    }
+  >;
+  micro_keys?: string[];
+  micro_status?: {
+    state: "worker_unhealthy" | "position_open" | "cash_reserve" | "watching" | "scanning";
+    worker_health: string;
+    last_heartbeat: string | null;
+    watching: number;
+    watching_by_strategy?: Record<string, number>;
+    position_count: number;
+    position_symbols: string[];
+    cash_available: string | null;
+    cash_reserve_target: string | null;
+    available_notional: string;
+    why: string;
+    paper_only: boolean;
+  };
+  last_scan_at?: string | null;
+  paper_only?: boolean;
 };
 
 export type CockpitSnapshot = {
@@ -105,6 +154,7 @@ export type CockpitSnapshot = {
   next_step: string | null;
   wall: CockpitWallTile[];
   watches: CockpitWatch[];
+  strategy_activity?: StrategyActivity | null;
   monitor?: CockpitMonitorRow[];
   doing: Array<{ text: string; tone: string }>;
   decided: Array<{

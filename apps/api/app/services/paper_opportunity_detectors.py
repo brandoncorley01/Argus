@@ -54,11 +54,11 @@ def _sma(values: list[Decimal], n: int) -> Decimal | None:
 
 # Keep detector geometry aligned with paper-training economics:
 # microscopic stops produced penny take-profits on the learning desk.
-_MIN_STOP_DISTANCE_PCT = Decimal("0.02")  # 2.0%
+_MIN_STOP_DISTANCE_PCT = Decimal("0.015")  # 1.5%
 
 
 def _rr_levels(
-    price: Decimal, *, stop: Decimal, min_r: Decimal = Decimal("1.5")
+    price: Decimal, *, stop: Decimal, min_r: Decimal = Decimal("2")
 ) -> tuple[Decimal, Decimal]:
     min_risk = price * _MIN_STOP_DISTANCE_PCT
     if stop >= price:
@@ -214,6 +214,93 @@ def detect_range_mean_reversion(bars: Sequence[Any]) -> DetectorSignal | None:
     )
 
 
+def detect_catalyst_retest(bars: Sequence[Any]) -> DetectorSignal | None:
+    """Spike + volume surge → pullback off highs → reclaim (paper playbook).
+
+    Mimics: coin spikes ~6–12%, volume elevates, price cools 2–8% from the
+    impulse high, then reclaims short support. Does not invent news — scan
+    detail tags the geometry so auto-enter can consult memory + optional headlines.
+    """
+    if len(bars) < 32:
+        return None
+    closes = _closes(bars)
+    highs = _highs(bars)
+    lows = _lows(bars)
+    vols = _vols(bars)
+    price = closes[-1]
+    if price <= 0:
+        return None
+
+    lookback = closes[-36:]
+    base = min(lookback[:-8]) if len(lookback) > 8 else lookback[0]
+    if base <= 0:
+        return None
+    impulse_high = max(highs[-28:])
+    spike_pct = (impulse_high - base) / base
+    # ~6–18% impulse (covers "coin spikes ~9%" without requiring exact 9%).
+    if spike_pct < Decimal("0.06") or spike_pct > Decimal("0.18"):
+        return None
+
+    dist_from_high = (impulse_high - price) / impulse_high
+    # Still near the move, but not buying the tip — wait for retest zone.
+    if dist_from_high < Decimal("0.015") or dist_from_high > Decimal("0.08"):
+        return None
+
+    # Volume surge on the impulse window vs prior baseline.
+    impulse_vols = vols[-16:]
+    prior_vols = vols[-36:-16] if len(vols) >= 36 else vols[:-16]
+    if not prior_vols:
+        return None
+    avg_impulse = sum(impulse_vols, Decimal("0")) / Decimal(len(impulse_vols))
+    avg_prior = sum(prior_vols, Decimal("0")) / Decimal(len(prior_vols))
+    if avg_prior <= 0 or avg_impulse < avg_prior * Decimal("1.6"):
+        return None
+    rel_vol = avg_impulse / avg_prior
+
+    # Retest confirmation: bounce off a recent swing low + reclaim 3-bar mid.
+    retest_low = min(lows[-8:])
+    bounce = (price - retest_low) / retest_low if retest_low > 0 else Decimal("0")
+    if bounce < Decimal("0.002") or bounce > Decimal("0.04"):
+        return None
+    mid = sum(closes[-4:-1], Decimal("0")) / Decimal("3")
+    if price < mid:
+        return None
+    # Structure still constructive vs 12-bar SMA.
+    slow = _sma(closes, 12)
+    if slow is None or price < slow * Decimal("0.995"):
+        return None
+
+    stop = retest_low * Decimal("0.997")
+    stop, target = _rr_levels(price, stop=stop)
+    score = Decimal("76") + min(Decimal("14"), (spike_pct - Decimal("0.06")) * Decimal("80"))
+    if rel_vol >= Decimal("2"):
+        score += Decimal("4")
+    return DetectorSignal(
+        strategy_key="catalyst_retest",
+        bias="Bullish",
+        score=min(Decimal("96"), score),
+        reason_code=None,
+        reason_text=(
+            "Impulse + volume surge cooled into a retest; reclaiming short support "
+            "(paper catalyst-retest playbook)."
+        ),
+        stop_loss=stop,
+        take_profit=target,
+        pattern="catalyst_retest",
+        detail={
+            "spike_pct": str(spike_pct),
+            "dist_from_high": str(dist_from_high),
+            "relative_volume": str(rel_vol),
+            "relative_volume_high": True,
+            "impulse_high": str(impulse_high),
+            "retest_low": str(retest_low),
+            "playbook": "catalyst_retest",
+            "discovery_opportunity_class": "pullback_retest",
+            "trade_pattern": "catalyst_retest",
+        },
+    )
+
+
 def detect_peak_exhaustion_protection(bars: Sequence[Any]) -> DetectorSignal | None:
     """Protection signal: mark bullish exhaustion as Neutral/Rejected-style watch."""
     if len(bars) < 25:
@@ -258,197 +345,246 @@ def detect_peak_exhaustion_protection(bars: Sequence[Any]) -> DetectorSignal | N
     )
 
 
-def _rsi(closes: list[Decimal], period: int = 14) -> Decimal | None:
-    if period < 1 or len(closes) < period + 1:
+# --- Micro Trading (paper only): smaller repeatable edges, cost-gated -----------
+
+MICRO_STRATEGY_KEYS = frozenset({"range_micro", "trend_pullback_micro"})
+# Round-trip simulated cost (matches trading_intelligence SIMULATED_COST_BPS=3).
+_MICRO_COST_BPS_RT = Decimal("6")
+_MICRO_ASSUMED_NOTIONAL = Decimal("100")
+_MICRO_MIN_NET_USD = Decimal("1.50")
+_MICRO_MIN_R = Decimal("1.5")
+
+
+def _micro_net_edge_usd(
+    *, price: Decimal, target: Decimal, notional: Decimal = _MICRO_ASSUMED_NOTIONAL
+) -> Decimal | None:
+    if price <= 0 or target <= price or notional <= 0:
         return None
-    gains = Decimal("0")
-    losses = Decimal("0")
-    window = closes[-(period + 1) :]
-    for a, b in zip(window[:-1], window[1:], strict=True):
-        delta = b - a
-        if delta >= 0:
-            gains += delta
-        else:
-            losses += -delta
-    avg_gain = gains / Decimal(period)
-    avg_loss = losses / Decimal(period)
-    if avg_loss == 0:
-        return Decimal("100")
-    rs = avg_gain / avg_loss
-    return Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
+    gross = notional * ((target - price) / price)
+    cost = notional * (_MICRO_COST_BPS_RT / Decimal("10000"))
+    return (gross - cost).quantize(Decimal("0.01"))
 
 
-def detect_grid_trading(bars: Sequence[Any]) -> DetectorSignal | None:
-    """Sideways range: buy near lower grid levels (quiet-market family)."""
+def _micro_abnormal_vol(bars: Sequence[Any], price: Decimal) -> bool:
+    """Suppress micro during catalyst-like / abnormal short-term ranges."""
+    if price <= 0 or len(bars) < 20:
+        return True
+    highs = _highs(bars)[-20:]
+    lows = _lows(bars)[-20:]
+    width = (max(highs) - min(lows)) / price
+    return width > Decimal("0.08")
+
+
+def _micro_strong_breakout(bars: Sequence[Any]) -> bool:
+    """Primary breakout/momentum owns the tape — micro must not sell into it."""
+    if len(bars) < 25:
+        return False
+    closes = _closes(bars)
+    highs = _highs(bars)
+    vols = _vols(bars)
+    price = closes[-1]
+    prior_high = max(highs[-21:-1]) if len(highs) >= 22 else max(highs[:-1])
+    if price <= prior_high:
+        return False
+    avg_vol = _sma(vols[:-1], 15)
+    if avg_vol and vols[-1] >= avg_vol * Decimal("1.4"):
+        return True
+    ret5 = (closes[-1] - closes[-6]) / closes[-6] if closes[-6] else Decimal("0")
+    return ret5 >= Decimal("0.012")
+
+
+def detect_range_micro(bars: Sequence[Any]) -> DetectorSignal | None:
+    """RANGE MICRO: buy confirmed dips near local support in a quiet range."""
     if len(bars) < 30:
+        return None
+    if _micro_abnormal_vol(bars, _closes(bars)[-1]):
+        return None
+    if _micro_strong_breakout(bars):
         return None
     closes = _closes(bars)
     highs = _highs(bars)
     lows = _lows(bars)
+    vols = _vols(bars)
     price = closes[-1]
-    window_h = max(highs[-24:])
-    window_l = min(lows[-24:])
+    if price <= 0:
+        return None
+    window_h = max(highs[-16:])
+    window_l = min(lows[-16:])
     width = window_h - window_l
-    if width <= 0 or price <= 0:
+    if width <= 0:
         return None
     width_pct = width / price
-    # Grid needs a usable band that is not a strong trend.
-    if width_pct < Decimal("0.008") or width_pct > Decimal("0.06"):
+    # Quiet oscillating range — not a trend day.
+    if width_pct < Decimal("0.008") or width_pct > Decimal("0.035"):
         return None
-    ret = (closes[-1] - closes[-24]) / closes[-24] if closes[-24] else Decimal("0")
-    if abs(ret) > Decimal("0.025"):
-        return None
-    # Fire when price is in the lower 40% of the grid.
-    level = (price - window_l) / width
-    if level > Decimal("0.40"):
-        return None
-    stop = window_l * Decimal("0.997")
-    stop, target = _rr_levels(price, stop=stop)
-    # Prefer target toward mid/upper grid when it still clears 2R.
+    # Flat-ish mid: 12-bar SMA near range midpoint.
     mid = (window_h + window_l) / Decimal("2")
-    target = max(target, mid)
-    score = Decimal("70") + (Decimal("0.40") - level) * Decimal("40")
+    slow = _sma(closes, 12)
+    if slow is None or abs(slow - mid) / price > Decimal("0.012"):
+        return None
+    lower = window_l + (width * Decimal("0.28"))
+    if price > lower:
+        return None
+    # Confirmation: bounce off local low + volume not collapsing.
+    retest_low = min(lows[-5:])
+    bounce = (price - retest_low) / retest_low if retest_low > 0 else Decimal("0")
+    if bounce < Decimal("0.0015") or bounce > Decimal("0.012"):
+        return None
+    avg_vol = _sma(vols[:-1], 12)
+    if avg_vol and vols[-1] < avg_vol * Decimal("0.45"):
+        return None
+    stop = window_l * Decimal("0.996")
+    stop, min_target = _rr_levels(price, stop=stop, min_r=_MICRO_MIN_R)
+    # Sell into local strength — mid / upper third, never inventing a top.
+    strength = window_l + (width * Decimal("0.72"))
+    target = max(min_target, min(strength, mid + (width * Decimal("0.15"))))
+    if target <= price:
+        return None
+    net = _micro_net_edge_usd(price=price, target=target)
+    if net is None or net < _MICRO_MIN_NET_USD:
+        return DetectorSignal(
+            strategy_key="range_micro",
+            bias="Neutral",
+            score=Decimal("35"),
+            reason_code="micro_cost_gate",
+            reason_text=(
+                "Range micro geometry present but expected net edge after costs "
+                "is too small — no trade."
+            ),
+            stop_loss=stop,
+            take_profit=target,
+            pattern="micro_range",
+            detail={
+                "micro_subtype": "range_micro",
+                "market_regime_hint": "quiet",
+                "expected_net_edge_usd": str(net) if net is not None else None,
+                "cost_bps_rt": str(_MICRO_COST_BPS_RT),
+                "paper_only": True,
+                "avoid": True,
+            },
+        )
+    rr = (target - price) / (price - stop) if price > stop else None
     return DetectorSignal(
-        strategy_key="grid_trading",
+        strategy_key="range_micro",
         bias="Bullish",
-        score=min(Decimal("92"), score),
+        score=Decimal("66"),
         reason_code=None,
-        reason_text="Quiet range — grid buy near the lower band.",
+        reason_text=(
+            "Range micro: confirmed dip near support; targeting local strength "
+            f"(est. net ${net} after costs)."
+        ),
         stop_loss=stop,
         take_profit=target,
-        pattern="grid",
+        pattern="micro_range",
         detail={
+            "micro_subtype": "range_micro",
+            "market_regime_hint": "quiet",
             "range_high": str(window_h),
             "range_low": str(window_l),
-            "grid_level": str(level),
-            "width_pct": str(width_pct),
-            "family": "grid",
+            "entry_zone_low": str(window_l),
+            "entry_zone_high": str(lower),
+            "expected_net_edge_usd": str(net),
+            "risk_reward": str(rr.quantize(Decimal("0.01"))) if rr else None,
+            "cost_bps_rt": str(_MICRO_COST_BPS_RT),
+            "paper_only": True,
+            "playbook": "range_micro",
         },
     )
 
 
-def detect_dca_dip(bars: Sequence[Any]) -> DetectorSignal | None:
-    """DCA safety-order style: accumulate after a verified dip from recent peak."""
+def detect_trend_pullback_micro(bars: Sequence[Any]) -> DetectorSignal | None:
+    """TREND MICRO: in a bullish trend, buy a qualified short pullback."""
     if len(bars) < 30:
         return None
     closes = _closes(bars)
     price = closes[-1]
-    peak = max(closes[-20:])
-    if peak <= 0 or price >= peak:
+    if price <= 0 or _micro_abnormal_vol(bars, price):
         return None
-    dip = (peak - price) / peak
-    if dip < Decimal("0.012") or dip > Decimal("0.15"):
+    if _micro_strong_breakout(bars):
         return None
-    # Prefer dips that have started to stabilize (small bounce off local low).
-    recent_low = min(_lows(bars)[-5:])
-    bounce = (price - recent_low) / recent_low if recent_low else Decimal("0")
-    if bounce < Decimal("0.0005"):
+    highs = _highs(bars)
+    lows = _lows(bars)
+    vols = _vols(bars)
+    fast = _sma(closes, 5)
+    slow = _sma(closes, 12)
+    if fast is None or slow is None or fast <= slow:
         return None
-    stop = recent_low * Decimal("0.995")
-    stop, target = _rr_levels(price, stop=stop)
-    score = Decimal("66") + min(Decimal("20"), dip * Decimal("200"))
+    # Established uptrend: price above slow SMA and higher swing structure.
+    if price < slow:
+        return None
+    swing_lows = lows[-12:]
+    rising = sum(1 for i in range(1, len(swing_lows)) if swing_lows[i] >= swing_lows[i - 1])
+    if rising < 5:
+        return None
+    # Pullback: recent dip vs local high, not a breakdown.
+    local_high = max(highs[-10:])
+    pullback = (local_high - price) / local_high if local_high > 0 else Decimal("0")
+    if pullback < Decimal("0.004") or pullback > Decimal("0.025"):
+        return None
+    # Confirmation: reclaim short mid after the dip.
+    mid3 = sum(closes[-4:-1], Decimal("0")) / Decimal("3")
+    if price < mid3:
+        return None
+    bounce_low = min(lows[-6:])
+    bounce = (price - bounce_low) / bounce_low if bounce_low > 0 else Decimal("0")
+    if bounce < Decimal("0.001") or bounce > Decimal("0.015"):
+        return None
+    avg_vol = _sma(vols[:-1], 12)
+    if avg_vol and vols[-1] < avg_vol * Decimal("0.4"):
+        return None
+    stop = bounce_low * Decimal("0.995")
+    stop, min_target = _rr_levels(price, stop=stop, min_r=_MICRO_MIN_R)
+    # Exit into renewed strength toward recent high / modest extension.
+    strength = local_high
+    target = max(min_target, min(strength, price + (price - stop) * _MICRO_MIN_R))
+    if target <= price:
+        return None
+    net = _micro_net_edge_usd(price=price, target=target)
+    if net is None or net < _MICRO_MIN_NET_USD:
+        return DetectorSignal(
+            strategy_key="trend_pullback_micro",
+            bias="Neutral",
+            score=Decimal("35"),
+            reason_code="micro_cost_gate",
+            reason_text=(
+                "Trend pullback micro seen but net edge after costs is insufficient."
+            ),
+            stop_loss=stop,
+            take_profit=target,
+            pattern="micro_trend_pullback",
+            detail={
+                "micro_subtype": "trend_pullback_micro",
+                "market_regime_hint": "trend_up",
+                "expected_net_edge_usd": str(net) if net is not None else None,
+                "cost_bps_rt": str(_MICRO_COST_BPS_RT),
+                "paper_only": True,
+                "avoid": True,
+            },
+        )
+    rr = (target - price) / (price - stop) if price > stop else None
     return DetectorSignal(
-        strategy_key="dca",
+        strategy_key="trend_pullback_micro",
         bias="Bullish",
-        score=min(Decimal("90"), score),
+        score=Decimal("67"),
         reason_code=None,
-        reason_text="Dip from recent peak — DCA safety-order style average-down watch.",
+        reason_text=(
+            "Trend pullback micro: bullish structure, confirmed dip; "
+            f"exit into strength (est. net ${net} after costs)."
+        ),
         stop_loss=stop,
         take_profit=target,
-        pattern="dca_dip",
+        pattern="micro_trend_pullback",
         detail={
-            "peak": str(peak),
-            "dip_pct": str(dip),
-            "bounce": str(bounce),
-            "family": "dca",
-        },
-    )
-
-
-def detect_trend_momentum(bars: Sequence[Any]) -> DetectorSignal | None:
-    """RSI + short/long SMA proxy for MACD-style momentum in strong trends."""
-    if len(bars) < 35:
-        return None
-    closes = _closes(bars)
-    price = closes[-1]
-    rsi = _rsi(closes, 14)
-    fast = _sma(closes, 12)
-    slow = _sma(closes, 26)
-    if rsi is None or fast is None or slow is None:
-        return None
-    if rsi < Decimal("50") or fast <= slow:
-        return None
-    ret8 = (closes[-1] - closes[-9]) / closes[-9] if closes[-9] else Decimal("0")
-    if ret8 < Decimal("0.002"):
-        return None
-    stop = min(_lows(bars)[-12:])
-    stop, target = _rr_levels(price, stop=stop)
-    score = Decimal("70") + min(Decimal("18"), (rsi - Decimal("50")) * Decimal("0.8"))
-    return DetectorSignal(
-        strategy_key="trend_momentum",
-        bias="Bullish",
-        score=min(Decimal("95"), score),
-        reason_code=None,
-        reason_text="RSI and trend momentum aligned for a directional long watch.",
-        stop_loss=stop,
-        take_profit=target,
-        pattern="trend_momentum",
-        detail={
-            "rsi": str(rsi),
-            "fast_sma": str(fast),
-            "slow_sma": str(slow),
-            "ret8": str(ret8),
-            "family": "trend_momentum",
-        },
-    )
-
-
-def detect_cross_venue_arb(bars: Sequence[Any]) -> DetectorSignal | None:
-    """Fire only when bars carry a verified secondary venue close — never invent spreads."""
-    if len(bars) < 5:
-        return None
-    last = bars[-1]
-    secondary = None
-    price_raw: Any = None
-    if isinstance(last, dict):
-        secondary = last.get("secondary_close")
-        price_raw = last.get("close")
-    else:
-        secondary = getattr(last, "secondary_close", None)
-        detail = getattr(last, "detail", None)
-        if secondary is None and isinstance(detail, dict):
-            secondary = detail.get("secondary_close")
-        price_raw = getattr(last, "close", None)
-    if secondary is None or price_raw is None:
-        return None
-    try:
-        other = Decimal(str(secondary))
-        price = Decimal(str(price_raw))
-    except Exception:  # noqa: BLE001
-        return None
-    if price <= 0 or other <= 0:
-        return None
-    spread_bps = ((other - price) / price) * Decimal("10000")
-    if spread_bps < Decimal("15"):
-        return None
-    stop = price * Decimal("0.985")
-    stop, target = _rr_levels(price, stop=stop)
-    score = Decimal("75") + min(Decimal("15"), spread_bps / Decimal("4"))
-    return DetectorSignal(
-        strategy_key="cross_venue_arb",
-        bias="Bullish",
-        score=min(Decimal("94"), score),
-        reason_code=None,
-        reason_text="Verified cross-venue discount on primary vs secondary close.",
-        stop_loss=stop,
-        take_profit=target,
-        pattern="cross_venue_arb",
-        detail={
-            "primary_close": str(price),
-            "secondary_close": str(other),
-            "spread_bps": str(spread_bps),
-            "family": "arbitrage",
-            "live_execution": False,
+            "micro_subtype": "trend_pullback_micro",
+            "market_regime_hint": "trend_up",
+            "local_high": str(local_high),
+            "entry_zone_low": str(bounce_low),
+            "entry_zone_high": str(price),
+            "expected_net_edge_usd": str(net),
+            "risk_reward": str(rr.quantize(Decimal("0.01"))) if rr else None,
+            "cost_bps_rt": str(_MICRO_COST_BPS_RT),
+            "paper_only": True,
+            "playbook": "trend_pullback_micro",
         },
     )
 
@@ -457,12 +593,11 @@ DETECTORS = (
     detect_momentum_continuation,
     detect_breakout,
     detect_dip_pullback_reversal,
+    detect_catalyst_retest,
     detect_range_mean_reversion,
     detect_peak_exhaustion_protection,
-    detect_grid_trading,
-    detect_dca_dip,
-    detect_trend_momentum,
-    detect_cross_venue_arb,
+    detect_range_micro,
+    detect_trend_pullback_micro,
 )
 
 

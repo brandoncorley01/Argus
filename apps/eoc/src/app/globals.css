@@ -1961,6 +1961,97 @@ table.data th {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
+.strategy-monitor-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.penny-strategy-indicator {
+  margin: 0.65rem 0 0.85rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-left: 4px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 7%, var(--paper-elevated));
+}
+.penny-strategy-indicator.is-healthy {
+  border-color: color-mix(in srgb, var(--ok) 38%, var(--line));
+  border-left-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 6%, var(--paper-elevated));
+}
+.penny-strategy-indicator.is-unhealthy {
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--line));
+  border-left-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 6%, var(--paper-elevated));
+}
+.strategy-monitor-by {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.strategy-monitor-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.strategy-monitor-row {
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+.strategy-monitor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+}
+.strategy-monitor-strategy {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.strategy-monitor-badge {
+  margin-left: auto;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 0.1rem 0.4rem;
+}
+.strategy-monitor-row.status-ready .strategy-monitor-badge,
+.strategy-monitor-row.status-trade .strategy-monitor-badge {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+  color: var(--ok);
+}
+.strategy-monitor-row.status-avoid .strategy-monitor-badge {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--line));
+  color: var(--bad);
+}
+.strategy-monitor-row.status-wait .strategy-monitor-badge,
+.strategy-monitor-row.status-watching .strategy-monitor-badge {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+  color: var(--warn);
+}
+.strategy-monitor-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.strategy-monitor-why {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+}
+
 .desk-activity-boards {
   margin-top: 0;
 }

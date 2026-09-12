@@ -30,3 +30,4 @@ echo.
 start "" "http://127.0.0.1:3000/today"
 timeout /t 12 >nul
 exit /b 0
+

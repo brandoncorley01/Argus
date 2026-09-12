@@ -36,6 +36,7 @@ class AuthenticatedPrincipal:
     user: User
     session: AuthSession
     roles: frozenset[InstitutionalRole]
+    session_renewed: bool = False
 
 
 def _utcnow() -> datetime:
@@ -211,13 +212,26 @@ class AuthService:
 
         roles = frozenset(role.role for role in row.user.roles)
         row.last_seen_at = now
+        # Sliding TTL: while Founder keeps Home open / API answers, do not
+        # force re-login every absolute SESSION_TTL_HOURS window.
+        ttl = timedelta(hours=self._settings.session_ttl_hours)
+        target_expiry = now + ttl
+        renewed = False
+        if row.expires_at < target_expiry - timedelta(hours=1):
+            row.expires_at = target_expiry
+            renewed = True
         self._db.add(row)
         try:
             self._db.commit()
         except Exception:
             self._db.rollback()
             raise AuthError("Authentication subsystem unavailable") from None
-        return AuthenticatedPrincipal(user=row.user, session=row, roles=roles)
+        return AuthenticatedPrincipal(
+            user=row.user,
+            session=row,
+            roles=roles,
+            session_renewed=renewed,
+        )
 
     def validate_csrf(self, principal: AuthenticatedPrincipal, csrf_token: str | None) -> None:
         if not csrf_token or not tokens_match(

@@ -1,0 +1,43 @@
+START ARGUS AFTER A COMPUTER RESTART
+====================================
+
+Current Argus Build:  live-monitor-v2.96
+This folder starts THIS PC's Argus. It does not download GitHub 2.76.
+
+You do not need PowerShell, GitHub, or Cursor.
+
+
+EASIEST (one click)
+-------------------
+Double-click:  0-AFTER-RESTART-START-HERE
+
+That opens Docker if needed, then boots Argus without resetting to GitHub.
+If Docker asks you to sign in, sign in and wait until it says Running.
+
+Home should open at:
+  http://127.0.0.1:3000/today
+
+Sign in. Confirm Build: live-monitor-v2.96
+Hard-refresh once (Ctrl+F5) if the chip still looks old.
+
+
+OR DO IT IN 3 SMALL STEPS
+-------------------------
+1. Double-click:  1-Open-Docker
+   Sign in if it asks. Wait until Docker Desktop says Running.
+
+2. Double-click:  2-Start-Argus
+   Wait until the window says Boot finished.
+
+3. Double-click:  3-Open-Home
+   Sign in. Confirm Build: live-monitor-v2.96
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- Docker not Running yet: finish step 1, then try step 2 again.
+- Home says "refused to connect": wait 30 seconds, then 3-Open-Home again.
+- Build still says 2.76: you used Start-Argus.cmd (GitHub reset). Use this
+  folder or Boot-Argus.cmd inside Desktop\Argus instead, then Ctrl+F5.
+
+Paper funds are never real money. Live trading stays off.

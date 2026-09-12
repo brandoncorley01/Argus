@@ -93,6 +93,10 @@ export async function POST(request: Request) {
   const parsed = parseSetCookieHeaders(upstream.headers);
   const session = parsed.find((c) => c.name === SESSION_COOKIE);
   const secure = process.env.SESSION_COOKIE_SECURE === "true";
+  const maxAge = Math.max(
+    60,
+    Math.floor((Date.parse(login.expires_at) - Date.now()) / 1000) || 7 * 24 * 3600,
+  );
 
   const res = NextResponse.json({ ok: true, message: "Signed in." });
   if (session) {
@@ -101,6 +105,7 @@ export async function POST(request: Request) {
       sameSite: "lax",
       path: "/",
       secure,
+      maxAge,
     });
   }
   res.cookies.set(CSRF_COOKIE, login.csrf_token, {
@@ -108,6 +113,7 @@ export async function POST(request: Request) {
     sameSite: "lax",
     path: "/",
     secure,
+    maxAge,
   });
   return res;
 }

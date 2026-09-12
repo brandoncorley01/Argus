@@ -6,6 +6,7 @@ market-data jobs. Never enables live trading.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import sys
@@ -14,7 +15,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-from arq import cron
 from arq.connections import RedisSettings
 
 _API_ROOT = Path(__file__).resolve().parents[2] / "apps" / "api"
@@ -226,11 +226,15 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
                 for portfolio_id in training.iter_automation_portfolio_ids():
                     try:
                         exits = training.evaluate_paper_exits(
-                            portfolio_id=portfolio_id, actor=None
+                            portfolio_id=portfolio_id,
+                            actor=None,
+                            excluded_strategy_keys=set(MICRO_STRATEGY_KEYS),
                         )
                         auto_exits += len(exits)
                         opened = training.maybe_auto_enter_from_scan(
-                            portfolio_id=portfolio_id, actor=None
+                            portfolio_id=portfolio_id,
+                            actor=None,
+                            excluded_strategy_keys=set(MICRO_STRATEGY_KEYS),
                         )
                         auto_opened += len(opened)
                         dca_opened = training.maybe_interval_dca(
@@ -306,11 +310,15 @@ async def run_market_scan_cycle(ctx: dict[str, Any]) -> dict[str, Any]:
 
         return summary
 
-    return _run_logged(
-        ctx,
-        component=OperationalComponent.MARKET_DATA,
-        label="market scan cycle",
-        fn=_cycle,
+    # Sync Coinbase/DB work must not block the ARQ event loop — otherwise
+    # minute scan crons queue for 5–10 minutes behind discovery/refresh.
+    return await asyncio.to_thread(
+        lambda: _run_logged(
+            ctx,
+            component=OperationalComponent.MARKET_DATA,
+            label="market scan cycle",
+            fn=_cycle,
+        )
     )
 
 
@@ -325,7 +333,8 @@ async def run_market_discovery(ctx: dict[str, Any]) -> dict[str, Any]:
 
             try:
                 snap = MarketDiscoveryService(session).run_discovery_cycle(
-                    refresh_prices=True
+                    # Prices have their own cron — refreshing here doubled wall time.
+                    refresh_prices=False
                 )
                 return {
                     "ok": True,
@@ -346,11 +355,13 @@ async def run_market_discovery(ctx: dict[str, Any]) -> dict[str, Any]:
         finally:
             session.close()
 
-    return _run_logged(
-        ctx,
-        component=OperationalComponent.MARKET_DATA,
-        label="market discovery",
-        fn=_cycle,
+    return await asyncio.to_thread(
+        lambda: _run_logged(
+            ctx,
+            component=OperationalComponent.MARKET_DATA,
+            label="market discovery",
+            fn=_cycle,
+        )
     )
 
 
@@ -362,21 +373,28 @@ async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
             from app.services.market_price_refresh_service import (
                 MarketPriceRefreshError,
                 MarketPriceRefreshService,
+                REFRESH_TIMEFRAMES_FAST,
             )
 
             try:
                 result = MarketPriceRefreshService(session).refresh_recent_prices(
-                    actor=None
+                    actor=None,
+                    timeframes=REFRESH_TIMEFRAMES_FAST,
                 )
                 auto_exits = 0
                 try:
                     from app.services.paper_training_service import PaperTrainingService
+                    from app.services.paper_opportunity_detectors import (
+                        MICRO_STRATEGY_KEYS,
+                    )
 
                     training = PaperTrainingService(session)
                     for portfolio_id in training.iter_automation_portfolio_ids():
                         auto_exits += len(
                             training.evaluate_paper_exits(
-                                portfolio_id=portfolio_id, actor=None
+                                portfolio_id=portfolio_id,
+                                actor=None,
+                                excluded_strategy_keys=set(MICRO_STRATEGY_KEYS),
                             )
                         )
                 except Exception as exc:  # noqa: BLE001
@@ -411,19 +429,24 @@ async def run_market_price_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
         finally:
             session.close()
 
-    return _run_logged(
-        ctx,
-        component=OperationalComponent.MARKET_DATA,
-        label="market price refresh",
-        fn=_cycle,
+    return await asyncio.to_thread(
+        lambda: _run_logged(
+            ctx,
+            component=OperationalComponent.MARKET_DATA,
+            label="market price refresh",
+            fn=_cycle,
+        )
     )
 
 
 async def run_runtime_catch_up(ctx: dict[str, Any]) -> dict[str, Any]:
-    """After host sleep/startup: discover markets, refresh prices, force scan."""
+    """After host sleep/startup: refresh prices and force a scan.
+
+    Discovery is left to its own 5-minute cron — folding it into catch-up
+    blocked the ARQ event loop for many minutes and starved paper scans.
+    """
     reason = str(ctx.pop("catch_up_reason", "downtime"))
     gap_seconds = ctx.pop("catch_up_gap_seconds", None)
-    discovery = await run_market_discovery(ctx)
     prices = await run_market_price_refresh(ctx)
     ctx["force_scan"] = True
     scan = await run_market_scan_cycle(ctx)
@@ -431,14 +454,19 @@ async def run_runtime_catch_up(ctx: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "reason": reason,
         "gap_seconds": gap_seconds,
-        "discovery": discovery,
         "prices": prices,
         "scan": scan,
     }
 
 
 class WorkerSettings:
-    """ARQ worker settings for market ops."""
+    """Market-ops job definitions only.
+
+    Do NOT register crons here. The Founder path runs a single ARQ process
+    (`workers.health_supervisor.worker`) that already crons these jobs.
+    A second market_ops process with the same crons flooded Redis, starved
+    scans, and made Last scan look 10+ minutes stale while desired=Running.
+    """
 
     functions = [
         run_market_scan_cycle,
@@ -446,12 +474,7 @@ class WorkerSettings:
         run_market_discovery,
         run_runtime_catch_up,
     ]
-    cron_jobs = [
-        cron(run_market_price_refresh, minute=set(range(0, 60, 2))),
-        cron(run_market_scan_cycle, minute=set(range(60))),
-        # Broad Coinbase USD discovery every 5 minutes (PAPER universe only).
-        cron(run_market_discovery, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
-    ]
+    cron_jobs: list = []
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _redis_settings()

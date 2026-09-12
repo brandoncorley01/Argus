@@ -1,4 +1,4 @@
-﻿# Shared paths for Argus Control Center launchers (sourced by other scripts).
+# Shared paths for Argus Control Center launchers (sourced by other scripts).
 $ErrorActionPreference = "Stop"
 
 . "$PSScriptRoot\_notify.ps1"
@@ -85,7 +85,7 @@ function Ensure-DockerEngine {
     return $false
   }
 
-  Write-Host "Docker engine not ready — launching Docker Desktop..."
+  Write-Host "Docker engine not ready - launching Docker Desktop..."
   try {
     Start-Process -FilePath $candidates[0] -ErrorAction SilentlyContinue | Out-Null
   } catch {
@@ -234,7 +234,7 @@ function Test-ArgusBehindOriginMain([string]$Root) {
   try {
     $fetchCode = Invoke-ArgusGit -GitArgs @("fetch", "origin")
     if ($fetchCode -ne 0) {
-      Write-Host "WARN: git fetch failed — treating PC as behind so Start will hard-sync."
+      Write-Host "WARN: git fetch failed - treating PC as behind so Start will hard-sync."
       return $true
     }
     $local = (git rev-parse HEAD 2>$null).Trim()
@@ -257,12 +257,12 @@ function Test-ArgusBehindOriginMain([string]$Root) {
     }
     $publicBuild = Get-ArgusPublicBuildId $Root
     if ($remoteBuild -and $publicBuild -and ($publicBuild -ne $remoteBuild)) {
-      # Code may already match, but Home is still advertising an old chip — refresh.
+      # Code may already match, but Home is still advertising an old chip - refresh.
       return $true
     }
     return $false
   } catch {
-    Write-Host "WARN: behind-check error — treating PC as behind so Start will hard-sync."
+    Write-Host "WARN: behind-check error - treating PC as behind so Start will hard-sync."
     return $true
   } finally {
     Pop-Location
@@ -271,14 +271,14 @@ function Test-ArgusBehindOriginMain([string]$Root) {
 
 function Sync-ArgusCode([string]$Root) {
   # Founder cadence: Start Argus ALWAYS lands GitHub main (cloud-agent merges).
-  # Returns $true when HEAD SHA changed. Force sync throws on failure — never
+  # Returns $true when HEAD SHA changed. Force sync throws on failure - never
   # silently continues on a stale tree (that left Founders stuck on v2.40).
   if (-not (Test-Path (Join-Path $Root ".git"))) {
     throw "Not a git checkout at $Root. Cloud-agent updates cannot land here."
   }
   $forceSync = $env:ARGUS_FORCE_SYNC -eq "1"
   if (-not $forceSync -and (Test-ArgusGitDirty $Root)) {
-    Write-Host "WARN: local git changes present — skipping GitHub sync (set ARGUS_FORCE_SYNC=1 to overwrite)."
+    Write-Host "WARN: local git changes present - skipping GitHub sync (set ARGUS_FORCE_SYNC=1 to overwrite)."
     return $false
   }
   Write-Host "Updating Argus from GitHub main..."
@@ -286,13 +286,13 @@ function Sync-ArgusCode([string]$Root) {
   try {
     $null = git rev-parse --abbrev-ref HEAD 2>$null
     if ($LASTEXITCODE -ne 0) {
-      if ($forceSync) { throw "git unavailable — cannot sync cloud-agent merges from GitHub." }
+      if ($forceSync) { throw "git unavailable - cannot sync cloud-agent merges from GitHub." }
       Write-Host "WARN: git unavailable - continuing with local files."
       return $false
     }
     $originUrl = (git remote get-url origin 2>$null)
     if ($originUrl -and ($originUrl -notmatch "brandoncorley01/Argus")) {
-      Write-Host ("WARN: origin is '{0}' — expected brandoncorley01/Argus." -f $originUrl)
+      Write-Host ("WARN: origin is '{0}' - expected brandoncorley01/Argus." -f $originUrl)
       if ($forceSync) {
         throw "Wrong git origin ($originUrl). Point origin at github.com/brandoncorley01/Argus then Start again."
       }
@@ -301,7 +301,7 @@ function Sync-ArgusCode([string]$Root) {
     $fetchCode = Invoke-ArgusGit -GitArgs @("fetch", "origin")
     if ($fetchCode -ne 0) {
       if ($forceSync) {
-        throw "git fetch failed — check internet / GitHub access. Cloud-agent merges cannot land until fetch works."
+        throw "git fetch failed - check internet / GitHub access. Cloud-agent merges cannot land until fetch works."
       }
       Write-Host "WARN: could not reach GitHub - continuing with local files."
       return $false
@@ -396,6 +396,38 @@ function Write-ArgusStartReport(
   return $match
 }
 
+function Get-ArgusPortListenerPid([int]$Port) {
+  try {
+    $conns = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    foreach ($c in $conns) {
+      if ($c.OwningProcess) { return [int]$c.OwningProcess }
+    }
+  } catch { }
+  return $null
+}
+
+function Ensure-ArgusEocDeps([string]$Root) {
+  # Install apps/eoc node_modules when next is missing (common after clone).
+  $eocDir = Join-Path $Root "apps\eoc"
+  $nextJs = Join-Path $eocDir "node_modules\next\package.json"
+  if (Test-Path $nextJs) { return $true }
+  Write-Host "EOC deps missing - running pnpm install in apps\eoc..."
+  Push-Location $eocDir
+  try {
+    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+      pnpm install 2>&1 | Out-Host
+    } else {
+      npm install 2>&1 | Out-Host
+    }
+    return (Test-Path $nextJs)
+  } catch {
+    Write-Host ("WARN Ensure-ArgusEocDeps: {0}" -f $_.Exception.Message)
+    return $false
+  } finally {
+    Pop-Location
+  }
+}
+
 function Stop-ArgusPortListeners([int[]]$Ports) {
   foreach ($port in $Ports) {
     try {
@@ -423,6 +455,21 @@ function Test-HttpOk([string]$Url, [int]$TimeoutSec = 3) {
     if ($_.Exception.Response) { return $true }
     return $false
   }
+}
+
+function Test-ArgusApiLiveness([int]$Retries = 3, [int]$TimeoutSec = 5) {
+  # /health is liveness-only (no DB). Retry before declaring the API dead.
+  $url = Get-ArgusApiHealthUrl
+  for ($i = 0; $i -lt $Retries; $i++) {
+    if (Test-HttpOk $url $TimeoutSec) { return $true }
+    if ($i -lt ($Retries - 1)) { Start-Sleep -Seconds 2 }
+  }
+  # Process still listening but slow => do not tear down a live API.
+  if (Test-ArgusApiProcessLive) {
+    Write-Host "WARN API process live but /health slow - treating as up"
+    return $true
+  }
+  return $false
 }
 
 function Wait-HttpOk([string]$Url, [int]$TimeoutSec = 90, [string]$Label = "service") {
@@ -462,13 +509,13 @@ function Ensure-ArgusInfra([string]$Root) {
     Write-Host "OK  Postgres + Redis healthy"
     return $true
   }
-  Write-Host "Postgres/Redis not healthy — starting Docker infra..."
+  Write-Host "Postgres/Redis not healthy - starting Docker infra..."
   Push-Location $Root
   try {
     # Explicit start recovers containers left Exited after Stop / engine sleep.
     docker compose up -d postgres redis | Out-Host
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: compose up exited $LASTEXITCODE — retrying start..."
+      Write-Host "WARN: compose up exited $LASTEXITCODE - retrying start..."
       docker start argus-postgres argus-redis 2>$null | Out-Host
     }
   } catch {
@@ -526,7 +573,7 @@ function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
   $workerPid = $pids.worker
   $apiReady = Test-HttpOk (Get-ArgusApiReadyUrl) 3
   if (-not $apiReady) {
-    Write-Host "API not ready — starting detached uvicorn..."
+    Write-Host "API not ready - starting detached uvicorn..."
     $apiPid = Start-ArgusApiProcess $Root
     if (-not (Wait-HttpOk (Get-ArgusApiReadyUrl) 90 "API /ready")) {
       Write-Host "FAIL API /ready after repair. Last log lines:"
@@ -535,17 +582,17 @@ function Repair-ArgusRuntime([string]$Root, [switch]$IncludeWorker) {
       return $false
     }
   } elseif (-not (Test-ArgusApiProcessLive)) {
-    # Rare: something else answering on :8000 — leave it, still record readiness.
+    # Rare: something else answering on :8000 - leave it, still record readiness.
     Write-Host "OK  API /ready responding"
   }
   if ($IncludeWorker) {
     if (-not (Test-ArgusWorkerFresh $Root)) {
-      Write-Host "Worker missing — starting health supervisor / market ops..."
+      Write-Host "Worker missing - starting health supervisor / market ops..."
       $workerPid = Start-ArgusWorkerProcess $Root
       Start-Sleep -Seconds 3
     }
     # Keep-awake is the only guard against the host sleeping mid-session.
-    # Restart whenever the helper died — even if API was briefly down.
+    # Restart whenever the helper died - even if API was briefly down.
     if (-not (Test-ArgusKeepAwakeAlive $Root)) {
       Write-Host "Keep-awake missing - restoring sleep protection..."
       $null = Start-ArgusKeepAwake $Root
@@ -629,9 +676,9 @@ function Ensure-ArgusApiVenv([string]$Root) {
   if (Test-Path $py) {
     & $py -c "import uvicorn" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { return $true }
-    Write-Host "API venv present but uvicorn import failed — rebuilding..."
+    Write-Host "API venv present but uvicorn import failed - rebuilding..."
   } else {
-    Write-Host "API venv missing — creating with uv sync..."
+    Write-Host "API venv missing - creating with uv sync..."
   }
   Push-Location $apiDir
   try {
@@ -678,13 +725,53 @@ function Get-ArgusApiLogTail([string]$Root, [int]$Lines = 40) {
   return ($chunks -join "`n")
 }
 
+function Get-ArgusUvicornProcesses {
+  try {
+    return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "python.exe" -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*uvicorn app.main:app*"
+      })
+  } catch {
+    return @()
+  }
+}
+
+function Get-ArgusUvicornRootPids {
+  $all = @(Get-ArgusUvicornProcesses)
+  if ($all.Count -eq 0) { return @() }
+  $ids = @($all | ForEach-Object { $_.ProcessId })
+  return @($all | Where-Object { $ids -notcontains $_.ParentProcessId } | ForEach-Object { $_.ProcessId })
+}
+
+function Ensure-SingleArgusProcesses {
+  # Permanent guard: duplicate API/worker trees exhaust Postgres QueuePool.
+  $apiRoots = @(Get-ArgusUvicornRootPids)
+  if ($apiRoots.Count -gt 1) {
+    $keep = Get-ArgusPortListenerPid 8000
+    if (-not $keep) { $keep = $apiRoots[0] }
+    Write-Host ("WARN: {0} uvicorn trees - keeping PID {1}" -f $apiRoots.Count, $keep)
+    foreach ($extraPid in $apiRoots) {
+      if ($extraPid -ne $keep) {
+        Stop-Process -Id $extraPid -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+  $workerRoots = @(Get-ArgusArqWorkerPids)
+  if ($workerRoots.Count -gt 1) {
+    $null = Test-ArgusWorkerFresh (Get-ArgusRoot)
+  }
+}
+
 function Start-ArgusApiProcess([string]$Root) {
   $runtime = Get-ArgusRuntimeDir $Root
   $apiLog = Join-Path $runtime "api.log"
   $apiErr = Join-Path $runtime "api.err.log"
+  $lockPath = Join-Path $runtime "api-start.lock"
   $apiDir = Join-Path $Root "apps\api"
   if (-not (Ensure-ArgusApiVenv $Root)) {
-    Write-Host "API venv unavailable — cannot start API"
+    Write-Host "API venv unavailable - cannot start API"
     return $null
   }
   $py = Join-Path $apiDir ".venv\Scripts\python.exe"
@@ -692,43 +779,63 @@ function Start-ArgusApiProcess([string]$Root) {
     Write-Host "API venv python missing at $py - skip API start"
     return $null
   }
-  # Kill any existing uvicorn first (python process, not a transient PowerShell wrapper).
+
+  $lock = $null
   try {
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.Name -eq "python.exe" -and
-        $_.CommandLine -and
-        $_.CommandLine -like "*uvicorn app.main:app*"
-      } |
-      ForEach-Object {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-      }
-  } catch { }
-  Start-Sleep -Milliseconds 500
-  Write-Host "Starting API on 127.0.0.1:8000 (detached python)..."
-  # Launch python.exe directly so killing a PowerShell wrapper cannot take down the API.
-  $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
-    -WorkingDirectory $apiDir `
-    -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
-    -RedirectStandardOutput $apiLog `
-    -RedirectStandardError $apiErr
-  return $proc.Id
+    $lock = [System.IO.File]::Open(
+      $lockPath,
+      [System.IO.FileMode]::OpenOrCreate,
+      [System.IO.FileAccess]::ReadWrite,
+      [System.IO.FileShare]::None
+    )
+  } catch {
+    $existing = Get-ArgusPortListenerPid 8000
+    if ($existing) {
+      Write-Host ("OK  API already starting/running (PID {0})" -f $existing)
+      return $existing
+    }
+    Start-Sleep -Seconds 2
+    $existing = Get-ArgusPortListenerPid 8000
+    if ($existing) { return $existing }
+  }
+
+  try {
+    # uvicorn also forks a child with the same cmdline — kill roots only.
+    foreach ($rootPid in @(Get-ArgusUvicornRootPids)) {
+      Stop-Process -Id $rootPid -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 400
+    foreach ($row in @(Get-ArgusUvicornProcesses)) {
+      Stop-Process -Id $row.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+    Write-Host "Starting API on 127.0.0.1:8000 (detached python)..."
+    $env:ARGUS_PROCESS_ROLE = "api"
+    $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
+      -WorkingDirectory $apiDir `
+      -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
+      -RedirectStandardOutput $apiLog `
+      -RedirectStandardError $apiErr
+    return $proc.Id
+  } finally {
+    if ($lock) { $lock.Close() }
+  }
 }
 
 function Clear-ArgusArqBacklog {
   # Drop stale ARQ jobs so minute scans are not buried under multi-hour backlog.
   try {
     $keys = @(docker exec argus-redis redis-cli --scan --pattern "arq:*" 2>$null)
-    if ($keys.Count -eq 0) {
+    if (-not $keys -or $keys.Count -eq 0) {
       Write-Host "OK  ARQ queue empty"
       return
     }
     Write-Host ("Clearing {0} ARQ redis keys (stale job backlog)..." -f $keys.Count)
-    foreach ($batch in (0..([math]::Ceiling($keys.Count / 100) - 1))) {
-      $slice = $keys[($batch * 100)..([math]::Min(($batch + 1) * 100 - 1, $keys.Count - 1))]
-      if ($slice) {
-        docker exec argus-redis redis-cli DEL @slice 2>$null | Out-Null
-      }
+    $validKeys = @($keys | Where-Object { $_ })
+    for ($i = 0; $i -lt $validKeys.Count; $i += 100) {
+      $last = [Math]::Min($i + 99, $validKeys.Count - 1)
+      $chunk = @($validKeys[$i..$last])
+      docker exec argus-redis redis-cli DEL $chunk 2>$null | Out-Null
     }
     Write-Host "OK  ARQ backlog cleared"
   } catch {
@@ -736,69 +843,139 @@ function Clear-ArgusArqBacklog {
   }
 }
 
+function Get-ArgusArqWorkerProcesses {
+  try {
+    return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "python.exe" -and
+        $_.CommandLine -and (
+          $_.CommandLine -like "*workers.health_supervisor.worker*" -or
+          $_.CommandLine -like "*workers.market_ops.worker*" -or
+          $_.CommandLine -like "*workers.micro_strategy.worker*"
+        )
+      })
+  } catch {
+    return @()
+  }
+}
+
+function Get-ArgusArqWorkerPids {
+  # ARQ forks a child with the same cmdline — return root PIDs only.
+  $all = @(Get-ArgusArqWorkerProcesses)
+  if ($all.Count -eq 0) { return @() }
+  $ids = @($all | ForEach-Object { $_.ProcessId })
+  return @($all | Where-Object { $ids -notcontains $_.ParentProcessId } | ForEach-Object { $_.ProcessId })
+}
+
+function Stop-ArgusArqWorkers {
+  # Kill roots; Windows tears down children with the parent.
+  foreach ($rootPid in @(Get-ArgusArqWorkerPids)) {
+    Stop-Process -Id $rootPid -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Milliseconds 400
+  # Sweep any orphan children.
+  foreach ($row in @(Get-ArgusArqWorkerProcesses)) {
+    Stop-Process -Id $row.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Start-ArgusWorkerProcess([string]$Root) {
   $runtime = Get-ArgusRuntimeDir $Root
   $workerLog = Join-Path $runtime "worker.log"
   $workerErr = Join-Path $runtime "worker.err.log"
+  $microLog = Join-Path $runtime "micro-worker.log"
+  $microErr = Join-Path $runtime "micro-worker.err.log"
+  $lockPath = Join-Path $runtime "worker-start.lock"
   $py = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
   if (-not (Test-Path $py)) {
     Write-Host "Worker venv python missing at $py - skip worker start"
     return $null
   }
-  # Never leave duplicate ARQ workers — they queue-delay scans by many minutes.
+
+  # Exclusive start lock so Boot + keepalive cannot spawn two ARQ processes.
+  $lock = $null
   try {
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.Name -eq "python.exe" -and
-        $_.CommandLine -and (
-          $_.CommandLine -like "*workers.health_supervisor.worker*" -or
-          $_.CommandLine -like "*workers.market_ops.worker*"
-        )
-      } |
-      ForEach-Object {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-      }
-  } catch { }
-  Start-Sleep -Milliseconds 400
-  Clear-ArgusArqBacklog
-  Write-Host "Starting Argus worker (health + market ops, max_jobs=3)..."
-  $env:PYTHONPATH = "$Root\apps\api;$Root"
-  $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
-    -WorkingDirectory $Root `
-    -ArgumentList @("-m", "arq", "workers.health_supervisor.worker.WorkerSettings") `
-    -RedirectStandardOutput $workerLog `
-    -RedirectStandardError $workerErr
-  return $proc.Id
+    $lock = [System.IO.File]::Open(
+      $lockPath,
+      [System.IO.FileMode]::OpenOrCreate,
+      [System.IO.FileAccess]::ReadWrite,
+      [System.IO.FileShare]::None
+    )
+  } catch {
+    $existing = @(Get-ArgusArqWorkerPids)
+    if ($existing.Count -ge 2) {
+      Write-Host ("OK  Worker lanes already starting/running (PIDs {0})" -f ($existing -join ","))
+      return $existing[0]
+    }
+    Write-Host "WARN: worker start lock busy - waiting 3s..."
+    Start-Sleep -Seconds 3
+    $existing = @(Get-ArgusArqWorkerPids)
+    if ($existing.Count -ge 1) { return $existing[0] }
+    # Never continue without owning the lock; the lock holder is responsible
+    # for completing this start. Continuing here races into duplicate lanes.
+    Write-Host "WARN: worker start still in progress - leaving it to lock owner"
+    return $null
+  }
+
+  try {
+    # Exactly two ARQ lanes: one health/market process and one isolated Micro process.
+    Stop-ArgusArqWorkers
+    Start-Sleep -Seconds 1
+    Stop-ArgusArqWorkers
+    Start-Sleep -Milliseconds 500
+    Clear-ArgusArqBacklog
+    Write-Host "Starting Argus main worker (health + market scans)..."
+    $env:PYTHONPATH = "$Root\apps\api;$Root"
+    $env:ARGUS_PROCESS_ROLE = "worker"
+    $proc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
+      -WorkingDirectory $Root `
+      -ArgumentList @("-m", "arq", "workers.health_supervisor.worker.WorkerSettings") `
+      -RedirectStandardOutput $workerLog `
+      -RedirectStandardError $workerErr
+    Write-Host "Starting dedicated Micro strategy worker..."
+    $microProc = Start-Process -FilePath $py -PassThru -WindowStyle Hidden `
+      -WorkingDirectory $Root `
+      -ArgumentList @("-m", "arq", "workers.micro_strategy.worker.WorkerSettings") `
+      -RedirectStandardOutput $microLog `
+      -RedirectStandardError $microErr
+    Start-Sleep -Seconds 2
+    $all = @(Get-ArgusArqWorkerProcesses)
+    $ids = @($all | ForEach-Object { $_.ProcessId })
+    $mainRoots = @($all | Where-Object {
+      $_.CommandLine -like "*workers.health_supervisor.worker*" -and
+      $ids -notcontains $_.ParentProcessId
+    })
+    $microRoots = @($all | Where-Object {
+      $_.CommandLine -like "*workers.micro_strategy.worker*" -and
+      $ids -notcontains $_.ParentProcessId
+    })
+    if ($mainRoots.Count -ne 1 -or $microRoots.Count -ne 1) {
+      Write-Host ("WARN: expected one main + one Micro worker; found main={0} micro={1}" -f $mainRoots.Count, $microRoots.Count)
+    }
+    return $proc.Id
+  } finally {
+    if ($lock) { $lock.Close() }
+  }
 }
 
 function Test-ArgusWorkerFresh([string]$Root) {
-  # Prefer a live ARQ python process over a stale PID file.
-  try {
-    $live = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.Name -eq "python.exe" -and
-        $_.CommandLine -and (
-          $_.CommandLine -like "*workers.health_supervisor.worker*" -or
-          $_.CommandLine -like "*workers.market_ops.worker*"
-        )
-      })
-    if ($live.Count -gt 0) { return $true }
-  } catch { }
-  $pids = Read-ArgusPids $Root
-  if ($pids.worker) {
-    try {
-      $null = Get-Process -Id ([int]$pids.worker) -ErrorAction Stop
-      return $true
-    } catch {
-      return $false
-    }
-  }
-  try {
-    $name = docker ps --filter "name=argus-health-supervisor" --format "{{.Names}}" 2>$null
-    return [bool]$name
-  } catch {
+  # Healthy topology is exactly one main lane plus one dedicated Micro lane.
+  $all = @(Get-ArgusArqWorkerProcesses)
+  $ids = @($all | ForEach-Object { $_.ProcessId })
+  $mainRoots = @($all | Where-Object {
+    $_.CommandLine -like "*workers.health_supervisor.worker*" -and
+    $ids -notcontains $_.ParentProcessId
+  })
+  $microRoots = @($all | Where-Object {
+    $_.CommandLine -like "*workers.micro_strategy.worker*" -and
+    $ids -notcontains $_.ParentProcessId
+  })
+  if ($mainRoots.Count -eq 1 -and $microRoots.Count -eq 1) { return $true }
+  if ($mainRoots.Count -gt 1 -or $microRoots.Count -gt 1) {
+    Write-Host ("WARN: duplicate worker lanes main={0} micro={1}" -f $mainRoots.Count, $microRoots.Count)
     return $false
   }
+  return $false
 }
 
 function Get-ArgusKeepAwakePidFile([string]$Root) {
@@ -816,7 +993,7 @@ function Stop-ArgusKeepAwake([string]$Root) {
         Write-Host "Stopped keep-awake (PID $keepPid)"
       }
     } catch {
-      Write-Host "Keep-awake PID file unreadable — sweeping by command line"
+      Write-Host "Keep-awake PID file unreadable - sweeping by command line"
     }
     Remove-Item -Path $pidPath -Force -ErrorAction SilentlyContinue
   }
@@ -902,6 +1079,9 @@ function Start-ArgusHiddenPowerShell {
 
 function Start-ArgusKeepAwake([string]$Root) {
   # One helper process: prevents automatic sleep/hibernate while Argus is Running.
+  # Launch powershell.exe directly. Do NOT use run-hidden.vbs here: VBS waits on
+  # the child and the recorded wscript PID races with the real keep-awake PID,
+  # which made Boot report "exited immediately" even when the helper was fine.
   Stop-ArgusKeepAwake $Root
   $script = Join-Path $PSScriptRoot "keep-awake-argus.ps1"
   if (-not (Test-Path $script)) {
@@ -910,20 +1090,27 @@ function Start-ArgusKeepAwake([string]$Root) {
   }
   Write-Host "Starting Argus keep-awake (blocks automatic sleep/hibernate until Stop)..."
   try {
-    $proc = Start-ArgusHiddenPowerShell -ScriptPath $script -WorkingDirectory $Root
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Command powershell.exe).Source
+    $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
+    $psi.WorkingDirectory = $Root
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $proc = [System.Diagnostics.Process]::Start($psi)
   } catch {
     Write-Host "WARN: keep-awake launch failed: $($_.Exception.Message)"
     return $null
   }
-  # PID file is also written by the script; seed it immediately for Stop races.
   $pidPath = Get-ArgusKeepAwakePidFile $Root
   try {
     $proc.Id | Set-Content -Path $pidPath -Encoding utf8
   } catch { }
 
-  # A parse error or a failed Add-Type kills the helper before it writes its own
-  # log, so the only reliable signal is whether the process is still alive.
-  Start-Sleep -Seconds 3
+  Start-Sleep -Seconds 4
+  if (-not (Test-ArgusKeepAwakeAlive $Root)) {
+    Start-Sleep -Seconds 3
+  }
   if (-not (Test-ArgusKeepAwakeAlive $Root)) {
     Remove-Item -Path $pidPath -Force -ErrorAction SilentlyContinue
     Write-Host "WARN: keep-awake exited immediately - automatic sleep is NOT blocked."
@@ -936,12 +1123,27 @@ function Start-ArgusKeepAwake([string]$Root) {
 
 function Test-ArgusKeepAwakeAlive([string]$Root) {
   $pidPath = Get-ArgusKeepAwakePidFile $Root
-  if (-not (Test-Path $pidPath)) { return $false }
-  try {
-    $keepPid = [int](Get-Content -Path $pidPath -ErrorAction Stop | Select-Object -First 1)
-    $null = Get-Process -Id $keepPid -ErrorAction Stop
-    return $true
-  } catch {
-    return $false
+  if (Test-Path $pidPath) {
+    try {
+      $keepPid = [int](Get-Content -Path $pidPath -ErrorAction Stop | Select-Object -First 1)
+      $null = Get-Process -Id $keepPid -ErrorAction Stop
+      return $true
+    } catch { }
   }
+  # Fallback: process still running even if PID file was cleared mid-restart.
+  try {
+    $hit = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "powershell.exe" -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*keep-awake-argus.ps1*"
+      } |
+      Select-Object -First 1
+    if ($hit) {
+      try { $hit.ProcessId | Set-Content -Path $pidPath -Encoding utf8 } catch { }
+      return $true
+    }
+  } catch { }
+  return $false
 }
+

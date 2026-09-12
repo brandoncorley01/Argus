@@ -2,6 +2,16 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+/** Runtime log tail when wscript hides PowerShell stdout. */
+function actionLogForScript(scriptLeaf: string): string | null {
+  if (scriptLeaf.includes("keep-argus-alive")) return "keepalive-task.log";
+  if (scriptLeaf.includes("boot-argus") || scriptLeaf.includes("start-argus")) {
+    return "boot-argus.log";
+  }
+  if (scriptLeaf.includes("stop-argus")) return null;
+  return "boot-argus.log";
+}
+
 /**
  * Run a .ps1 with no console window on Windows.
  * Prefers wscript + run-hidden.vbs (window style 0) because powershell.exe
@@ -101,17 +111,21 @@ export function spawnHiddenPs1(opts: {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (useVbs && !detail) {
+  if (useVbs && !detail) {
         try {
-          const logPath = path.join(
-            opts.repoRoot,
-            "runtime",
-            "control-center",
-            "keepalive-task.log",
-          );
-          if (fs.existsSync(logPath)) {
-            const raw = fs.readFileSync(logPath, "utf8");
-            detail = raw.trim().slice(-4000);
+          const logLeaf = actionLogForScript(opts.scriptLeaf ?? opts.scriptRel ?? "");
+          if (logLeaf) {
+            const logPath = path.join(
+              opts.repoRoot,
+              "runtime",
+              "control-center",
+              logLeaf,
+            );
+            if (fs.existsSync(logPath)) {
+              const raw = fs.readFileSync(logPath, "utf8");
+              const lines = raw.trim().split(/\r?\n/).filter(Boolean);
+              detail = lines.slice(-12).join("\n");
+            }
           }
         } catch {
           /* ignore */

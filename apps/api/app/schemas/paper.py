@@ -87,6 +87,8 @@ class PortfolioSummaryRead(BaseModel):
     status: str
     starting_cash: Decimal | None = None
     net_vs_starting_cash: Decimal | None = None
+    # Cumulative account P&L after removing paper reseed cash flows.
+    total_pnl: Decimal | None = None
     fill_count: int | None = None
     order_count: int | None = None
     capital_explanation: str | None = None
@@ -113,9 +115,25 @@ class PositionSummaryRead(BaseModel):
     price_status: str = "unavailable"
     opened_at: datetime | None = None
     strategy_version_id: uuid.UUID | None = None
+    strategy_key: str | None = None
     stop_loss: Decimal | None = None
     take_profit: Decimal | None = None
     state: str
+
+
+class DayEquityPnlRead(BaseModel):
+    """Daily account-equity change; unavailable when baseline evidence is incomplete."""
+
+    today_equity_pnl: Decimal | None = None
+    baseline_account_value: Decimal | None = None
+    current_account_value: Decimal | None = None
+    today_realized_pnl: Decimal
+    today_mark_to_market_component: Decimal | None = None
+    baseline_mark_max_age_minutes: int | None = None
+    pnl_basis: str
+    day_start: datetime
+    day_end: datetime
+    timezone: str
 
 
 class ClosedTradeRead(BaseModel):

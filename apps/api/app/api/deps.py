@@ -44,6 +44,26 @@ def set_session_cookie(response: Response, tokens: SessionTokens, settings: Sett
     )
 
 
+def refresh_session_cookie(
+    response: Response,
+    *,
+    session_token: str,
+    expires_at: datetime,
+    settings: Settings,
+) -> None:
+    """Re-issue the same session token with an updated Max-Age after sliding renewal."""
+    max_age = max(int((expires_at - datetime.now(UTC)).total_seconds()), 0)
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=session_token,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,  # type: ignore[arg-type]
+        path=settings.session_cookie_path,
+        max_age=max_age,
+    )
+
+
 def clear_session_cookie(response: Response, settings: Settings) -> None:
     response.delete_cookie(
         key=settings.session_cookie_name,
@@ -56,17 +76,26 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
 
 def get_optional_principal(
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
     settings: Settings = Depends(get_settings),
 ) -> AuthenticatedPrincipal | None:
     token = request.cookies.get(settings.session_cookie_name)
     try:
-        return auth.resolve_session(session_token=token)
+        principal = auth.resolve_session(session_token=token)
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication subsystem unavailable",
         ) from exc
+    if principal is not None and principal.session_renewed and token:
+        refresh_session_cookie(
+            response,
+            session_token=token,
+            expires_at=principal.session.expires_at,
+            settings=settings,
+        )
+    return principal
 
 
 def get_current_principal(

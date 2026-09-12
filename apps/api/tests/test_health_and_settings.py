@@ -49,13 +49,14 @@ def test_health_and_ready_against_local_infra() -> None:
     with TestClient(application) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        body = health.json()
-        assert body["dependencies"]["postgres"]["status"] == "ok"
-        assert body["dependencies"]["redis"]["status"] == "ok"
+        assert health.json()["status"] == "ok"
 
         ready = client.get("/ready")
         assert ready.status_code == 200
-        assert ready.json()["status"] == "ready"
+        ready_body = ready.json()
+        assert ready_body["status"] == "ready"
+        assert ready_body["dependencies"]["postgres"]["status"] == "ok"
+        assert ready_body["dependencies"]["redis"]["status"] == "ok"
 
 
 def test_ready_returns_503_when_dependency_down(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -67,6 +67,7 @@ function statusMeaning(status: string): string {
 export function ExecutiveBriefing({
   briefing: initialBriefing = null,
   todayPnl,
+  totalPnl,
   openPositions,
   institutionStatus,
   institutionExplanation,
@@ -74,6 +75,8 @@ export function ExecutiveBriefing({
 }: {
   briefing?: Briefing | null;
   todayPnl: number | null;
+  /** Total account equity minus starting cash; includes current open marks. */
+  totalPnl: number | null;
   openPositions: number;
   institutionStatus: string;
   /** Plain-language why for Running / Warning / Paused / Stopped. */
@@ -85,6 +88,16 @@ export function ExecutiveBriefing({
   const [intelOpen, setIntelOpen] = useState(false);
   const [briefing, setBriefing] = useState<Briefing | null>(initialBriefing);
   const [loaded, setLoaded] = useState(Boolean(initialBriefing));
+  const [loadError, setLoadError] = useState<string | null>(
+    initialBriefing?.error ? String(initialBriefing.error) : null,
+  );
+
+  useEffect(() => {
+    if (initialBriefing) {
+      setBriefing(initialBriefing);
+      setLoaded(true);
+    }
+  }, [initialBriefing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,15 +108,18 @@ export function ExecutiveBriefing({
       try {
         const res = await fetch("/api/founder/briefing", {
           cache: "no-store",
-          signal: AbortSignal.timeout(50_000),
+          signal: AbortSignal.timeout(25_000),
         });
-        if (!res.ok) return;
         const data = (await res.json()) as Briefing;
         if (cancelled) return;
         setBriefing(data);
+        setLoadError(data.error ? String(data.error) : null);
         setLoaded(true);
       } catch {
-        /* keep last good briefing */
+        if (!cancelled) {
+          setLoaded(true);
+          setLoadError((prev) => prev ?? "Briefing timed out — retrying…");
+        }
       } finally {
         inFlight = false;
       }
@@ -134,8 +150,43 @@ export function ExecutiveBriefing({
   const statusFix = institutionFix?.trim() || null;
   const live = usePaperLiveOptional();
   const liveOpen = live?.account.openCount ?? openPositions;
-  const livePnl =
-    live?.totalRealizedPnl != null ? live.totalRealizedPnl : todayPnl;
+  const liveTodayPnl =
+    live?.todayEquityPnl != null ? live.todayEquityPnl : todayPnl;
+  const liveTodayBasis = live?.todayPnlBasis ?? null;
+  const liveTodayRealized =
+    live?.totalRealizedPnl != null ? live.totalRealizedPnl : null;
+  const liveTotalPnl =
+    live?.account.totalPnl != null &&
+    Number.isFinite(Number(live.account.totalPnl))
+      ? Number(live.account.totalPnl)
+      : totalPnl;
+  const greenTodayButDownOverall =
+    liveTodayPnl != null &&
+    liveTodayPnl > 0 &&
+    liveTotalPnl != null &&
+    liveTotalPnl <= 0;
+  const todayUsesAgedMarks =
+    liveTodayBasis === "account_equity_change_since_midnight_open_marks_aged";
+  const displayTodayPnl =
+    liveTodayPnl != null
+      ? liveTodayPnl
+      : liveTodayRealized != null
+        ? liveTodayRealized
+        : null;
+  const todayLabel =
+    liveTodayPnl != null
+      ? "Today's account P&L"
+      : liveTodayRealized != null
+        ? "Today's realized P&L"
+        : "Today's account P&L";
+  const todayHint =
+    liveTodayPnl != null
+      ? todayUsesAgedMarks
+        ? `${todayPnlWindowLabel()} · open marks aged through a price-feed gap`
+        : `${todayPnlWindowLabel()} · realized trades + open position marks`
+      : liveTodayRealized != null
+        ? `${todayPnlWindowLabel()} · account change unavailable; closed trades only`
+        : `${todayPnlWindowLabel()} · realized trades + open position marks`;
   const opportunities = (() => {
     const raw = watch?.top_opportunities ?? [];
     const seen = new Set<string>();
@@ -164,6 +215,7 @@ export function ExecutiveBriefing({
       <p className="muted-note" style={{ marginTop: "0.35rem" }}>
         {briefing?.institution_status ?? institutionStatus} · PROVE mode · Live locked
         {loaded ? "" : " · loading…"}
+        {loadError ? " · partial" : ""}
       </p>
       <p className="institution-status-why" style={{ marginTop: "0.35rem" }}>
         {statusWhy}
@@ -196,16 +248,34 @@ export function ExecutiveBriefing({
               ) : null}
             </div>
             <div>
-              <div className="metric-label">Today&apos;s P&amp;L</div>
+              <div className="metric-label">{todayLabel}</div>
               <div
-                className={`metric-value ${pnlClass(livePnl)}`}
+                className={`metric-value ${pnlClass(displayTodayPnl)}`}
                 style={{ fontSize: "1.15rem" }}
               >
-                {livePnl == null ? "Unavailable" : moneyPnl(livePnl)}
+                {displayTodayPnl == null ? "Unavailable" : moneyPnl(displayTodayPnl)}
               </div>
               <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
-                {todayPnlWindowLabel()} · $300 learning desk
+                {todayHint}
               </p>
+              <div className="metric-label" style={{ marginTop: "0.65rem" }}>
+                Total P&amp;L
+              </div>
+              <div
+                className={`metric-value ${pnlClass(liveTotalPnl)}`}
+                style={{ fontSize: "1.15rem" }}
+              >
+                {liveTotalPnl == null ? "Unavailable" : moneyPnl(liveTotalPnl)}
+              </div>
+              <p className="muted-note" style={{ margin: "0.25rem 0 0" }}>
+                Since desk start · includes open position marks
+              </p>
+              {greenTodayButDownOverall ? (
+                <p className="institution-status-fix" style={{ marginTop: "0.4rem" }}>
+                  Green today, but still losing overall. Total P&amp;L controls the
+                  profitability verdict.
+                </p>
+              ) : null}
             </div>
             <div>
               <div className="metric-label">Open positions</div>

@@ -1,4 +1,4 @@
-' Run a PowerShell .ps1 with NO console window.
+﻿' Run a PowerShell .ps1 with NO console window.
 ' Usage:
 '   wscript.exe //B //nologo run-hidden.vbs "C:\path\script.ps1" [extra args...]
 ' Window style 0 = completely hidden (Task Scheduler -WindowStyle Hidden still flashes).
@@ -24,3 +24,4 @@ cmd = """" & ps & """ " & args
 ' 0 = hide window; True = wait for exit so Task Scheduler does not overlap runs
 exitCode = sh.Run(cmd, 0, True)
 WScript.Quit exitCode
+

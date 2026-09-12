@@ -13,14 +13,15 @@ import { requireUser } from "@/lib/actions/auth";
 import { ARGUS_UI_BUILD } from "@/lib/build";
 import { explainHealthWarning } from "@/lib/founder/institutionStatus";
 import { pickPrimaryPortfolio } from "@/lib/founder/learningDesk";
-import { sumTodayRealizedPnl } from "@/lib/founder/todayPnl";
 import { formatTimestamp } from "@/lib/format";
 import { apiFetch } from "@/lib/server/api";
 import {
   getMicroLiveStatus,
+  getProcessHealth,
   getProcessReady,
   soft,
 } from "@/lib/server/control-plane";
+import { readDesiredRunning } from "@/lib/server/reachability";
 
 export const metadata: Metadata = { title: "Home" };
 
@@ -53,6 +54,7 @@ type PortfolioSummary = {
   status: string;
   starting_cash?: string;
   net_vs_starting_cash?: string;
+  total_pnl?: string;
   fill_count?: number;
   order_count?: number;
   capital_explanation?: string;
@@ -98,11 +100,21 @@ type SystemHealth = {
   readiness?: { postgres?: boolean; redis?: boolean };
 };
 
-type ClosedTrade = {
-  fill_id: string;
-  symbol: string;
-  realized_pnl: string;
-  filled_at: string;
+type DayEquityPnl = {
+  today_equity_pnl: string | null;
+  today_realized_pnl: string;
+  today_mark_to_market_component: string | null;
+  pnl_basis: string;
+};
+
+type BriefingPayload = {
+  institution_status?: string;
+  founder_action_required?: string;
+  trading_mission?: Record<string, unknown>;
+  trading_intelligence_summary?: string[];
+  bullets?: string[];
+  error?: string;
+  [key: string]: unknown;
 };
 
 type ScanStatus = {
@@ -142,6 +154,7 @@ type ScanStatus = {
 
 function deriveOperationalPicture(opts: {
   apiReady: boolean;
+  desiredRunning: boolean;
   pauseNewEntries: boolean;
   killSwitch: boolean;
   healthWarning: boolean;
@@ -155,6 +168,16 @@ function deriveOperationalPicture(opts: {
   fix: string | null;
 } {
   if (!opts.apiReady) {
+    // Desired=Running + brief API busy ≠ Stopped. Treating timeouts as Stopped
+    // made Home flicker and pushed Founder into needless Start/Stop loops.
+    if (opts.desiredRunning) {
+      return {
+        status: "Warning",
+        explanation:
+          "Argus is still supposed to be Running — Home timed out talking to the API. This is usually load catching up, not a full stop.",
+        fix: "Wait about a minute. Only press Start Argus if this stays for several minutes.",
+      };
+    }
     return {
       status: "Stopped",
       explanation:
@@ -190,7 +213,7 @@ function deriveOperationalPicture(opts: {
       status: "Warning",
       explanation:
         "Market prices are outdated — Argus is catching up automatically. Profit/loss may be unsafe until the feed is fresh.",
-      fix: "Wait a few seconds for automatic catch-up, or press Update prices on Live Desk.",
+      fix: "Wait a minute for automatic catch-up. Avoid Stop/Start unless this lasts many minutes.",
     };
   }
   if (opts.marksIncomplete) {
@@ -198,7 +221,7 @@ function deriveOperationalPicture(opts: {
       status: "Warning",
       explanation:
         "Open trades are missing current prices. Profit/loss is not shown as zero.",
-      fix: "Press Refresh recent prices, or Stop then Start Argus so Market Ops can mark positions.",
+      fix: "Wait for the next price refresh on Live Desk. Avoid Stop/Start for a brief gap.",
     };
   }
   if (opts.healthWarning) {
@@ -210,7 +233,7 @@ function deriveOperationalPicture(opts: {
         "A system service needs attention. Trading rules still apply.",
       fix:
         detail?.fix ??
-        "Press Stop Argus, then Start Argus once. Or open Advanced → System health.",
+        "Wait for the next health cycle. Open Advanced → System health if this persists.",
     };
   }
   return {
@@ -259,9 +282,10 @@ async function renderTodayPage() {
 
   // Fast path only — heavy cockpit / intelligence load client-side.
   // Ensure the $300 Founder learning desk exists, then list books (desk sorts first).
-  const [ready, microLive, learningDesk, portfolios, providers, health, scanStatus] =
+  const [ready, apiLive, microLive, learningDesk, portfolios, providers, health, scanStatus, briefing] =
     await Promise.all([
       soft(getProcessReady),
+      soft(getProcessHealth),
       soft(getMicroLiveStatus),
       soft(() =>
         apiFetch<Portfolio>("/api/v1/paper/training/learning-desk", {
@@ -282,17 +306,37 @@ async function renderTodayPage() {
       soft(() =>
         apiFetch<ScanStatus>("/api/v1/market/scan/status", { timeoutMs: FAST_MS }),
       ),
+      soft(() =>
+        apiFetch<BriefingPayload>(
+          "/api/v1/operations/trading-intelligence/briefing",
+          { timeoutMs: FAST_MS },
+        ),
+      ),
     ]);
+
+  // A readiness probe can time out briefly while a scan is busy. Any
+  // successful authenticated API payload proves the API process answered;
+  // dependency degradation still comes from the health response below.
+  const apiUp =
+    apiLive != null ||
+    ready != null ||
+    learningDesk != null ||
+    portfolios != null ||
+    providers != null ||
+    health != null ||
+    scanStatus != null ||
+    briefing != null;
+  const desiredRunning = readDesiredRunning();
 
   // Prefer the canonical $300 learning desk over fixture / test books.
   const portfolio =
     learningDesk ?? pickPrimaryPortfolio(portfolios) ?? null;
   let summary: PortfolioSummary | null = null;
   let positions: PositionSummary[] = [];
-  let closedTrades: ClosedTrade[] = [];
+  let dayEquity: DayEquityPnl | null = null;
   let trainingMode: "automatic" | "coaching" = "coaching";
   if (portfolio) {
-    const [s, p, c, settings] = await Promise.all([
+    const [s, p, settings, equityDay] = await Promise.all([
       soft(() =>
         apiFetch<PortfolioSummary>(
           `/api/v1/paper/portfolios/${portfolio.id}/summary`,
@@ -306,21 +350,22 @@ async function renderTodayPage() {
         ),
       ),
       soft(() =>
-        apiFetch<ClosedTrade[]>(
-          `/api/v1/paper/portfolios/${portfolio.id}/closed-trades`,
-          { searchParams: { limit: 200 }, timeoutMs: FAST_MS },
+        apiFetch<{ default_notional: string; mode: "automatic" | "coaching" }>(
+          `/api/v1/paper/training/${portfolio.id}/settings`,
+          { timeoutMs: FAST_MS },
         ),
       ),
       soft(() =>
-        apiFetch<{ default_notional: string; mode: "automatic" | "coaching" }>(
-          `/api/v1/paper/training/${portfolio.id}/settings`,
+        apiFetch<DayEquityPnl>(
+          `/api/v1/paper/portfolios/${portfolio.id}/day-equity-pnl`,
           { timeoutMs: FAST_MS },
         ),
       ),
     ]);
     summary = s;
     positions = p ?? [];
-    closedTrades = c ?? [];
+    dayEquity = equityDay;
+    dayEquity = equityDay;
     if (settings?.mode) trainingMode = settings.mode;
   }
 
@@ -331,8 +376,10 @@ async function renderTodayPage() {
     (defaultProvider?.provider.provider_key ?? "").includes("paper");
   const connectionLabel = defaultProvider
     ? `${defaultProvider.provider.display_name}: ${defaultProvider.health?.status ?? "unknown"}`
-    : ready
-      ? "Paper ready"
+    : apiUp
+      ? ready
+        ? "Paper ready"
+        : "API live"
       : "Disconnected";
 
   const pauseNewEntries = Boolean(
@@ -352,7 +399,8 @@ async function renderTodayPage() {
   const scannerFailed = scanStatus?.scanner_state === "Failed";
 
   const picture = deriveOperationalPicture({
-    apiReady: ready != null,
+    apiReady: apiUp,
+    desiredRunning,
     pauseNewEntries,
     killSwitch,
     healthWarning,
@@ -377,13 +425,14 @@ async function renderTodayPage() {
       defaultProvider?.health?.last_success_at ?? health?.generated_at ?? null,
     ) || "Unavailable";
 
-  const todayClosed = sumTodayRealizedPnl(
-    (closedTrades ?? []).map((t) => ({
-      realized_pnl: t.realized_pnl,
-      filled_at: t.filled_at,
-    })),
-  );
-  const totalPnl = todayClosed.pnl;
+  const todayPnl =
+    dayEquity?.today_equity_pnl != null
+      ? Number(dayEquity.today_equity_pnl)
+      : null;
+  const totalPnl =
+    summary?.total_pnl != null
+      ? Number(summary.total_pnl)
+      : null;
 
   return (
     <div className="founder-home training-lab-home cockpit-home">
@@ -403,7 +452,7 @@ async function renderTodayPage() {
         statusFix={picture.fix}
         tradingMode={tradingMode}
         connectionLabel={connectionLabel}
-        connectionOk={Boolean(connectionOk && ready)}
+        connectionOk={Boolean(connectionOk && apiUp)}
         lastHeartbeat={lastHeartbeat}
         scannerState={scanStatus?.scanner_state ?? "Unavailable"}
         marketDataLabel={
@@ -436,18 +485,22 @@ async function renderTodayPage() {
           openCount: summary?.open_position_count ?? positions.length,
           startingCash: summary?.starting_cash ?? null,
           netVsStart: summary?.net_vs_starting_cash ?? null,
+          totalPnl: summary?.total_pnl ?? null,
           fillCount: summary?.fill_count ?? null,
           capitalExplanation: summary?.capital_explanation ?? null,
         }}
         seedPositions={positions}
-        seedTotalPnl={totalPnl}
+        seedTotalPnl={todayPnl}
         seedMode={trainingMode}
       >
         <CapitalStrip />
 
         <ExecutiveBriefing
-          briefing={null}
-          todayPnl={totalPnl}
+          briefing={briefing as never}
+          todayPnl={todayPnl}
+          totalPnl={
+            totalPnl != null && Number.isFinite(totalPnl) ? totalPnl : null
+          }
           openPositions={summary?.open_position_count ?? positions.length}
           institutionStatus={picture.status}
           institutionExplanation={picture.explanation}
@@ -474,7 +527,7 @@ async function renderTodayPage() {
             openCount: summary?.open_position_count ?? positions.length,
           }}
           positionsOpen={summary?.open_position_count ?? positions.length}
-          totalPnl={totalPnl}
+          totalPnl={todayPnl}
         />
       </PaperLiveProvider>
       <section className="panel rise" aria-label="End of day">

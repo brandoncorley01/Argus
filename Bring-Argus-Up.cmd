@@ -19,3 +19,4 @@ echo OK. Opening Home...
 start "" "http://127.0.0.1:3000/today"
 timeout /t 8 >nul
 exit /b 0
+

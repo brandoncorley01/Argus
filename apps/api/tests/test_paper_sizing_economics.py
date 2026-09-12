@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -14,6 +15,8 @@ from app.services.paper_training_service import (
     MIN_STOP_DISTANCE_PCT,
     MIN_TAKE_PROFIT_R,
     PaperTrainingService,
+    candidate_market_data_is_fresh,
+    expected_reward_floor_usd,
     expected_reward_usd,
     normalize_exit_levels,
 )

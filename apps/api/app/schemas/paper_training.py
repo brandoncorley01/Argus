@@ -111,6 +111,7 @@ class ScorecardRead(BaseModel):
     trades_with_founder_feedback: int
     live_readiness: str
     live_readiness_detail: str
+    organic_growth: dict[str, Any] | None = None
     disclaimer: str
 
 

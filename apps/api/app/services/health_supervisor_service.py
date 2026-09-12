@@ -179,6 +179,29 @@ class HealthSupervisorService:
         self._db.add(instance)
         self._db.commit()
 
+    def record_worker_heartbeat(
+        self,
+        *,
+        service_key: str,
+        instance_id: uuid.UUID,
+        status: HealthStatus,
+        observed_at: datetime,
+        idempotency_key: str,
+        detail: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record canonical service health from a dedicated worker lane."""
+        return self._heartbeats.record_heartbeat(
+            service_key=service_key,
+            status=status,
+            observed_at=observed_at,
+            idempotency_key=idempotency_key,
+            sequence_number=self._next_sequence_number(service_key),
+            detail=detail,
+            payload=payload,
+            worker_instance_id=instance_id,
+        )
+
     def mark_instance_stopped(self, instance_id: uuid.UUID) -> None:
         instance = self._db.get(WorkerInstance, instance_id)
         if instance is None:

@@ -15,6 +15,19 @@ REJECTION_PLAIN: dict[str, str] = {
     "exposure_limit": "This would put too much paper money into one area.",
     "daily_risk_limit": "Daily paper risk limits are reached.",
     "pause_new_entries": "New paper entries are paused by the Founder.",
+    "sit_in_cash_vs_hodl": (
+        "Argus is sitting in cash because the desk is losing to doing nothing today."
+    ),
+    "strategy_loses_to_cash": (
+        "This strategy's track record does not beat idle cash, so Argus skipped it."
+    ),
+    "ega_strategy_filter": (
+        "The Equity Growth Algorithm only deploys proven or under-sampled strategies "
+        "while recovering capital."
+    ),
+    "ega_lane_hold": (
+        "The Equity Growth Algorithm is holding cash in this growth lane."
+    ),
     "execution_unavailable": "Paper trading is blocked (kill switch or execution unavailable).",
     "no_instruments": "No markets are registered for scanning yet.",
 }

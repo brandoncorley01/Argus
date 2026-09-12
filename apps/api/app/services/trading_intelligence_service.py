@@ -35,7 +35,7 @@ STRATEGY_VERSION = "sma_crossover@1"
 CONFIDENCE_SCORING_VERSION = "confidence@3"
 CERT_REQUIRED_DAYS = 30
 CERT_MAX_DRAWDOWN = Decimal("500")  # paper dollars observational threshold
-SIMULATED_COST_BPS = Decimal("10")  # 10 bps each way observational haircut
+SIMULATED_COST_BPS = Decimal("3")  # ~session commission+slip+spread each way (aligned to paper fills)
 
 # Founder-facing watchlist stage labels (display mapping over scan stages).
 STAGE_MAP = {
@@ -351,9 +351,51 @@ class TradingIntelligenceService:
         entry_price = entry_fill.price if entry_fill else None
         exit_price = exit_fill.price if exit_fill else mark
         qty = exit_fill.quantity if exit_fill else Decimal("0")
+        gross_realized = Decimal("0")
+        cost_haircut = Decimal("0")
         realized = Decimal("0")
+        exit_leg_count = 0
         if entry_price is not None and qty > 0:
-            realized = (exit_price - entry_price) * qty
+            gross_realized = (exit_price - entry_price) * qty
+            realized = gross_realized
+        if entry_order_id is not None:
+            from app.services.paper_trading_service import PaperTradingService
+
+            linked_legs = [
+                leg
+                for leg in PaperTradingService(self.db).list_realized_exit_legs(
+                    portfolio_id
+                )
+                if leg["entry_order_id"] == entry_order_id
+            ]
+            if linked_legs:
+                qty = sum(
+                    (Decimal(str(leg["quantity"])) for leg in linked_legs),
+                    Decimal("0"),
+                )
+                gross_realized = sum(
+                    (
+                        Decimal(str(leg["gross_realized_pnl"]))
+                        for leg in linked_legs
+                    ),
+                    Decimal("0"),
+                )
+                cost_haircut = sum(
+                    (
+                        Decimal(str(leg["entry_fee_allocated"]))
+                        + Decimal(str(leg["exit_fee"]))
+                        for leg in linked_legs
+                    ),
+                    Decimal("0"),
+                )
+                realized = sum(
+                    (
+                        Decimal(str(leg["realized_pnl"]))
+                        for leg in linked_legs
+                    ),
+                    Decimal("0"),
+                )
+                exit_leg_count = len(linked_legs)
 
         holding = 0
         closed_at = exit_fill.filled_at if exit_fill else datetime.now(UTC)
@@ -382,8 +424,23 @@ class TradingIntelligenceService:
                 drawdown = max(Decimal("0"), (entry_price - min_low) * qty)
                 mfe = max(Decimal("0"), (max_high - entry_price) * qty)
 
-        cost_haircut = abs(exit_price * qty) * SIMULATED_COST_BPS / Decimal("10000") * 2
-        adj = realized - cost_haircut
+        if exit_leg_count == 0:
+            if entry_fill is not None:
+                cost_haircut += Decimal(
+                    str(getattr(entry_fill, "fee", 0) or 0)
+                ) + Decimal(str(getattr(entry_fill, "commission", 0) or 0))
+            if exit_fill is not None:
+                cost_haircut += Decimal(
+                    str(getattr(exit_fill, "fee", 0) or 0)
+                ) + Decimal(str(getattr(exit_fill, "commission", 0) or 0))
+        # Prefer ledger fees; fallback to session-aligned observational haircut.
+        if cost_haircut <= 0 and qty > 0:
+            cost_haircut = (
+                abs(exit_price * qty) * SIMULATED_COST_BPS / Decimal("10000") * 2
+            )
+        # Entry-linked realized P&L already includes allocated entry and exit
+        # fees. The fallback path retains the legacy observational haircut.
+        adj = realized if exit_leg_count else realized - cost_haircut
         outcome = "win" if adj > 0 else ("loss" if adj < 0 else "flat")
 
         conf = snap.confidence_score if snap else Decimal("50")
@@ -453,8 +510,10 @@ class TradingIntelligenceService:
             explanation=explanation,
             detail={
                 "mark": str(mark),
+                "gross_realized_pnl": str(gross_realized),
                 "simulated_cost_haircut": str(cost_haircut),
                 "expectancy_adjusted_pnl": str(adj),
+                "exit_leg_count": exit_leg_count or 1,
                 "max_favorable_excursion": str(mfe) if mfe is not None else None,
                 "would_take_again": bool(good),
                 "decision_quality": quality_code,
@@ -553,10 +612,17 @@ class TradingIntelligenceService:
             self.db.commit()
         return resolved
 
-    def strategy_performance(self, *, since: datetime | None = None) -> list[dict[str, Any]]:
+    def strategy_performance(
+        self,
+        *,
+        since: datetime | None = None,
+        portfolio_id: uuid.UUID | None = None,
+    ) -> list[dict[str, Any]]:
         q = select(PostTradeReview)
         if since is not None:
             q = q.where(PostTradeReview.closed_at >= since)
+        if portfolio_id is not None:
+            q = q.where(PostTradeReview.portfolio_id == portfolio_id)
         rows = list(self.db.scalars(q))
         by_key: dict[str, list[PostTradeReview]] = {}
         for r in rows:
@@ -564,22 +630,75 @@ class TradingIntelligenceService:
         out: list[dict[str, Any]] = []
         for key, items in by_key.items():
             pnls = [Decimal(str(i.realized_pnl)) for i in items]
-            wins = sum(1 for p in pnls if p > 0)
+            wins_list = [p for p in pnls if p > 0]
+            losses_list = [p for p in pnls if p < 0]
+            wins = len(wins_list)
+            costs: list[Decimal] = []
+            nets: list[Decimal] = []
+            drawdowns: list[Decimal] = []
+            for i in items:
+                detail = dict(i.detail or {})
+                try:
+                    cost = Decimal(str(detail.get("simulated_cost_haircut") or "0"))
+                except Exception:  # noqa: BLE001
+                    cost = Decimal("0")
+                costs.append(cost)
+                nets.append(Decimal(str(i.realized_pnl)) - cost)
+                if i.max_drawdown is not None:
+                    drawdowns.append(Decimal(str(i.max_drawdown)))
+            gross = sum(pnls, Decimal("0"))
+            total_cost = sum(costs, Decimal("0"))
+            net = sum(nets, Decimal("0"))
+            avg_win = (
+                sum(wins_list, Decimal("0")) / Decimal(len(wins_list))
+                if wins_list
+                else None
+            )
+            avg_loss = (
+                sum(losses_list, Decimal("0")) / Decimal(len(losses_list))
+                if losses_list
+                else None
+            )
+            gross_wins = sum(wins_list, Decimal("0"))
+            gross_losses = abs(sum(losses_list, Decimal("0")))
+            profit_factor = (
+                (gross_wins / gross_losses) if gross_losses > 0 else None
+            )
+            expectancy = net / Decimal(len(items)) if items else None
             out.append(
                 {
                     "strategy_key": key,
                     "trades": len(items),
                     "wins": wins,
-                    "total_pnl": str(sum(pnls, Decimal("0"))),
+                    "gross_pnl": str(gross),
+                    "costs": str(total_cost),
+                    "net_pnl": str(net),
+                    "total_pnl": str(gross),  # backward-compatible alias
+                    "avg_win": str(avg_win) if avg_win is not None else None,
+                    "avg_loss": str(avg_loss) if avg_loss is not None else None,
+                    "expectancy": str(expectancy) if expectancy is not None else None,
+                    "profit_factor": (
+                        str(profit_factor.quantize(Decimal("0.01")))
+                        if profit_factor is not None
+                        else None
+                    ),
+                    "max_drawdown": str(max(drawdowns)) if drawdowns else None,
                     "avg_confidence": str(
-                        (sum((i.confidence_score for i in items), Decimal("0")) / len(items))
+                        (
+                            sum((i.confidence_score for i in items), Decimal("0"))
+                            / len(items)
+                        )
                         if items
                         else Decimal("0")
                     ),
-                    "win_rate": str(Decimal(wins) / Decimal(len(items))) if items else None,
+                    "win_rate": (
+                        str(Decimal(wins) / Decimal(len(items))) if items else None
+                    ),
+                    "is_micro": key
+                    in {"range_micro", "trend_pullback_micro"},
                 }
             )
-        out.sort(key=lambda x: Decimal(x["total_pnl"]), reverse=True)
+        out.sort(key=lambda x: Decimal(x["net_pnl"]), reverse=True)
         return out
 
     def confidence_calibration(self) -> dict[str, Any]:
@@ -628,11 +747,18 @@ class TradingIntelligenceService:
             strongest = max(scored, key=lambda k: scored[k])
             weakest = min(scored, key=lambda k: scored[k])
         perf = self.strategy_performance()
+        micro_perf = [p for p in perf if p.get("is_micro")]
         return {
             "strongest_conditions": strongest,
             "weakest_conditions": weakest,
             "best_strategy": perf[0]["strategy_key"] if perf else None,
             "worst_strategy": perf[-1]["strategy_key"] if perf else None,
+            "strategy_performance": perf,
+            "micro_performance": micro_perf,
+            "micro_note": (
+                "Micro strategies earn priority only through positive forward "
+                "paper net expectancy after costs."
+            ),
             "rejected_that_became_winners": sum(
                 1 for m in misses if m.outcome == "would_have_won"
             ),
@@ -759,10 +885,19 @@ class TradingIntelligenceService:
         since = datetime.now(UTC) - timedelta(days=1)
         reviews_today = list(
             self.db.scalars(
-                select(PostTradeReview).where(PostTradeReview.closed_at >= since)
+                select(PostTradeReview)
+                .where(PostTradeReview.closed_at >= since)
+                .order_by(desc(PostTradeReview.closed_at))
+                .limit(200)
             )
         )
-        all_reviews = list(self.db.scalars(select(PostTradeReview)))
+        all_reviews = list(
+            self.db.scalars(
+                select(PostTradeReview)
+                .order_by(desc(PostTradeReview.closed_at))
+                .limit(500)
+            )
+        )
         avg_conf = None
         if all_reviews:
             avg_conf = sum((r.confidence_score for r in all_reviews), Decimal("0")) / Decimal(

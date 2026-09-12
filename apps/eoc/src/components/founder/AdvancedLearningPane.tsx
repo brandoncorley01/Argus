@@ -216,7 +216,7 @@ export function AdvancedLearningPane({
           </strong>
         </div>
         <div className="summary-card">
-          <span className="metric-label">Today&apos;s P&amp;L</span>
+          <span className="metric-label">Today&apos;s realized P&amp;L</span>
           <strong className={pnlClass(data.today_pnl)}>
             {moneyPnl(data.today_pnl)}
           </strong>
