@@ -67,26 +67,38 @@ def test_desk_sits_vs_cash_when_underwater_on_red_day() -> None:
         closed_trades=12,
         total_pnl=Decimal("-50"),
         today_equity_pnl=Decimal("-5"),
+        open_positions=1,
     )
     assert not desk_should_sit_vs_cash(
         closed_trades=12,
         total_pnl=Decimal("-50"),
         today_equity_pnl=Decimal("2"),
+        open_positions=1,
     )
     assert not desk_should_sit_vs_cash(
         closed_trades=5,
         total_pnl=Decimal("-50"),
         today_equity_pnl=Decimal("-5"),
+        open_positions=1,
     )
     assert desk_should_sit_vs_cash(
         closed_trades=25,
         total_pnl=Decimal("-10"),
         today_equity_pnl=None,
+        open_positions=2,
     )
     assert not desk_should_sit_vs_cash(
         closed_trades=12,
         total_pnl=Decimal("5"),
         today_equity_pnl=Decimal("-5"),
+        open_positions=1,
+    )
+    # Already flat: sitting until midnight cannot beat cash.
+    assert not desk_should_sit_vs_cash(
+        closed_trades=25,
+        total_pnl=Decimal("-574"),
+        today_equity_pnl=Decimal("-1.14"),
+        open_positions=0,
     )
 
 

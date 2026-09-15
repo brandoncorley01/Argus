@@ -129,6 +129,8 @@ export async function logoutAction(): Promise<void> {
 }
 
 export async function requireUser(): Promise<CurrentUser> {
+  const jar = await cookies();
+  const hasSession = Boolean(jar.get(SESSION_COOKIE)?.value);
   try {
     // Do NOT cookies().set() here — Next.js forbids mutating cookies during
     // Server Component render. That threw, redirected to /login, and login
@@ -139,8 +141,19 @@ export async function requireUser(): Promise<CurrentUser> {
     if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
       redirect("/login?reason=expired");
     }
-    // Losing the control plane is not the same as being signed out; saying so
-    // keeps the sign-in page from blaming the wrong thing.
+    // A busy/hung API is not a logout. Do not redirect to /today from here —
+    // this helper is also called by the app layout, so that looped. Keep the
+    // session cookie and return a nav stub so Home can render.
+    if (hasSession) {
+      return {
+        id: "session-unreachable",
+        username: "signed-in",
+        email: null,
+        is_active: true,
+        roles: ["FOUNDER"],
+        session_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      };
+    }
     redirect("/login?reason=unreachable");
   }
 }

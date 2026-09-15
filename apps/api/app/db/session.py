@@ -7,10 +7,12 @@ from collections.abc import Generator
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.settings import Settings, get_settings
 
 _engine: Engine | None = None
+_probe_engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
@@ -96,10 +98,30 @@ def get_db() -> Generator[Session, None, None]:
         session.close()
 
 
+def _get_probe_engine(settings: Settings | None = None) -> Engine:
+    """Dedicated NullPool engine so /ready never waits on the request QueuePool."""
+    global _probe_engine
+    if _probe_engine is None:
+        cfg = settings or get_settings()
+        _probe_engine = create_engine(
+            cfg.database_url,
+            poolclass=NullPool,
+            connect_args={
+                "connect_timeout": 3,
+                "options": (
+                    "-c application_name=argus-probe "
+                    "-c statement_timeout=4000 "
+                    "-c lock_timeout=3000"
+                ),
+            },
+        )
+    return _probe_engine
+
+
 def check_postgres(settings: Settings | None = None) -> dict[str, str]:
     """Return postgres probe result without raising on connection failure."""
     try:
-        engine = get_engine(settings)
+        engine = _get_probe_engine(settings)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ok"}
@@ -108,8 +130,11 @@ def check_postgres(settings: Settings | None = None) -> dict[str, str]:
 
 
 def reset_engine() -> None:
-    global _engine, _SessionLocal
+    global _engine, _probe_engine, _SessionLocal
     if _engine is not None:
         _engine.dispose()
+    if _probe_engine is not None:
+        _probe_engine.dispose()
     _engine = None
+    _probe_engine = None
     _SessionLocal = None

@@ -16,7 +16,7 @@ REJECTION_PLAIN: dict[str, str] = {
     "daily_risk_limit": "Daily paper risk limits are reached.",
     "pause_new_entries": "New paper entries are paused by the Founder.",
     "sit_in_cash_vs_hodl": (
-        "Argus is sitting in cash because the desk is losing to doing nothing today."
+        "Argus is not adding to open paper risk because the desk is losing to cash today."
     ),
     "strategy_loses_to_cash": (
         "This strategy's track record does not beat idle cash, so Argus skipped it."

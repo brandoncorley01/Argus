@@ -108,9 +108,23 @@ try {
     $(if ($workerOk) { "up" } else { "down" }))
 
   if (Test-KeepAliveBootCooldown) {
-    # Still exit 0 if either side is alive — cooldown must not look like failure spam.
-    if ($apiProc -or $workerOk) {
-      Write-KeepAliveLog "SKIP boot - cooldown active; processes still present"
+    # Cooldown only suppresses a full Boot. A live API with a missing Micro
+    # lane must still get a surgical worker restart.
+    if (($apiLive -or $apiProc) -and $workerOk) {
+      Write-KeepAliveLog "SKIP boot - cooldown active; full stack present"
+      exit 0
+    }
+    if (-not $workerOk) {
+      Write-KeepAliveLog "Cooldown active but worker lane missing - surgical worker restart"
+      $ok = Repair-ArgusRuntime -Root $Root -IncludeWorker
+      $workerOk = Test-ArgusWorkerFresh $Root
+      $apiLive = Test-ArgusApiLiveness
+      $apiProc = Test-ArgusApiProcessLive
+      if (($apiLive -or $apiProc) -and $workerOk) {
+        Write-KeepAliveLog ("OK  worker restored under cooldown (repair_ok={0})" -f $(if ($ok) { "true" } else { "false" }))
+        exit 0
+      }
+      Write-KeepAliveLog ("WARN worker still down under cooldown (repair_ok={0})" -f $(if ($ok) { "true" } else { "false" }))
       exit 0
     }
     Write-KeepAliveLog "SKIP boot - cooldown active (API may be busy, not dead)"

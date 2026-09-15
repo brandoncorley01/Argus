@@ -44,3 +44,15 @@ def test_engine_uses_small_pool_and_fail_fast(monkeypatch: pytest.MonkeyPatch) -
     assert engine.pool.size() == 10
     assert engine.pool._max_overflow == 10  # noqa: SLF001
     assert engine.pool._timeout == 15  # noqa: SLF001
+
+
+def test_ready_probe_uses_null_pool_not_request_pool() -> None:
+    try:
+        get_settings()
+    except SettingsError:
+        pytest.skip("DATABASE_URL not configured")
+
+    reset_engine()
+    probe = session_mod._get_probe_engine()
+    assert probe.pool.__class__.__name__ == "NullPool"
+    assert session_mod.check_postgres()["status"] == "ok"

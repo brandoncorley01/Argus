@@ -94,7 +94,7 @@ export function LoginForm() {
       try {
         const res = await fetch("/api/auth/reachability", {
           cache: "no-store",
-          signal: AbortSignal.timeout(8_000),
+          signal: AbortSignal.timeout(20_000),
         });
         const body = (await res.json().catch(() => null)) as Reachability | null;
         if (cancelled || !body) return;
@@ -118,8 +118,10 @@ export function LoginForm() {
         }
       } catch {
         if (!cancelled) {
-          setStatusLine("Docker:? · Postgres:? · Redis:? · API:down");
-          setMessage("Unable to probe Argus reachability from this page.");
+          setStatusLine("Checking Argus…");
+          setMessage(
+            "The login page could not finish its status check in time. That is not a Docker failure — retry Sign in, or press Start Argus.",
+          );
         }
       }
     }

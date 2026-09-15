@@ -11,6 +11,9 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **Sit-in-cash deadlock:** If the Founder desk is already flat, `sit_in_cash_vs_hodl` no longer blocks entries until midnight — it only pauses adding to a red underwater book that still has open positions (`live-monitor-v2.99`)
+- **Micro worker recovery without GitHub wipe:** Keepalive restarts a missing Micro/market worker even while the API is up; Home no longer tells the Founder to Stop then Start for a dead worker (`live-monitor-v2.98`)
+- **Login does not treat a hung API as sign-out:** Reachability probe no longer waits on `docker version`; a session cookie keeps the Founder in the app when `/auth/me` times out; `/health` stays async and `/ready` uses a NullPool probe so a busy request pool cannot fake API-down (`live-monitor-v2.97`)
 - **Equity Growth Algorithm (Cursor-owned):** Founder auto-entries now size and filter through EGA — lane × expectancy sizing, stricter strategy focus while recovering, lane-aware max opens — with scorecard `equity_growth_algorithm` evidence and ops doc; objective is beat idle cash after costs without unlocking live (`live-monitor-v2.96`)
 - **Sit in cash vs HODL:** When the Founder desk is underwater after reseeds and today's account equity change is also red (≥10 closed trades), automatic entries pause with `sit_in_cash_vs_hodl` instead of digging further behind idle cash (`live-monitor-v2.95`)
 - **Daily account P/L through feed gaps:** Today's account P/L uses last trustworthy pre-midnight marks when midnight 1m bars are missing (`live-monitor-v2.94`)

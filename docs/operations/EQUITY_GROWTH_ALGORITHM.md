@@ -1,6 +1,6 @@
 # Equity Growth Algorithm (EGA)
 
-Build id: `live-monitor-v2.96`. Module: `apps/api/app/services/equity_growth_algorithm.py`.
+Build id: `live-monitor-v2.99`. Module: `apps/api/app/services/equity_growth_algorithm.py`.
 
 ## Ownership
 
@@ -16,7 +16,7 @@ Does **not** unlock live trading. Does **not** authorize leverage, shorts, or fa
 
 Beat idle cash on the Founder Learning Desk by:
 
-1. Sitting when the desk + day lose to doing nothing (`sit_in_cash_vs_hodl`)
+1. Not adding to open risk when the desk + day lose to doing nothing (`sit_in_cash_vs_hodl`); once flat, entries may resume
 2. Skipping strategies that lose to cash after ≥5 trades
 3. Sizing by **growth lane** × **expectancy** (not a flat ⅓ equity forever)
 4. Tightening concurrent opens while protecting / recovering
@@ -28,7 +28,7 @@ Beat idle cash on the Founder Learning Desk by:
 | `organic_growth_pace` lane | Size fraction + max opens |
 | Strategy expectancy after costs | Size multiplier; hard skip if ≤ 0 with sample |
 | Cash reserve (≥40% / $100 floor) | Hard ceiling on deployable cash |
-| Desk sit vs cash | Blocks new entries on red underwater days |
+| Desk sit vs cash | Blocks new entries on red underwater days while positions are still open |
 
 ## Success criteria (evidence)
 

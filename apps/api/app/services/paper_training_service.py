@@ -123,13 +123,17 @@ def desk_should_sit_vs_cash(
     closed_trades: int,
     total_pnl: Decimal | None,
     today_equity_pnl: Decimal | None,
+    open_positions: int = 0,
 ) -> bool:
-    """Capital-preservation brake: do not add risk while losing to doing nothing.
+    """Capital-preservation brake: do not add to a red book that is already behind cash.
 
-    Idle cash has ~0 expectancy. If the Founder desk is underwater after reseeds
-    and today's mark-to-market account change is also negative, new entries pause
-    until either the day turns or the book is no longer behind cash.
+    Idle cash has ~0 expectancy. If the Founder desk is underwater after reseeds,
+    today is also red, and risk is still on, new entries pause. Once the book is
+    flat, sitting forever cannot beat cash — allow a new attempt (EGA sizing and
+    strategy filters still apply).
     """
+    if int(open_positions or 0) <= 0:
+        return False
     if closed_trades < DESK_CASH_BENCHMARK_MIN_TRADES:
         return False
     if total_pnl is None or total_pnl > 0:
@@ -1008,8 +1012,8 @@ class PaperTrainingService:
             )
             return []
 
-        # Beat idle cash / HODL: if the desk is underwater after reseeds and
-        # today's account equity change is also red, sit in cash — do not dig.
+        # Beat idle cash / HODL: do not add to a red underwater book. If already
+        # flat, the desk is idle cash — blocking entries until midnight is a deadlock.
         today_equity_pnl: Decimal | None = None
         try:
             day_eq = self.paper.day_equity_pnl(portfolio_id)
@@ -1022,6 +1026,7 @@ class PaperTrainingService:
             closed_trades=closed_n,
             total_pnl=total_pnl,
             today_equity_pnl=today_equity_pnl,
+            open_positions=int(open_count),
         ):
             day_txt = (
                 f"${today_equity_pnl:+.2f}"
@@ -1035,9 +1040,8 @@ class PaperTrainingService:
                 title="Sitting in cash — losing to idle hold",
                 detail=(
                     f"Total P/L {tot_txt} after reseeds; today's equity P/L "
-                    f"{day_txt}. Idle cash would have done better — new entries "
-                    "paused until the day turns or the book beats cash. "
-                    "Open positions can still exit. Paper only."
+                    f"{day_txt}; {int(open_count)} open. Not adding risk until "
+                    "exits flatten the book or the day turns. Paper only."
                 ),
                 reason_code="sit_in_cash_vs_hodl",
             )

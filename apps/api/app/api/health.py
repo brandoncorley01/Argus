@@ -31,11 +31,11 @@ def _probe_dependencies() -> dict[str, Any]:
 
 
 @router.get("/health")
-def health() -> dict[str, Any]:
+async def health() -> dict[str, Any]:
     """Liveness only: no Postgres/Redis probes (those belong on /ready).
 
     Keepalive, reachability, and the dashboard poll this path frequently.
-    Hitting the DB here exhausted QueuePool and made the API look dead.
+    Async so a saturated sync threadpool cannot make liveness look dead.
     """
     settings = get_settings()
     return {"service": settings.app_name, "status": "ok"}

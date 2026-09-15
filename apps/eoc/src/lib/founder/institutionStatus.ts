@@ -37,13 +37,16 @@ const SERVICE_LABEL: Record<string, string> = {
   redis: "Redis queue",
   health_supervisor: "Health Supervisor",
   market_ops: "Market Ops worker (scans + paper exits)",
+  micro_strategy: "Micro Strategy Worker",
 };
 
 const SERVICE_FIX: Record<string, string> = {
   market_ops:
-    "Fix: press Stop Argus, wait a few seconds, then press Start Argus once. That restarts Market Ops so paper scans and stop-losses run again.",
+    "Fix: press Start Argus once. That restarts Market Ops so paper scans and stop-losses run again. Do not use Update from GitHub unless you want this PC reset to GitHub main.",
   health_supervisor:
-    "Fix: press Stop Argus, then Start Argus once so the Health Supervisor comes back.",
+    "Fix: press Start Argus once so the Health Supervisor comes back. Do not Stop then Start unless the desk is fully down.",
+  micro_strategy:
+    "Fix: press Start Argus once. That restarts the dedicated Micro worker. Do not use Update from GitHub for this.",
   api: "Fix: press Start Argus. If it stays down, check that nothing else is using port 8000.",
   postgres:
     "Fix: start Docker Desktop, then press Start Argus so Postgres comes back.",
@@ -122,13 +125,13 @@ export function explainHealthWarning(
     if (alert?.description) {
       return {
         explanation: `System health is ${health?.overall_status ?? "degraded"}: ${alert.description}. Trading rules still apply.`,
-        fix: "Open Advanced → System health for the full list, or press Stop then Start Argus once.",
+        fix: "Open Advanced → System health for the full list, or press Start Argus once.",
       };
     }
     return {
       explanation:
         "System health reports a warning, but no single service was named. Trading rules still apply.",
-      fix: "Open Advanced → System health, or press Stop then Start Argus once.",
+      fix: "Open Advanced → System health, or press Start Argus once.",
     };
   }
 
@@ -144,7 +147,7 @@ export function explainHealthWarning(
   const explanation = `${top.label} is ${top.status} — ${top.detail}.${extras} Paper trading rules still apply.`;
   const fix =
     SERVICE_FIX[top.key] ??
-    "Fix: press Stop Argus, then Start Argus once. If it returns, open Advanced → System health.";
+    "Fix: press Start Argus once. If it returns, open Advanced → System health.";
 
   return { explanation, fix };
 }

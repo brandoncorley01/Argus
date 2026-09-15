@@ -289,7 +289,7 @@ export function CommandStatusBar({
           type="button"
           className="btn control-btn control-btn-start"
           disabled={busy === "start" || busy === "update"}
-          title="Start Argus: sync GitHub main, then bring API, worker, and dashboard up. Stays Running until Stop."
+          title="Start Argus: bring API, workers, and Home up on this PC. Does not reset to GitHub. Stays Running until Stop."
           onClick={() => run("start", () => startArgusAction(), true)}
         >
           {busy === "start" ? "Starting…" : "Start Argus"}

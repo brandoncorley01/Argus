@@ -161,13 +161,18 @@ function markRecoveryCooldown(): void {
 
 export async function probeReachability(): Promise<ReachabilityReport> {
   const desired_running = readDesiredRunning();
-  const [docker_engine, postgres, redis, api_health, api_ready] = await Promise.all([
-    probeDockerEngine(),
+  // Probe loopback + API first. `docker version` can take seconds and made the
+  // login page abort with Docker:? even when Postgres/Redis were already up.
+  const [postgres, redis, api_health] = await Promise.all([
     probeTcp("127.0.0.1", Number(process.env.POSTGRES_PORT || 5432)),
     probeTcp("127.0.0.1", Number(process.env.REDIS_PORT || 6379)),
     probeHttp(`${apiBaseUrl()}/health`, 2500),
-    probeHttp(`${apiBaseUrl()}/ready`, 8000),
   ]);
+  const docker_engine =
+    postgres && redis ? true : await probeDockerEngine();
+  const api_ready = api_health
+    ? await probeHttp(`${apiBaseUrl()}/ready`, 4000)
+    : false;
 
   // If postgres/redis answer on loopback, the engine is effectively up even when
   // `docker version` is slow/unavailable from the Node PATH.

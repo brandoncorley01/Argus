@@ -13,7 +13,7 @@ const REASONS: Record<string, string> = {
   expired:
     "Your session ended, so Argus signed you out. Paper trading kept running in the background — sign in to see the current state.",
   unreachable:
-    "Argus could not reach the control plane, so it signed you out. Confirm the API is running, then sign in again.",
+    "Argus could not reach the API just then. Paper trading was not signed out. Press Start Argus if the status line is red, then sign in.",
 };
 
 export default async function LoginPage({
