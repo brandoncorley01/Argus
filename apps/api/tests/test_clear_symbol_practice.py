@@ -26,6 +26,31 @@ def test_bar_is_trustworthy_rejects_manual_and_absurd_btc() -> None:
     assert PaperTradingService._bar_is_trustworthy("BTC-USD", good) is True  # type: ignore[arg-type]
 
 
+def test_bar_is_trustworthy_eth_floor_is_ether_not_ethfi() -> None:
+    """ETH-USD sanity floor must not discard Ether.fi (the Founder stall)."""
+    from app.services.paper_trading_service import major_spot_price_is_implausible
+
+    ethfi = SimpleNamespace(
+        source_attribution="coinbase_exchange_public_candles",
+        close=Decimal("0.631"),
+    )
+    eth_junk = SimpleNamespace(
+        source_attribution="coinbase_exchange_public_candles",
+        close=Decimal("12"),
+    )
+    eth_good = SimpleNamespace(
+        source_attribution="coinbase_exchange_public_candles",
+        close=Decimal("2447.16"),
+    )
+    assert PaperTradingService._bar_is_trustworthy("ETHFI-USD", ethfi) is True  # type: ignore[arg-type]
+    assert PaperTradingService._bar_is_trustworthy("ETH-USD", eth_junk) is False  # type: ignore[arg-type]
+    assert PaperTradingService._bar_is_trustworthy("ETH-USD", eth_good) is True  # type: ignore[arg-type]
+    assert major_spot_price_is_implausible("ETHFI-USD", Decimal("0.631")) is False
+    assert major_spot_price_is_implausible("ETH-USD", Decimal("12")) is True
+    assert major_spot_price_is_implausible("BTC-USD", Decimal("200")) is True
+    assert major_spot_price_is_implausible("BTC-USD", Decimal("76000")) is False
+
+
 def test_clear_symbol_practice_refunds_and_deletes() -> None:
     db = MagicMock()
     svc = PaperTradingService(db)

@@ -11,6 +11,8 @@ Format follows a simple keep-a-changelog style adapted for institutional release
 
 ### Changed
 
+- **ETHFI-class deadlock:** BTC/ETH sanity floors match USD base (`ETH`, `BTC`) not a prefix; overdue paper slots may time-exit on a last public close up to 24h old so `sit_in_cash_vs_hodl` cannot freeze the desk (`live-monitor-v2.102`)
+- **Stale discovery log:** Scan no longer lists every unrefreshed discovered market as a red reject; price refresh rotates those names into the 1m feed (`live-monitor-v2.100`)
 - **Sit-in-cash deadlock:** If the Founder desk is already flat, `sit_in_cash_vs_hodl` no longer blocks entries until midnight — it only pauses adding to a red underwater book that still has open positions (`live-monitor-v2.99`)
 - **Micro worker recovery without GitHub wipe:** Keepalive restarts a missing Micro/market worker even while the API is up; Home no longer tells the Founder to Stop then Start for a dead worker (`live-monitor-v2.98`)
 - **Login does not treat a hung API as sign-out:** Reachability probe no longer waits on `docker version`; a session cookie keeps the Founder in the app when `/auth/me` times out; `/health` stays async and `/ready` uses a NullPool probe so a busy request pool cannot fake API-down (`live-monitor-v2.97`)

@@ -336,6 +336,7 @@ def test_evaluate_paper_exits_refuses_stale_mark() -> None:
     svc._resolve_actor = MagicMock(  # type: ignore[method-assign]
         return_value=SimpleNamespace(user=SimpleNamespace(id="u1"))
     )
+    svc._position_held_seconds = MagicMock(return_value=30.0)  # type: ignore[method-assign]
 
     assert svc.evaluate_paper_exits(portfolio_id=portfolio.id) == []
     svc.paper.submit_order.assert_not_called()
@@ -384,6 +385,56 @@ def test_micro_time_exit_recycles_position_on_fresh_mark() -> None:
         allowed_strategy_keys={"range_micro", "trend_pullback_micro"},
     )
     assert out[0]["reason"] == "micro_time_exit"
+
+
+def test_stale_mark_still_time_exits_overdue_micro() -> None:
+    """8m stop/target freshness must not freeze a 4h+ micro slot (ETHFI deadlock)."""
+    db = MagicMock()
+    svc = PaperTrainingService(db)
+    portfolio = SimpleNamespace(
+        id="p1",
+        name="Founder Learning Desk",
+        kill_switch_active=False,
+        owner_user_id="u1",
+    )
+    db.get.return_value = portfolio
+    pos = SimpleNamespace(
+        id="pos1",
+        symbol="ETHFI-USD",
+        quantity=Decimal("153"),
+        average_cost=Decimal("0.627"),
+    )
+    svc.paper.list_positions = MagicMock(return_value=[pos])  # type: ignore[method-assign]
+    svc.paper._exit_plan_levels = MagicMock(  # type: ignore[method-assign]
+        return_value={
+            "stop_loss": Decimal("0.617"),
+            "take_profit": Decimal("0.646"),
+            "initial_stop_loss": Decimal("0.617"),
+            "entry_order_id": "entry1",
+            "scaled_out": False,
+            "strategy_key": "trend_pullback_micro",
+        }
+    )
+    svc.paper._latest_mark = MagicMock(  # type: ignore[method-assign]
+        return_value=(Decimal("0.631"), datetime.now(UTC) - timedelta(minutes=20))
+    )
+    svc._position_held_seconds = MagicMock(return_value=14401.0)  # type: ignore[method-assign]
+    svc.paper.submit_order = MagicMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(id="exit1", status="filled")
+    )
+    svc.paper._event = MagicMock()  # type: ignore[method-assign]
+    svc._resolve_actor = MagicMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(user=SimpleNamespace(id="u1"))
+    )
+    svc.audit.append = MagicMock()  # type: ignore[method-assign]
+    svc._emit_decision_event = MagicMock()  # type: ignore[method-assign]
+
+    out = svc.evaluate_paper_exits(
+        portfolio_id=portfolio.id,
+        allowed_strategy_keys={"range_micro", "trend_pullback_micro"},
+    )
+    assert out[0]["reason"] == "micro_time_exit"
+    svc.paper.submit_order.assert_called_once()
 
 
 def test_exit_strategy_lane_filter_prevents_cross_worker_ownership() -> None:

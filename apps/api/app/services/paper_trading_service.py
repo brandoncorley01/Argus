@@ -50,6 +50,26 @@ from app.services.auth_service import AuthenticatedPrincipal
 PAPER_MARK_STALE_AFTER = timedelta(minutes=8)
 
 
+def usd_base_asset(symbol: str) -> str:
+    """Coinbase-style base of SYMBOL-USD (ETHFI-USD → ETHFI, not ETH)."""
+    return (symbol or "").upper().split("-", 1)[0]
+
+
+def major_spot_price_is_implausible(symbol: str, price: Decimal) -> bool:
+    """True for bogus BTC/ETH test ticks. Alt names that start with ETH/BTC stay valid.
+
+    ETH-USD under $50 is junk. ETHFI-USD at $0.63 is a real Ether.fi print.
+    """
+    if price <= 0:
+        return True
+    base = usd_base_asset(symbol)
+    if base == "BTC" and price < Decimal("1000"):
+        return True
+    if base == "ETH" and price < Decimal("50"):
+        return True
+    return False
+
+
 def total_pnl_after_reseeds(
     *, total_value: Decimal, starting_cash: Decimal, reseed_cash_flow: Decimal
 ) -> Decimal:
@@ -437,11 +457,9 @@ class PaperTradingService:
         if src in {"manual-operator-entry", "manual-desk", "test", "fixture"}:
             return False
         close = Decimal(bar.close)
-        sym = symbol.upper()
-        # Sanity floors — reject absurd test prices that break P&L honesty.
-        if sym.startswith("BTC") and close < Decimal("1000"):
-            return False
-        if sym.startswith("ETH") and close < Decimal("50"):
+        # Sanity floors — reject absurd BTC-USD / ETH-USD test ticks only.
+        # Prefix match wrongly discarded ETHFI and any ETH* alt.
+        if major_spot_price_is_implausible(symbol, close):
             return False
         return close > 0
 

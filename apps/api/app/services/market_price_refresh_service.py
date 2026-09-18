@@ -79,16 +79,29 @@ def prioritized_refresh_symbols(
     founder_open_symbols: list[str],
     other_open_symbols: list[str],
     limit: int = _MAX_REFRESH,
+    rotate: int = 0,
 ) -> list[str]:
-    """Bound refresh work without ever evicting Founder open risk."""
+    """Bound refresh work without ever evicting Founder open risk.
+
+    Core names (open risk + default universe) always stay in the slice.
+    Remaining active names rotate so discovery markets like ZEC/XLM eventually
+    get 1m bars instead of sitting stale for days.
+    """
     active = [s.upper() for s in active_symbols]
-    ordered = [
-        *[s.upper() for s in founder_open_symbols],
-        *[s.upper() for s in other_open_symbols],
-        *[s for s in DEFAULT_SYMBOLS if s in active],
-        *active,
-    ]
-    return list(dict.fromkeys(ordered))[: max(0, limit)]
+    core = list(
+        dict.fromkeys(
+            [
+                *[s.upper() for s in founder_open_symbols],
+                *[s.upper() for s in other_open_symbols],
+                *[s for s in DEFAULT_SYMBOLS if s in active],
+            ]
+        )
+    )
+    rest = [s for s in dict.fromkeys(active) if s not in core]
+    if rest:
+        off = int(rotate) % len(rest)
+        rest = rest[off:] + rest[:off]
+    return (core + rest)[: max(0, limit)]
 
 
 class MarketPriceRefreshError(Exception):
@@ -205,12 +218,13 @@ class MarketPriceRefreshService:
                 )
             )
             # Open risk always gets a fresh mark. Core markets follow, then a
-            # bounded rotating/discovery universe. Never evict an open symbol
-            # merely because it sorts after the refresh cap.
+            # rotating discovery slice so names past the cap are not stale forever.
+            rotate = int(datetime.now(UTC).timestamp() // 180)
             target = prioritized_refresh_symbols(
                 active_symbols=active_symbols,
                 founder_open_symbols=founder_open_symbols,
                 other_open_symbols=other_open_symbols,
+                rotate=rotate,
             ) or list(DEFAULT_SYMBOLS)
         else:
             target = list(dict.fromkeys(s.upper() for s in symbols))

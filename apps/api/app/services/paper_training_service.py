@@ -83,6 +83,10 @@ RUNNER_BANK_HOLD_SECONDS = 600
 STALE_BANK_R = Decimal("0.75")
 STALE_BANK_HOLD_SECONDS = 14400  # 4 hours
 MICRO_MAX_HOLD_SECONDS = 14400  # 4 hours; recycle if the micro thesis did not resolve
+# Founder primaries can also freeze a slot (ETHFI-class deadlock). Same recycle.
+FOUNDER_MAX_HOLD_SECONDS = 14400
+# Time-exits may use a last public close older than the 8m stop/target mark.
+TIME_EXIT_MARK_MAX_AGE = timedelta(hours=24)
 MICRO_MIN_TAKE_PROFIT_R = Decimal("1.5")
 MICRO_COST_BPS_RT = Decimal("6")
 MICRO_MIN_NET_REWARD_USD = Decimal("0.75")
@@ -1750,19 +1754,42 @@ class PaperTrainingService:
                     ),
                 )
             mark, mark_at = self.paper._latest_mark(pos.symbol)
-            if (
-                mark is None
-                or mark_at is None
-                or datetime.now(UTC) - mark_at > PAPER_MARK_STALE_AFTER
-            ):
-                continue
+            held_seconds = self._position_held_seconds(portfolio_id, pos.symbol)
+            now = datetime.now(UTC)
+            mark_age = (now - mark_at) if mark_at is not None else None
+            fresh = (
+                mark is not None
+                and mark_at is not None
+                and mark_age is not None
+                and mark_age <= PAPER_MARK_STALE_AFTER
+            )
+            force_time_exit: str | None = None
+            if not fresh:
+                overdue = None
+                if is_micro and held_seconds >= float(MICRO_MAX_HOLD_SECONDS):
+                    overdue = "micro_time_exit"
+                elif (
+                    (getattr(portfolio, "name", None) or "")
+                    == FOUNDER_LEARNING_DESK_NAME
+                    and held_seconds >= float(FOUNDER_MAX_HOLD_SECONDS)
+                ):
+                    overdue = "stale_time_exit"
+                usable_stale = (
+                    mark is not None
+                    and mark_at is not None
+                    and mark_age is not None
+                    and mark_age <= TIME_EXIT_MARK_MAX_AGE
+                )
+                if overdue and usable_stale:
+                    force_time_exit = overdue
+                else:
+                    continue
             # Trail only after meaningful progress — early BE at +1R clipped winners
             # into noise exits and destroyed expectancy (paper only; live locked).
             planned_stop = stop
             ratcheted = False
             risk_unit: Decimal | None = None
             r_mult: Decimal | None = None
-            held_seconds = self._position_held_seconds(portfolio_id, pos.symbol)
             if avg is not None and avg > 0:
                 initial_stop = plan.get("initial_stop_loss")
                 if initial_stop is None and stop is not None and stop < avg:
@@ -1774,7 +1801,8 @@ class PaperTrainingService:
                 if risk_unit is not None and risk_unit > 0:
                     r_mult = (mark - avg) / risk_unit
             if (
-                avg is not None
+                not force_time_exit
+                and avg is not None
                 and avg > 0
                 and stop is not None
                 and stop < avg
@@ -1795,7 +1823,8 @@ class PaperTrainingService:
             # Founder desk: bank half at +1R so cash returns for dip redeploys.
             # Full runners still seek the planned take-profit on the remainder.
             if (
-                (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
+                not force_time_exit
+                and (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
                 and not bool(plan.get("scaled_out"))
                 and avg is not None
                 and avg > 0
@@ -1914,7 +1943,8 @@ class PaperTrainingService:
                     )
                     continue
             if (
-                ratcheted
+                not force_time_exit
+                and ratcheted
                 and planned_stop is not None
                 and stop is not None
                 and stop > planned_stop
@@ -1953,8 +1983,8 @@ class PaperTrainingService:
                             except Exception:  # noqa: BLE001
                                 pass
                 # Fall through — take-profit / stop may still apply this pass.
-            reason: str | None = None
-            if stop is not None and mark <= stop:
+            reason: str | None = force_time_exit
+            if reason is None and stop is not None and mark <= stop:
                 reason = (
                     "trailing_stop"
                     if planned_stop is not None and stop > planned_stop
@@ -1984,8 +2014,13 @@ class PaperTrainingService:
             elif is_micro and held_seconds >= float(MICRO_MAX_HOLD_SECONDS):
                 # A short-timeframe thesis that has not resolved within four
                 # hours is no longer the setup that was entered. Close it using
-                # a fresh verified mark so capital and learning can recycle.
+                # a verified public mark so capital and learning can recycle.
                 reason = "micro_time_exit"
+            elif (
+                (getattr(portfolio, "name", None) or "") == FOUNDER_LEARNING_DESK_NAME
+                and held_seconds >= float(FOUNDER_MAX_HOLD_SECONDS)
+            ):
+                reason = "stale_time_exit"
             elif self._catalyst_momentum_weakened(
                 portfolio_id=portfolio_id,
                 symbol=pos.symbol,
@@ -2102,8 +2137,12 @@ class PaperTrainingService:
                         if reason == "momentum_fade"
                         else (
                             f"Micro thesis expired after {MICRO_MAX_HOLD_SECONDS // 3600}h "
-                            f"at fresh mark {mark}."
+                            f"at mark {mark}."
                             if reason == "micro_time_exit"
+                            else (
+                            f"Time-stop after {FOUNDER_MAX_HOLD_SECONDS // 3600}h "
+                            f"at mark {mark} (slot recycle)."
+                            if reason == "stale_time_exit"
                             else (
                             f"Banked runner at {mark} after +{RUNNER_BANK_R}R "
                             "(capital recycle)."
@@ -2113,6 +2152,7 @@ class PaperTrainingService:
                                 f"with +{STALE_BANK_R}R progress."
                                 if reason == "stale_bank"
                                 else f"Take-profit hit at {mark} (target {target})."
+                            )
                             )
                             )
                         )

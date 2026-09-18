@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.market_intelligence import MarketInstrument, MarketOhlcvBar
 from app.models.market_scan import MarketScanCandidate, MarketScanCycle, MarketScanEvent
 from app.models.paper_trading import PaperPortfolio, PaperPosition
+from app.services.paper_trading_service import major_spot_price_is_implausible
 from app.services.strategy_engine import Bar, SmaCrossoverStrategy
 
 SCAN_INTERVAL = timedelta(minutes=3)
@@ -378,19 +379,6 @@ class MarketScanService:
                 cycle.current_symbol = inst.symbol
                 self.db.flush()
 
-                if events_emitted < MAX_EVENTS_PER_CYCLE:
-                    self._emit(
-                        cycle,
-                        component="market_scanner",
-                        symbol=inst.symbol,
-                        outcome="info",
-                        title=f"Scanning {inst.symbol}",
-                        detail=f"Loading latest candles for {inst.symbol}.",
-                        stage="Discovered",
-                        correlation_id=correlation_id,
-                    )
-                    events_emitted += 1
-
                 bars, timeframe, bar_close_time = self._load_bars(inst.id)
                 pipeline["scanned"] += 1
                 cycle.symbols_scanned = pipeline["scanned"]
@@ -416,28 +404,6 @@ class MarketScanService:
                         price=bars[-1].close if bars else None,
                         market_data_at=bar_close_time,
                     )
-                    if events_emitted < MAX_EVENTS_PER_CYCLE:
-                        self._emit(
-                            cycle,
-                            component="strategy_evaluator",
-                            symbol=inst.symbol,
-                            outcome="rejected",
-                            title=f"Not enough price history for {inst.symbol}",
-                            detail=(
-                                f"Argus needs {MIN_BARS} recent price points before it can "
-                                f"evaluate this strategy safely (found {len(bars)})."
-                                if bars
-                                else (
-                                    "No recent price history is stored yet. "
-                                    "Refresh recent prices, then scan again."
-                                )
-                            ),
-                            reason_code=code,
-                            stage="Rejected",
-                            strategy_key=STRATEGY_KEY,
-                            correlation_id=correlation_id,
-                        )
-                        events_emitted += 1
                     continue
 
                 assert bar_close_time is not None
@@ -459,21 +425,20 @@ class MarketScanService:
                         price=price,
                         market_data_at=bar_close_time,
                     )
-                    if events_emitted < MAX_EVENTS_PER_CYCLE:
-                        self._emit(
-                            cycle,
-                            component="strategy_evaluator",
-                            symbol=inst.symbol,
-                            outcome="rejected",
-                            title=f"Stale data for {inst.symbol}",
-                            detail="Market data older than freshness policy; no entry considered.",
-                            reason_code="stale_data",
-                            stage="Rejected",
-                            strategy_key=STRATEGY_KEY,
-                            correlation_id=correlation_id,
-                        )
-                        events_emitted += 1
                     continue
+
+                if events_emitted < MAX_EVENTS_PER_CYCLE:
+                    self._emit(
+                        cycle,
+                        component="market_scanner",
+                        symbol=inst.symbol,
+                        outcome="info",
+                        title=f"Scanning {inst.symbol}",
+                        detail=f"Loading latest candles for {inst.symbol}.",
+                        stage="Discovered",
+                        correlation_id=correlation_id,
+                    )
+                    events_emitted += 1
 
                 # Volume gate only when the bars carry non-null source volume
                 # in the ORM payload path — zero-filled research bars skip this.
@@ -816,6 +781,22 @@ class MarketScanService:
                 "min_bars": MIN_BARS,
                 "stale_after_seconds": int(STALE_BAR.total_seconds()),
             }
+            stale_n = int(rejection_counts.get("stale_data") or 0)
+            if stale_n and events_emitted < MAX_EVENTS_PER_CYCLE:
+                self._emit(
+                    cycle,
+                    component="market_scanner",
+                    outcome="info",
+                    title="Some markets waiting on a price refresh",
+                    detail=(
+                        f"{stale_n} discovered markets had prices older than 8 minutes. "
+                        "Argus rotates the refresh set every few minutes and does not "
+                        "trade those names until 1m bars are current. Paper only."
+                    ),
+                    reason_code="stale_data",
+                    correlation_id=correlation_id,
+                )
+                events_emitted += 1
             self._emit(
                 cycle,
                 component="market_scanner",
@@ -1256,9 +1237,7 @@ class MarketScanService:
         for p in self.db.scalars(q):
             cost = Decimal(p.average_cost or 0)
             sym = (p.symbol or "").upper()
-            if sym.startswith("BTC") and cost < Decimal("1000"):
-                continue
-            if sym.startswith("ETH") and cost < Decimal("50"):
+            if major_spot_price_is_implausible(sym, cost):
                 continue
             rows.append(p)
         syms = sorted({p.symbol for p in rows})
